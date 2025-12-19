@@ -175,6 +175,20 @@ class ProtectiveStopManager:
             return None
         return value if value > Decimal("0") else None
 
+    def _is_close_position_stop(self, order: Dict[str, Any]) -> bool:
+        """检查订单是否是 closePosition 止损单（STOP_MARKET + closePosition=true）"""
+        info = order.get("info")
+        if not isinstance(info, dict):
+            return False
+        # 检查 closePosition 字段
+        close_pos = info.get("closePosition")
+        if close_pos in (True, "true", "TRUE"):
+            # 再确认是止损类型
+            order_type = info.get("type", "").upper()
+            if order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"):
+                return True
+        return False
+
     async def on_order_update(self, update: OrderUpdate) -> None:
         """处理订单更新：当保护止损成交/撤销后，清理本地状态并触发一次同步。"""
         for side in (PositionSide.LONG, PositionSide.SHORT):
@@ -217,20 +231,24 @@ class ProtectiveStopManager:
                 log_error(f"保护止损同步失败（获取挂单）: {e}", symbol=symbol)
                 return
 
-            # 以 clientOrderId 前缀为准，找到已存在的保护止损订单
+            # 分类订单：我们自己的（前缀匹配）vs 外部的 closePosition 止损单
             orders_by_side: Dict[PositionSide, list[Dict[str, Any]]] = {PositionSide.LONG: [], PositionSide.SHORT: []}
+            external_stops_by_side: Dict[PositionSide, bool] = {PositionSide.LONG: False, PositionSide.SHORT: False}
+
             for order in all_orders:
                 if not isinstance(order, dict):
                     continue
                 ps = self._extract_position_side(order)
                 if ps is None:
                     continue
+
                 cid = self._extract_client_order_id(order)
-                if not cid:
-                    continue
-                if not self._match_client_order_id(cid, symbol, ps):
-                    continue
-                orders_by_side[ps].append(order)
+                if cid and self._match_client_order_id(cid, symbol, ps):
+                    # 我们自己的订单
+                    orders_by_side[ps].append(order)
+                elif self._is_close_position_stop(order):
+                    # 外部的 closePosition 止损单
+                    external_stops_by_side[ps] = True
 
             for side in (PositionSide.LONG, PositionSide.SHORT):
                 await self._sync_side(
@@ -241,6 +259,7 @@ class ProtectiveStopManager:
                     enabled=enabled,
                     dist_to_liq=dist_to_liq,
                     existing_orders=orders_by_side.get(side) or [],
+                    has_external_stop=external_stops_by_side.get(side, False),
                 )
 
     async def _sync_side(
@@ -253,6 +272,7 @@ class ProtectiveStopManager:
         enabled: bool,
         dist_to_liq: Decimal,
         existing_orders: Sequence[Dict[str, Any]],
+        has_external_stop: bool = False,
     ) -> None:
         desired_cid = self.build_client_order_id(symbol, side)
 
@@ -292,6 +312,17 @@ class ProtectiveStopManager:
             return
 
         if position is None:
+            return
+
+        # 已有外部 closePosition 止损单：跳过，不重复下单
+        if has_external_stop and keep_order is None:
+            log_event(
+                "protective_stop",
+                event_cn="保护止损",
+                symbol=symbol,
+                side=side.value,
+                reason="skip_external_stop",
+            )
             return
 
         liquidation_price = position.liquidation_price
@@ -356,26 +387,6 @@ class ProtectiveStopManager:
 
         result = await self._exchange.place_order(intent)
         if not result.success or not result.order_id:
-            # 检查是否是"已存在 closePosition 止损单"的错误（-4130）
-            # 这种情况下，认为已有保护，不再报错
-            err_msg = result.error_message or ""
-            if "-4130" in err_msg or "closePosition" in err_msg:
-                log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
-                    symbol=symbol,
-                    side=side.value,
-                    reason="skip_existing_closeposition",
-                )
-                # 标记为已有保护（虽然不知道具体订单 ID）
-                self._states[(symbol, side)] = ProtectiveStopState(
-                    symbol=symbol,
-                    position_side=side,
-                    client_order_id="external",
-                    order_id=None,
-                    stop_price=None,
-                )
-                return
             log_error(
                 f"保护止损下单失败: {result.error_message}",
                 symbol=symbol,

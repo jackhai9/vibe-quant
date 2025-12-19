@@ -924,6 +924,11 @@ pytest -q: 204 passed
 4. **类型检查修复**（`adapter.py`）
    - 修复 pyright 报告的 `str | None` 类型错误
 
+5. **外部止损单检测**（`protective_stop.py`）
+   - 新增 `_is_close_position_stop` 方法检测外部 closePosition 止损单
+   - `sync_symbol` 同步前检查是否已有外部止损单，有则跳过下单
+   - 避免重复下单导致 -4130 错误和无用 API 请求
+
 ### 测试结果
 ```
 pyright: 0 errors
