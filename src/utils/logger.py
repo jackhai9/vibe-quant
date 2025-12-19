@@ -147,7 +147,7 @@ def _format_value(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, Decimal):
-        return str(value)
+        return format_decimal(value) or ""
     return str(value)
 
 

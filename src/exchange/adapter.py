@@ -279,7 +279,7 @@ class ExchangeAdapter:
                     continue
 
                 position = Position(
-                    symbol=pos.get("symbol", ""),
+                    symbol=str(pos.get("symbol", "")),
                     position_side=position_side,
                     position_amt=position_amt,
                     entry_price=self._safe_decimal(pos.get("entryPrice", 0)),
@@ -364,7 +364,7 @@ class ExchangeAdapter:
             )
 
             # 解析结果
-            status = self._parse_order_status(order.get("status", ""))
+            status = self._parse_order_status(str(order.get("status", "")))
 
             result = OrderResult(
                 success=True,
@@ -424,7 +424,7 @@ class ExchangeAdapter:
         try:
             order = await self.exchange.cancel_order(order_id, symbol)
 
-            status = self._parse_order_status(order.get("status", ""))
+            status = self._parse_order_status(str(order.get("status", "")))
 
             result = OrderResult(
                 success=True,
@@ -573,9 +573,12 @@ class ExchangeAdapter:
             # 调用 Binance fapi/v1/openAlgoOrders 接口
             response = await self.exchange.fapiPrivateGetOpenAlgoOrders(params)
 
-            # 返回订单列表
+            # 响应可能是数组（直接返回订单列表）或字典（包含 data 字段）
+            if isinstance(response, list):
+                return response
             if isinstance(response, dict):
-                return response.get("data", [])
+                # 兼容旧格式或其他可能的响应结构
+                return response.get("data", response.get("orders", []))
             return []
         except Exception as e:
             logger = get_logger()

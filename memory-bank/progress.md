@@ -895,6 +895,43 @@ pytest -q: 204 passed
 
 ---
 
+## 附加改进：保护止损 Binance Algo API 适配
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-19<br>
+**产出**：`src/risk/protective_stop.py`、`src/exchange/adapter.py`、`src/utils/logger.py`
+
+### 问题背景
+1. **clientOrderId 重复错误**：撤销旧订单后立即用相同 clientOrderId 下新单，Binance 报 `-4116 ClientOrderId is duplicated`
+2. **Algo Order 查询失败**：`fetch_open_algo_orders` 返回空数组，无法识别现有保护止损单，导致重复下单报 `-4130`
+
+### 根本原因
+1. Binance 的 clientOrderId 撤销后有短暂冷却期，不能立即复用
+2. **2025-12-09 起**，Binance 将条件订单（STOP_MARKET 等）迁移到 Algo Service，`GET /fapi/v1/openAlgoOrders` 响应格式从 `{"data": [...]}` 变为直接返回数组 `[...]`
+
+### 修复内容
+1. **clientOrderId 唯一化**（`protective_stop.py`）
+   - `build_client_order_id` 添加时间戳后缀：`vq-ps-zenusdt-L-12345`
+   - 新增 `_build_client_order_id_prefix` 和 `_match_client_order_id` 前缀匹配方法
+   - `sync_symbol` 和 `on_order_update` 改用前缀匹配
+
+2. **修复 Algo Order API 响应解析**（`adapter.py`）
+   - `fetch_open_algo_orders` 支持响应为数组或字典两种格式
+
+3. **优化日志 Decimal 格式化**（`logger.py`）
+   - `_format_value` 使用 `format_decimal` 自动格式化，避免显示 `7.502000000000000000000000000`
+
+4. **类型检查修复**（`adapter.py`）
+   - 修复 pyright 报告的 `str | None` 类型错误
+
+### 测试结果
+```
+pyright: 0 errors
+pytest: 26 passed
+```
+
+---
+
 ## 小额实盘验证
 
 > 根据 design-document 第 13 节和 mvp-scope 验收标准

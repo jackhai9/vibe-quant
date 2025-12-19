@@ -300,6 +300,7 @@ vibe-quant/
 | 2025-12-18 | 新增 Step 9.3：仓位保护性止损（交易所端 STOP_MARKET closePosition，MARK_PRICE 触发） |
 | 2025-12-18 | 简化 accel 配置：合并 `tiers_long`/`tiers_short` 为单一 `tiers`，LONG/SHORT 方向自动处理 |
 | 2025-12-19 | 完善 Symbol 配置覆盖：symbols 可覆盖 execution/accel/roi/risk 全部字段（含 panic_close） |
+| 2025-12-19 | 修复保护止损 Binance Algo API 适配：clientOrderId 唯一化（时间戳后缀）、修复 openAlgoOrders 响应格式解析（2025-12-09 迁移后为数组）、日志 Decimal 自动格式化 |
 
 ---
 

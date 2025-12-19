@@ -6,13 +6,14 @@
 - 使用 markPrice 触发，尽量在接近强平前自动平仓（防程序崩溃/休眠/断网）
 
 实现策略：
-- clientOrderId 使用稳定前缀（跨 run 保持一致），便于重启后发现/续管
+- clientOrderId 使用前缀 + 时间戳（前缀跨 run 一致，便于识别；时间戳避免重复）
 - 仅在持仓存在时维护；仓位归零后自动撤销（避免误触发开仓）
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, Optional, Sequence
@@ -62,15 +63,30 @@ class ProtectiveStopManager:
             self._locks[symbol] = lock
         return lock
 
-    def build_client_order_id(self, symbol: str, position_side: PositionSide) -> str:
-        """为每个 symbol+side 生成稳定的 clientOrderId（便于跨 run 识别）。"""
+    def _build_client_order_id_prefix(self, symbol: str, position_side: PositionSide) -> str:
+        """生成 clientOrderId 前缀（用于识别属于本程序的保护止损单）。"""
         ws_symbol = symbol_to_ws_stream(symbol)
         side_code = "L" if position_side == PositionSide.LONG else "S"
-        cid = f"{self._client_order_id_prefix}{ws_symbol}-{side_code}"
-        if len(cid) >= 36:
-            # 极少数超长 symbol：退化为 hash（保持稳定）
-            cid = f"{self._client_order_id_prefix}{hash(ws_symbol) & 0xfffffff:07x}-{side_code}"
+        prefix = f"{self._client_order_id_prefix}{ws_symbol}-{side_code}"
+        if len(prefix) >= 30:
+            # 极少数超长 symbol：退化为 hash
+            prefix = f"{self._client_order_id_prefix}{hash(ws_symbol) & 0xfffffff:07x}-{side_code}"
+        return prefix
+
+    def build_client_order_id(self, symbol: str, position_side: PositionSide) -> str:
+        """生成唯一的 clientOrderId（前缀 + 时间戳，避免 Binance 的 clientOrderId 冷却期问题）。"""
+        prefix = self._build_client_order_id_prefix(symbol, position_side)
+        ts = int(time.time() * 1000) % 100000  # 5位时间戳后缀
+        cid = f"{prefix}-{ts}"
+        if len(cid) > 36:
+            # Binance clientOrderId 限制 36 字符
+            cid = cid[:36]
         return cid
+
+    def _match_client_order_id(self, cid: str, symbol: str, position_side: PositionSide) -> bool:
+        """检查 clientOrderId 是否属于指定 symbol+side 的保护止损单。"""
+        prefix = self._build_client_order_id_prefix(symbol, position_side)
+        return cid.startswith(prefix)
 
     def compute_stop_price(
         self,
@@ -166,7 +182,8 @@ class ProtectiveStopManager:
             state = self._states.get(key)
             if not state or not update.client_order_id:
                 continue
-            if update.client_order_id != state.client_order_id:
+            # 使用前缀匹配（因为 clientOrderId 现在包含时间戳后缀）
+            if not self._match_client_order_id(update.client_order_id, update.symbol, side):
                 continue
             if update.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
                 self._states.pop(key, None)
@@ -191,16 +208,16 @@ class ProtectiveStopManager:
         """同步某个 symbol 的保护止损（会访问交易所 openOrders 和 openAlgoOrders）。"""
         async with self._get_lock(symbol):
             try:
-                # 查询普通挂单和 algo 挂单（条件订单）
+                # 查询普通挂单和 algo 挂单（条件订单在 2025-12-09 后迁移到 Algo Service）
                 open_orders = await self._exchange.fetch_open_orders(symbol)
                 algo_orders = await self._exchange.fetch_open_algo_orders(symbol)
-                # 合并两类订单
+                # 合并所有订单
                 all_orders = list(open_orders) + list(algo_orders)
             except Exception as e:
                 log_error(f"保护止损同步失败（获取挂单）: {e}", symbol=symbol)
                 return
 
-            # 以 clientOrderId 为准，找到已存在的保护止损订单
+            # 以 clientOrderId 前缀为准，找到已存在的保护止损订单
             orders_by_side: Dict[PositionSide, list[Dict[str, Any]]] = {PositionSide.LONG: [], PositionSide.SHORT: []}
             for order in all_orders:
                 if not isinstance(order, dict):
@@ -211,8 +228,7 @@ class ProtectiveStopManager:
                 cid = self._extract_client_order_id(order)
                 if not cid:
                     continue
-                desired_cid = self.build_client_order_id(symbol, ps)
-                if cid != desired_cid:
+                if not self._match_client_order_id(cid, symbol, ps):
                     continue
                 orders_by_side[ps].append(order)
 
@@ -302,13 +318,14 @@ class ProtectiveStopManager:
 
         existing_stop_price = self._extract_stop_price(keep_order) if keep_order is not None else None
         existing_order_id = self._extract_order_id(keep_order) if keep_order is not None else None
+        existing_cid = self._extract_client_order_id(keep_order) if keep_order is not None else None
 
         # stopPrice 相同：更新本地缓存即可
         if keep_order is not None and existing_stop_price is not None and existing_stop_price == desired_stop_price:
             self._states[(symbol, side)] = ProtectiveStopState(
                 symbol=symbol,
                 position_side=side,
-                client_order_id=desired_cid,
+                client_order_id=existing_cid or desired_cid,  # 使用现有订单的实际 cid
                 order_id=existing_order_id,
                 stop_price=existing_stop_price,
             )
@@ -339,6 +356,26 @@ class ProtectiveStopManager:
 
         result = await self._exchange.place_order(intent)
         if not result.success or not result.order_id:
+            # 检查是否是"已存在 closePosition 止损单"的错误（-4130）
+            # 这种情况下，认为已有保护，不再报错
+            err_msg = result.error_message or ""
+            if "-4130" in err_msg or "closePosition" in err_msg:
+                log_event(
+                    "protective_stop",
+                    event_cn="保护止损",
+                    symbol=symbol,
+                    side=side.value,
+                    reason="skip_existing_closeposition",
+                )
+                # 标记为已有保护（虽然不知道具体订单 ID）
+                self._states[(symbol, side)] = ProtectiveStopState(
+                    symbol=symbol,
+                    position_side=side,
+                    client_order_id="external",
+                    order_id=None,
+                    stop_price=None,
+                )
+                return
             log_error(
                 f"保护止损下单失败: {result.error_message}",
                 symbol=symbol,
