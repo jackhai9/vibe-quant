@@ -764,6 +764,7 @@ class Application:
         self.protective_stop_manager = ProtectiveStopManager(
             self.exchange,
             client_order_id_prefix=PROTECTIVE_STOP_PREFIX,
+            risk_levels=global_config.risk.levels,
         )
 
         # 加载交易规则
@@ -1351,10 +1352,13 @@ class Application:
                 dist_display = format_decimal(dist_to_liq, precision=4)
                 tier_display = format_decimal(selected_tier.dist_to_liq, precision=4)
                 slice_display = format_decimal(selected_tier.slice_ratio, precision=4)
+                risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
                 log_event(
                     "risk_trigger",
                     symbol=symbol,
                     side=position_side.value,
+                    risk_stage="panic_close",
+                    risk_level=risk_levels.get("panic_close"),
                     reason="panic_close",
                     dist_to_liq=dist_display,
                     tier_dist_to_liq=tier_display,
@@ -1461,11 +1465,15 @@ class Application:
                     if state.mode != target_mode:
                         engine.set_mode(symbol, position_side, target_mode, reason="risk_trigger")
                         dist_display = format_decimal(risk_flag.dist_to_liq, precision=4)
+                        risk_stage = risk_flag.reason or "liq_distance_breach"
+                        risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
                         log_event(
                             "risk_trigger",
                             symbol=symbol,
                             side=position_side.value,
                             mode=target_mode.value,
+                            risk_stage=risk_stage,
+                            risk_level=risk_levels.get(risk_stage),
                             reason=risk_flag.reason,
                             dist_to_liq=dist_display,
                         )

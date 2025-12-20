@@ -51,14 +51,20 @@ class ProtectiveStopManager:
         exchange: ExchangeAdapter,
         *,
         client_order_id_prefix: str,
+        risk_levels: Optional[Dict[str, int]] = None,
     ):
         self._exchange = exchange
         self._client_order_id_prefix = client_order_id_prefix
+        self._risk_stage = "protective_stop"
+        self._risk_levels = dict(risk_levels or {})
         self._states: Dict[tuple[str, PositionSide], ProtectiveStopState] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._startup_existing_logged: set[tuple[str, PositionSide]] = set()
         self._startup_existing_external_logged: set[tuple[str, PositionSide]] = set()
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
+
+    def _get_risk_level(self) -> Optional[int]:
+        return self._risk_levels.get(self._risk_stage)
 
     def _get_lock(self, symbol: str) -> asyncio.Lock:
         lock = self._locks.get(symbol)
@@ -273,6 +279,8 @@ class ProtectiveStopManager:
                     event_cn="保护止损",
                     symbol=update.symbol,
                     side=side.value,
+                    risk_stage=self._risk_stage,
+                    risk_level=self._get_risk_level(),
                     reason=f"order_update={update.status.value}",
                     order_id=update.order_id,
                 )
@@ -303,6 +311,8 @@ class ProtectiveStopManager:
                 event_cn="保护止损",
                 symbol=update.symbol,
                 side=side.value,
+                risk_stage=self._risk_stage,
+                risk_level=self._get_risk_level(),
                 reason=f"algo_update={update.status}",
                 algo_id=update.algo_id,
             )
@@ -391,6 +401,8 @@ class ProtectiveStopManager:
                     event_cn="保护止损",
                     symbol=symbol,
                     side=side.value,
+                    risk_stage=self._risk_stage,
+                    risk_level=self._get_risk_level(),
                     reason="external_stop_multiple",
                     count=len(externals),
                     order_ids=ids,
@@ -411,6 +423,8 @@ class ProtectiveStopManager:
                         event_cn="保护止损",
                         symbol=symbol,
                         side=side.value,
+                        risk_stage=self._risk_stage,
+                        risk_level=self._get_risk_level(),
                         reason="startup_existing_own_stop",
                         count=len(existing),
                         order_id=self._extract_order_id(first),
@@ -436,6 +450,8 @@ class ProtectiveStopManager:
                         event_cn="保护止损",
                         symbol=symbol,
                         side=side.value,
+                        risk_stage=self._risk_stage,
+                        risk_level=self._get_risk_level(),
                         reason="startup_existing_external_stop",
                         order_id=self._extract_order_id(sample) if sample else None,
                         client_order_id=self._extract_client_order_id(sample) if sample else None,
@@ -501,6 +517,8 @@ class ProtectiveStopManager:
                             event_cn="保护止损",
                             symbol=symbol,
                             side=side.value,
+                            risk_stage=self._risk_stage,
+                            risk_level=self._get_risk_level(),
                             reason="cancel_no_position" if not has_position else "cancel_disabled",
                             order_id=order_id,
                         )
@@ -524,6 +542,8 @@ class ProtectiveStopManager:
                             event_cn="保护止损",
                             symbol=symbol,
                             side=side.value,
+                            risk_stage=self._risk_stage,
+                            risk_level=self._get_risk_level(),
                             reason="cancel_own_due_to_external_stop",
                             order_id=order_id,
                         )
@@ -545,6 +565,8 @@ class ProtectiveStopManager:
                 event_cn="保护止损",
                 symbol=symbol,
                 side=side.value,
+                risk_stage=self._risk_stage,
+                risk_level=self._get_risk_level(),
                 reason="skip_missing_liquidation_price",
             )
             return
@@ -649,6 +671,8 @@ class ProtectiveStopManager:
             event_cn="保护止损",
             symbol=symbol,
             side=side.value,
+            risk_stage=self._risk_stage,
+            risk_level=self._get_risk_level(),
             reason="place_or_update",
             order_id=result.order_id,
             price=desired_stop_price,

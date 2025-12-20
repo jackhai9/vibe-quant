@@ -66,6 +66,14 @@ global:
 
   # 风控
   risk:
+    # 风控等级映射（用于日志展示，可按需调整）
+    # - key 是“风险阶段/类型”，value 是等级数字
+    # - 例如：想在 2 和 3 之间插入新等级，只需要改这里，不需要改代码里的 log_event
+    levels:
+      liq_distance_breach: 1
+      panic_close: 2
+      protective_stop: 3
+
     # 第一等级：距离强平价多少比例时切换到 AGGRESSIVE_LIMIT 模式
     liq_distance_threshold: 0.05
 

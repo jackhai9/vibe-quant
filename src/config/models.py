@@ -88,6 +88,17 @@ class ProtectiveStopConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     """风控配置"""
+    levels: Dict[str, int] = Field(
+        default_factory=lambda: {
+            "liq_distance_breach": 1,
+            "panic_close": 2,
+            "protective_stop": 3,
+        },
+        description=(
+            "风控等级映射（key=风险阶段/类型，value=等级数字）。"
+            "用于日志/告警展示，可按需调整（例如插入新等级或整体后移）。"
+        ),
+    )
     liq_distance_threshold: Decimal = Field(
         default=Decimal("0.015"),
         description="强平距离阈值"
@@ -202,6 +213,7 @@ class SymbolProtectiveStopConfig(BaseModel):
 
 class SymbolRiskConfig(BaseModel):
     """Symbol 级别风控配置覆盖（结构与 global.risk 一致）"""
+    levels: Optional[Dict[str, int]] = None
     liq_distance_threshold: Optional[Decimal] = Field(default=None, gt=Decimal("0"), le=Decimal("1"))
     panic_close: Optional[SymbolPanicCloseConfig] = None
     protective_stop: Optional[SymbolProtectiveStopConfig] = None
