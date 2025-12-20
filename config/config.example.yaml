@@ -82,6 +82,12 @@ global:
     protective_stop:
       enabled: true
       dist_to_liq: 0.01
+      # 外部止损接管：当检测到外部 stop/tp（cp=True 或 reduceOnly=True）时，本程序停止维护自己的保护止损；并定期用 REST 校验释放锁存
+      external_takeover:
+        enabled: true
+        rest_verify_interval_s: 30
+        max_hold_s: 300
+        skip_log_throttle_s: 2
 
 # Symbol 配置（可覆盖 global 中的 execution/accel/roi/risk）
 symbols:
