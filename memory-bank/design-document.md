@@ -220,6 +220,10 @@ maker 订单要求：
   - `global.risk.protective_stop.enabled`
   - `global.risk.protective_stop.dist_to_liq`（默认 0.01）
   - `symbols.<symbol>.risk.protective_stop_dist_to_liq`（按 symbol 覆盖）
+  - 外部止损/止盈接管（避免与手动 stop/tp 冲突）：
+    - `global.risk.protective_stop.external_takeover.enabled`
+    - `global.risk.protective_stop.external_takeover.rest_verify_interval_s`
+    - `global.risk.protective_stop.external_takeover.max_hold_s`
 - stopPrice 计算（按 liquidation_price 反推触发点）：
   - LONG：`stopPrice = liquidation_price / (1 - D)`（SELL stop）
   - SHORT：`stopPrice = liquidation_price / (1 + D)`（BUY stop）

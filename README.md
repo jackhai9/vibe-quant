@@ -195,6 +195,7 @@ ret_window = (price_now / price_window_ago) - 1
 | **软风控** | `dist_to_liq` < 阈值 | 强制升级为 Aggressive Limit |
 | **强制平仓** | `dist_to_liq` 进入 panic_close 档位 | 绕过信号，按 slice_ratio 强制分片平仓 |
 | **保护止损** | 交易所端 STOP_MARKET | 程序崩溃/断网时最后防线 |
+| **外部接管** | 同侧存在外部 stop/tp（`closePosition=true` 或 `reduceOnly=true`） | 撤销我方保护止损并暂停维护，直到外部单消失 |
 
 `dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
 

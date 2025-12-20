@@ -59,34 +59,6 @@ class ProtectiveStopManager:
         self._startup_existing_logged: set[tuple[str, PositionSide]] = set()
         self._startup_existing_external_logged: set[tuple[str, PositionSide]] = set()
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
-        self._skip_external_log_state: Dict[tuple[str, PositionSide], tuple[int, Optional[str], str]] = {}
-
-    def _should_log_skip_external(
-        self,
-        *,
-        symbol: str,
-        side: PositionSide,
-        reason: str,
-        external_order_id: Optional[str],
-        throttle_ms: int,
-        now_ms: int,
-    ) -> bool:
-        if throttle_ms <= 0:
-            return True
-        key = (symbol, side)
-        prev = self._skip_external_log_state.get(key)
-        if prev is None:
-            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
-            return True
-        prev_ms, prev_oid, prev_reason = prev
-        # 外部单切换/原因切换：立刻打印
-        if prev_oid != external_order_id or prev_reason != reason:
-            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
-            return True
-        if now_ms - prev_ms >= throttle_ms:
-            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
-            return True
-        return False
 
     def _get_lock(self, symbol: str) -> asyncio.Lock:
         lock = self._locks.get(symbol)
@@ -227,39 +199,6 @@ class ProtectiveStopManager:
             return None
         return order_type.strip().upper()
 
-    def _summarize_order_brief(self, order: Dict[str, Any]) -> Dict[str, Any]:
-        raw_info = order.get("info")
-        info: Dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
-        cp = self._coerce_bool(order.get("closePosition"))
-        if cp is None:
-            cp = self._coerce_bool(info.get("closePosition"))
-        ro = self._coerce_bool(order.get("reduceOnly"))
-        if ro is None:
-            ro = self._coerce_bool(info.get("reduceOnly"))
-        stop_price = self._extract_stop_price(order)
-
-        wt = order.get("workingType")
-        if not isinstance(wt, str):
-            wt = info.get("workingType")
-
-        tif = order.get("timeInForce")
-        if not isinstance(tif, str):
-            tif = info.get("timeInForce")
-
-        ps_obj = self._extract_position_side(order)
-        return {
-            "source": order.get("_vq_source"),
-            "order_id": self._extract_order_id(order),
-            "client_id": self._extract_client_order_id(order),
-            "type": self._extract_order_type(order),
-            "ps": (ps_obj.value if ps_obj else None),
-            "cp": cp,
-            "reduceOnly": ro,
-            "workingType": wt,
-            "timeInForce": tif,
-            "stop_price": str(stop_price) if stop_price is not None else None,
-        }
-
     @staticmethod
     def _coerce_bool(value: Any) -> Optional[bool]:
         if value is None:
@@ -377,36 +316,33 @@ class ProtectiveStopManager:
         enabled: bool,
         dist_to_liq: Decimal,
         external_stop_latch_by_side: Optional[Dict[PositionSide, bool]] = None,
-        skip_external_log_throttle_s: float = 2.0,
         sync_reason: Optional[str] = None,
     ) -> Dict[PositionSide, bool]:
         """同步某个 symbol 的保护止损（会访问交易所 openOrders 和 openAlgoOrders）。"""
         async with self._get_lock(symbol):
             try:
-                # 查询普通挂单和 algo 挂单（条件订单在 2025-12-09 后迁移到 Algo Service）
-                open_orders = await self._exchange.fetch_open_orders(symbol)
-                algo_orders = await self._exchange.fetch_open_algo_orders(symbol)
-                # 启动时兜底：ccxt 可能漏掉 closePosition 的 STOP/TP（例如 origQty=0），用 raw 接口补一次
-                raw_open_orders: list[Dict[str, Any]] = []
-                use_raw_open = sync_reason == "startup" or (
-                    isinstance(sync_reason, str) and sync_reason.startswith("external_takeover")
-                )
-                if use_raw_open and hasattr(self._exchange, "fetch_open_orders_raw"):
+                # 保护止损依赖“外部 stop/tp 接管”判断。ccxt 可能漏掉 closePosition 的 STOP/TP（例如 origQty=0），
+                # 因此这里以 raw openOrders 为主（若不可用则回退 ccxt fetch_open_orders）。
+                if hasattr(self._exchange, "fetch_open_orders_raw"):
                     try:
-                        raw_open_orders = await getattr(self._exchange, "fetch_open_orders_raw")(symbol)  # type: ignore[misc]
+                        open_orders = await getattr(self._exchange, "fetch_open_orders_raw")(symbol)  # type: ignore[misc]
                     except Exception as e:
-                        log_error(f"启动外部止损扫描失败（raw openOrders）: {e}", symbol=symbol)
-                # 合并所有订单，并标记来源（用于启动排障）
+                        log_error(f"获取 raw openOrders 失败: {e}", symbol=symbol, reason=sync_reason)
+                        open_orders = await self._exchange.fetch_open_orders(symbol)
+                else:
+                    open_orders = await self._exchange.fetch_open_orders(symbol)
+
+                # 查询 algo 挂单（条件订单在 2025-12-09 后迁移到 Algo Service）
+                algo_orders = await self._exchange.fetch_open_algo_orders(symbol)
+
+                # 合并所有订单
                 all_orders: list[Dict[str, Any]] = []
                 for o in list(open_orders):
                     if isinstance(o, dict):
-                        all_orders.append({**o, "_vq_source": "open"})
-                for o in list(raw_open_orders):
-                    if isinstance(o, dict):
-                        all_orders.append({**o, "_vq_source": "raw_open"})
+                        all_orders.append(o)
                 for o in list(algo_orders):
                     if isinstance(o, dict):
-                        all_orders.append({**o, "_vq_source": "algo"})
+                        all_orders.append(o)
             except Exception as e:
                 log_error(f"保护止损同步失败（获取挂单）: {e}", symbol=symbol)
                 return {PositionSide.LONG: False, PositionSide.SHORT: False}
@@ -420,36 +356,6 @@ class ProtectiveStopManager:
             }
             external_latch_by_side = external_stop_latch_by_side or {}
             external_stop_sample_by_side: Dict[PositionSide, Dict[str, Any]] = {}
-
-            # DEBUG: 打印 algo 订单原始数据
-            from src.utils.logger import get_logger
-            logger = get_logger()
-            if algo_orders:
-                for order in algo_orders:
-                    cid = self._extract_client_order_id(order)
-                    ps = self._extract_position_side(order)
-                    is_cp = self._is_close_position_stop(order)
-                    cp_top = order.get("closePosition") if isinstance(order, dict) else None
-                    cp_info = (
-                        order.get("info", {}).get("closePosition")
-                        if isinstance(order, dict) and isinstance(order.get("info"), dict)
-                        else None
-                    )
-                    ot_top = order.get("orderType") if isinstance(order, dict) else None
-                    ot_info = (
-                        order.get("info", {}).get("orderType")
-                        if isinstance(order, dict) and isinstance(order.get("info"), dict)
-                        else None
-                    )
-                    prefix_l = self._build_client_order_id_prefix(symbol, PositionSide.LONG)
-                    prefix_s = self._build_client_order_id_prefix(symbol, PositionSide.SHORT)
-                    logger.info(
-                        f"[DEBUG] algo_order: cid={cid}, ps={ps}, is_closePosition={is_cp}, "
-                        f"closePosition(top/info)={cp_top}/{cp_info}, orderType(top/info)={ot_top}/{ot_info}, "
-                        f"prefix_L={prefix_l}, prefix_S={prefix_s}, "
-                        f"match_L={cid and cid.startswith(prefix_l)}, match_S={cid and cid.startswith(prefix_s)}, "
-                        f"raw_keys={list(order.keys()) if isinstance(order, dict) else 'not_dict'}"
-                    )
 
             for order in all_orders:
                 if not isinstance(order, dict):
@@ -480,20 +386,6 @@ class ProtectiveStopManager:
                 if ids and self._external_multi_sig.get(key) == ids:
                     continue
                 self._external_multi_sig[key] = ids
-                brief = []
-                for o in externals[:5]:
-                    raw_info = o.get("info")
-                    info: Dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
-                    brief.append(
-                        {
-                            "order_id": self._extract_order_id(o),
-                            "client_id": self._extract_client_order_id(o),
-                            "type": self._extract_order_type(o),
-                            "cp": self._coerce_bool(o.get("closePosition")) or self._coerce_bool(info.get("closePosition")),
-                            "reduceOnly": self._coerce_bool(o.get("reduceOnly")) or self._coerce_bool(info.get("reduceOnly")),
-                            "stop_price": str(self._extract_stop_price(o)) if self._extract_stop_price(o) else None,
-                        }
-                    )
                 log_event(
                     "protective_stop",
                     event_cn="保护止损",
@@ -501,7 +393,7 @@ class ProtectiveStopManager:
                     side=side.value,
                     reason="external_stop_multiple",
                     count=len(externals),
-                    sample=brief,
+                    order_ids=ids,
                 )
 
             if sync_reason == "startup":
@@ -528,37 +420,28 @@ class ProtectiveStopManager:
                     key = (symbol, side)
                     if key in self._startup_existing_external_logged:
                         continue
-                    # 启动排障：无论是否存在外部单，都输出一次外部 stop/tp 摘要（有仓位时）
-                    pos = positions.get(side)
-                    has_pos = pos is not None and abs(pos.position_amt) > Decimal("0")
-                    if not has_pos:
-                        continue
                     externals = external_stop_orders_by_side.get(side) or []
-                    sample = external_stop_sample_by_side.get(side)
                     self._startup_existing_external_logged.add(key)
-                    brief = [self._summarize_order_brief(o) for o in externals[:5]]
+                    if not externals:
+                        continue
+                    sample = external_stop_sample_by_side.get(side)
+                    raw_info = sample.get("info") if isinstance(sample, dict) else None
+                    info: Dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
+                    working_type = sample.get("workingType") if isinstance(sample, dict) else None
+                    if not isinstance(working_type, str):
+                        working_type = info.get("workingType")
+                    stop_price = self._extract_stop_price(sample) if isinstance(sample, dict) else None
                     log_event(
                         "protective_stop",
                         event_cn="保护止损",
                         symbol=symbol,
                         side=side.value,
-                        reason="startup_external_stop_snapshot",
-                        count=len(externals),
-                        sample=brief,
+                        reason="startup_existing_external_stop",
                         order_id=self._extract_order_id(sample) if sample else None,
                         client_order_id=self._extract_client_order_id(sample) if sample else None,
+                        stop_price=str(stop_price) if stop_price is not None else None,
+                        working_type=working_type,
                     )
-                    if externals:
-                        log_event(
-                            "protective_stop",
-                            event_cn="保护止损",
-                            symbol=symbol,
-                            side=side.value,
-                            reason="startup_existing_external_stop",
-                            count=len(externals),
-                            order_id=self._extract_order_id(sample) if sample else None,
-                            client_order_id=self._extract_client_order_id(sample) if sample else None,
-                        )
 
             for side in (PositionSide.LONG, PositionSide.SHORT):
                 await self._sync_side(
@@ -572,7 +455,6 @@ class ProtectiveStopManager:
                     has_external_stop=external_stops_by_side.get(side, False),
                     external_stop_sample=external_stop_sample_by_side.get(side),
                     has_external_stop_latch=bool(external_latch_by_side.get(side, False)),
-                    skip_external_log_throttle_ms=max(0, int(skip_external_log_throttle_s * 1000)),
                 )
             return external_stops_by_side
 
@@ -589,7 +471,6 @@ class ProtectiveStopManager:
         has_external_stop: bool = False,
         external_stop_sample: Optional[Dict[str, Any]] = None,
         has_external_stop_latch: bool = False,
-        skip_external_log_throttle_ms: int = 0,
     ) -> None:
         desired_cid = self.build_client_order_id(symbol, side)
 
@@ -633,15 +514,6 @@ class ProtectiveStopManager:
 
         # 已有外部 closePosition 止损/止盈单：外部接管（撤掉我们自己的，且停止维护）
         if has_external_stop:
-            external_order_id = self._extract_order_id(external_stop_sample) if external_stop_sample else None
-            external_client_order_id = (
-                self._extract_client_order_id(external_stop_sample) if external_stop_sample else None
-            )
-            external_stop_price = self._extract_stop_price(external_stop_sample) if external_stop_sample else None
-            external_order_type = (
-                self._extract_order_type(external_stop_sample) if isinstance(external_stop_sample, dict) else None
-            )
-
             if keep_order is not None:
                 order_id = self._extract_order_id(keep_order)
                 if order_id:
@@ -659,65 +531,11 @@ class ProtectiveStopManager:
                         log_error(f"保护止损撤单失败: {e}", symbol=symbol, order_id=order_id)
                         return
             self._states.pop((symbol, side), None)
-            now_ms = int(time.time() * 1000)
-            if self._should_log_skip_external(
-                symbol=symbol,
-                side=side,
-                reason="skip_external_stop",
-                external_order_id=external_order_id,
-                throttle_ms=skip_external_log_throttle_ms,
-                now_ms=now_ms,
-            ):
-                log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
-                    symbol=symbol,
-                    side=side.value,
-                    reason="skip_external_stop",
-                    external_order_id=external_order_id,
-                    external_client_order_id=external_client_order_id,
-                    external_order_type=external_order_type,
-                    external_stop_price=str(external_stop_price) if external_stop_price is not None else None,
-                )
             return
 
         # 外部接管锁存：WS 已见外部 stop/tp（cp=True 或 reduceOnly=True）
         # 锁存期间避免对保护止损做“撤旧建新”，减少外部端刚创建但 REST 尚未可见时的竞态与重复单
         if has_external_stop_latch:
-            now_ms = int(time.time() * 1000)
-            if keep_order is None:
-                if self._should_log_skip_external(
-                    symbol=symbol,
-                    side=side,
-                    reason="skip_external_stop_latch",
-                    external_order_id=None,
-                    throttle_ms=skip_external_log_throttle_ms,
-                    now_ms=now_ms,
-                ):
-                    log_event(
-                        "protective_stop",
-                        event_cn="保护止损",
-                        symbol=symbol,
-                        side=side.value,
-                        reason="skip_external_stop_latch",
-                    )
-            else:
-                if self._should_log_skip_external(
-                    symbol=symbol,
-                    side=side,
-                    reason="skip_external_stop_latch_keep",
-                    external_order_id=self._extract_order_id(keep_order),
-                    throttle_ms=skip_external_log_throttle_ms,
-                    now_ms=now_ms,
-                ):
-                    log_event(
-                        "protective_stop",
-                        event_cn="保护止损",
-                        symbol=symbol,
-                        side=side.value,
-                        reason="skip_external_stop_latch_keep",
-                        order_id=self._extract_order_id(keep_order),
-                    )
             return
 
         liquidation_price = position.liquidation_price

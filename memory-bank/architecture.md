@@ -163,7 +163,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`，触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
 - 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduceOnly），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
 - 仓位保护性止损（Step 9.3）：为每个“有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销
-- 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=True`；或 `closePosition=True` 兜底）时，视为外部接管：撤销我方保护止损并暂停维护；WS 侧对外部 `NEW` 事件做“接管锁存”，直到终态或 REST 校验确认消失才恢复自维护
+- 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=True`；或 `closePosition=True` 兜底）时，视为外部接管：撤销我方保护止损并暂停维护。<br>
+  - REST 校验以 raw openOrders（`GET /fapi/v1/openOrders`）为主，必要时回退 ccxt openOrders，并合并 openAlgoOrders，避免 ccxt 漏掉部分 closePosition 条件单。<br>
+  - 多外部单并存时，WS 收到某一张终态不代表接管结束：先标记 pending，并触发一次 REST verify，只有 verify 确认“同侧外部 stop/tp 已不存在”才 release 并恢复自维护。<br>
 - risk 订单优先级：`OrderIntent.is_risk=true` 的下单/撤单绕过软限速（`max_orders_per_sec`/`max_cancels_per_sec`），避免在强平风险区被限速“卡住”
 - 部分成交语义：`PARTIALLY_FILLED` 视为“有成交”，重置 `timeout_count`，避免误升级执行模式
 - 全局限速（Step 9.2）：`max_orders_per_sec` / `max_cancels_per_sec`（滑动窗口计数），在主流程下单/撤单前检查

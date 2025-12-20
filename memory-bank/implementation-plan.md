@@ -395,7 +395,7 @@ ws:
 - 订单归属：
   - 使用稳定的 `newClientOrderId`（跨 run 不变），便于进程重启后发现/续管，避免重复挂单。
 - 同步策略：
-  - 启动后：拉取 openOrders，确保保护止损存在且 stopPrice 正确
+  - 启动后：拉取 raw openOrders（必要时回退 ccxt openOrders）并合并 openAlgoOrders，确保保护止损存在且 stopPrice 正确
   - WS 重连校准后：同上
   - 收到 `ACCOUNT_UPDATE` 且仓位变化：触发一次 debounce 同步
   - 仓位归零：撤销该侧保护止损单（避免误触发导致开仓）

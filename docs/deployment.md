@@ -99,7 +99,7 @@ TELEGRAM_CHAT_ID=123456789
 
 ```bash
 # 使用默认配置
-cp config/config.yaml config/config-local.yaml
+cp config/config.example.yaml config/config-local.yaml
 
 # 根据需要编辑
 nano config/config-local.yaml
@@ -206,7 +206,7 @@ sudo mkdir -p /etc/vibe-quant
 
 ```bash
 # 复制主配置文件
-sudo cp /opt/vibe-quant/config/config.yaml /etc/vibe-quant/config.yaml
+sudo cp /opt/vibe-quant/config/config.example.yaml /etc/vibe-quant/config.yaml
 
 # 复制环境变量模板
 sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.env.example /etc/vibe-quant/vibe-quant.env
@@ -467,7 +467,7 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
-      - ./config/config.yaml:/etc/vibe-quant/config.yaml:ro
+      - ./config/config.example.yaml:/etc/vibe-quant/config.yaml:ro
       - ./logs:/var/log/vibe-quant
     logging:
       driver: "json-file"

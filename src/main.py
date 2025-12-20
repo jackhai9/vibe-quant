@@ -72,6 +72,8 @@ class ExternalTakeoverState:
     first_seen_ms: int = 0
     last_seen_ms: int = 0
     last_verify_ms: int = 0
+    last_verify_present: Optional[bool] = None
+    pending_release: bool = False
 
 
 class Application:
@@ -97,6 +99,7 @@ class Application:
         self._telegram_tasks: set[asyncio.Task[Any]] = set()
         self._side_tasks: set[asyncio.Task[Any]] = set()
         self._protective_stop_tasks: Dict[str, asyncio.Task[Any]] = {}
+        self._protective_stop_task_reasons: Dict[str, str] = {}
 
         self._running = False
         self._shutdown_event = asyncio.Event()
@@ -137,6 +140,29 @@ class Application:
         return enabled, verify_ms, max_hold_ms
 
     def _external_takeover_mark_seen(self, symbol: str, position_side: PositionSide, *, now_ms: int) -> None:
+        self._external_takeover_set(symbol, position_side, now_ms=now_ms, source="unknown")
+
+    def _external_takeover_mark_terminal(self, symbol: str, position_side: PositionSide, *, now_ms: int) -> None:
+        self._external_takeover_request_release(symbol, position_side, now_ms=now_ms, source="unknown")
+
+    def _external_takeover_request_release(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        now_ms: int,
+        source: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        order_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        """
+        请求释放外部接管（不立即释放）。
+
+        说明：同侧可能同时存在多个外部 stop/tp；WS 收到某一张终态不代表“外部接管结束”。
+        此处只把状态标记为 pending，并触发一次 verify（raw openOrders）后再决定是否 release。
+        """
         enabled, _verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)
         if not enabled:
             return
@@ -146,11 +172,24 @@ class Application:
             st = ExternalTakeoverState()
             self._external_takeover[key] = st
         if not st.active:
-            st.active = True
-            st.first_seen_ms = now_ms
+            return
+        st.pending_release = True
         st.last_seen_ms = now_ms
+        # 不打印日志：接管状态未变化（仍 active）
+        # 触发 verify：由 _sync_protective_stop 在 present=False 时执行真正的 release
+        self._schedule_protective_stop_sync(symbol, reason="external_takeover_verify")
 
-    def _external_takeover_mark_terminal(self, symbol: str, position_side: PositionSide, *, now_ms: int) -> None:
+    def _external_takeover_set(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        now_ms: int,
+        source: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        order_type: Optional[str] = None,
+    ) -> None:
         enabled, _verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)
         if not enabled:
             return
@@ -159,7 +198,62 @@ class Application:
         if st is None:
             st = ExternalTakeoverState()
             self._external_takeover[key] = st
-        st.active = False
+        was_active = st.active
+        if not was_active:
+            st.active = True
+            st.first_seen_ms = now_ms
+            st.last_verify_present = None
+            st.pending_release = False
+            log_event(
+                "protective_stop",
+                event_cn="保护止损",
+                symbol=symbol,
+                side=position_side.value,
+                reason="external_takeover_set",
+                source=source,
+                order_id=order_id,
+                client_order_id=client_order_id,
+                order_type=order_type,
+            )
+        st.last_seen_ms = now_ms
+
+    def _external_takeover_release(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        now_ms: int,
+        source: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        order_type: Optional[str] = None,
+        status: Optional[str] = None,
+        reason: str = "external_takeover_release",
+    ) -> None:
+        enabled, _verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)
+        if not enabled:
+            return
+        key = (symbol, position_side)
+        st = self._external_takeover.get(key)
+        if st is None:
+            st = ExternalTakeoverState()
+            self._external_takeover[key] = st
+        if st.active:
+            st.active = False
+            st.last_verify_present = None
+            st.pending_release = False
+            log_event(
+                "protective_stop",
+                event_cn="保护止损",
+                symbol=symbol,
+                side=position_side.value,
+                reason=reason,
+                source=source,
+                status=status,
+                order_id=order_id,
+                client_order_id=client_order_id,
+                order_type=order_type,
+            )
         st.last_seen_ms = now_ms
 
     def _external_takeover_is_active(self, symbol: str, position_side: PositionSide, *, now_ms: int) -> bool:
@@ -259,6 +353,7 @@ class Application:
     def _on_protective_stop_task_done(self, task: asyncio.Task[Any], symbol: str, name: str) -> None:
         """保护止损同步任务回调：只记录异常，不影响主程序。"""
         self._protective_stop_tasks.pop(symbol, None)
+        self._protective_stop_task_reasons.pop(symbol, None)
         try:
             exc = task.exception()
         except asyncio.CancelledError:
@@ -280,6 +375,11 @@ class Application:
         debounce_s = self._protective_stop_debounce_s(reason)
 
         prev = self._protective_stop_tasks.get(symbol)
+        prev_reason = self._protective_stop_task_reasons.get(symbol)
+        # verify 任务只需要“至少跑一次”，若已经有 verify 在跑/排队就不重复调度（避免刷屏）
+        if reason == "external_takeover_verify" and prev and not prev.done() and prev_reason == "external_takeover_verify":
+            return
+
         if prev and not prev.done():
             prev.cancel()
 
@@ -296,6 +396,7 @@ class Application:
 
         task = asyncio.create_task(_runner())
         self._protective_stop_tasks[symbol] = task
+        self._protective_stop_task_reasons[symbol] = reason
         task.add_done_callback(lambda t, s=symbol, n=f"protective_stop_sync:{symbol}": self._on_protective_stop_task_done(t, s, n))
 
     @staticmethod
@@ -335,25 +436,49 @@ class Application:
                 enabled=cfg.protective_stop_enabled,
                 dist_to_liq=cfg.protective_stop_dist_to_liq,
                 external_stop_latch_by_side=external_latch,
-                skip_external_log_throttle_s=float(cfg.protective_stop_external_takeover_skip_log_throttle_s),
                 sync_reason=reason,
             )
             enabled, verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)
             if enabled:
                 for side in (PositionSide.LONG, PositionSide.SHORT):
                     self._external_takeover_note_verified(symbol, side, now_ms=now_ms)
-                    if rest_external.get(side, False):
-                        self._external_takeover_mark_seen(symbol, side, now_ms=now_ms)
+                    present = rest_external.get(side, False)
+                    if present:
+                        self._external_takeover_set(symbol, side, now_ms=now_ms, source="rest")
+                        st_present = self._external_takeover.get((symbol, side))
+                        if st_present:
+                            st_present.pending_release = False
                     else:
                         st = self._external_takeover.get((symbol, side))
-                        if st and st.active and (now_ms - st.last_seen_ms) >= verify_ms:
-                            st.active = False
+                        if reason == "external_takeover_verify" and st and st.active and st.pending_release:
+                            self._external_takeover_release(
+                                symbol,
+                                side,
+                                now_ms=now_ms,
+                                source="rest_verify",
+                                reason="external_takeover_release",
+                            )
+                        elif st and st.active and (now_ms - st.last_seen_ms) >= verify_ms:
+                            self._external_takeover_release(
+                                symbol,
+                                side,
+                                now_ms=now_ms,
+                                source="rest",
+                                reason="external_takeover_release_by_rest",
+                            )
+
+                    # verify 事件：只在 verify sync 场景打印（避免刷屏）
+                    st2 = self._external_takeover.get((symbol, side))
+                    if reason.startswith("external_takeover_verify") and st2 and st2.active:
+                        if st2.last_verify_present is None or st2.last_verify_present != present:
+                            st2.last_verify_present = present
                             log_event(
                                 "protective_stop",
                                 event_cn="保护止损",
                                 symbol=symbol,
                                 side=side.value,
-                                reason="external_takeover_release_by_rest",
+                                reason="external_takeover_verify",
+                                external_present=present,
                             )
         except Exception as e:
             log_error(f"保护止损同步异常: {e}", symbol=symbol, reason=reason)
@@ -881,9 +1006,26 @@ class Application:
             terminal = update.status.upper() in {"CANCELED", "EXPIRED", "FINISHED", "REJECTED", "FILLED", "TRIGGERED"}
             for side in sides:
                 if terminal:
-                    self._external_takeover_mark_terminal(update.symbol, side, now_ms=now_ms)
+                    self._external_takeover_request_release(
+                        update.symbol,
+                        side,
+                        now_ms=now_ms,
+                        source="ws_algo",
+                        order_id=update.algo_id,
+                        client_order_id=update.client_algo_id,
+                        order_type=update.order_type,
+                        status=update.status,
+                    )
                 else:
-                    self._external_takeover_mark_seen(update.symbol, side, now_ms=now_ms)
+                    self._external_takeover_set(
+                        update.symbol,
+                        side,
+                        now_ms=now_ms,
+                        source="ws_algo",
+                        order_id=update.algo_id,
+                        client_order_id=update.client_algo_id,
+                        order_type=update.order_type,
+                    )
             self._schedule_protective_stop_sync(
                 update.symbol,
                 reason=f"external_algo:{update.status}:{update.order_type}:{update.close_position}:{update.reduce_only}",
@@ -994,9 +1136,26 @@ class Application:
                 # 外部 closePosition 或 reduceOnly 条件单状态变化也可能导致“外部接管/释放”
                 now_ms = current_time_ms()
                 if update.status in (OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.FILLED, OrderStatus.REJECTED):
-                    self._external_takeover_mark_terminal(update.symbol, update.position_side, now_ms=now_ms)
+                    self._external_takeover_request_release(
+                        update.symbol,
+                        update.position_side,
+                        now_ms=now_ms,
+                        source="ws_order",
+                        order_id=update.order_id,
+                        client_order_id=update.client_order_id,
+                        order_type=update.order_type,
+                        status=update.status.value,
+                    )
                 else:
-                    self._external_takeover_mark_seen(update.symbol, update.position_side, now_ms=now_ms)
+                    self._external_takeover_set(
+                        update.symbol,
+                        update.position_side,
+                        now_ms=now_ms,
+                        source="ws_order",
+                        order_id=update.order_id,
+                        client_order_id=update.client_order_id,
+                        order_type=update.order_type,
+                    )
                 self._schedule_protective_stop_sync(
                     update.symbol,
                     reason=f"external_stop:{update.status.value}:{update.order_type}:{update.close_position}:{update.reduce_only}",

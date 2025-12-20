@@ -265,6 +265,35 @@ grep "限速" logs/*.log
 
 ## 订单失败
 
+### 问题：保护止损下单失败，错误码 `-4130`
+
+**典型错误**：`An open stop or take profit order ... is existing.`<br>
+
+**原因**：同侧已经存在 stop/tp 条件单（可能来自 Binance 客户端、手机端或网页端手动设置），交易所会拒绝再创建一张同侧的条件单。<br>
+
+**系统行为（预期）**：检测到外部 stop/tp（`closePosition=true` 或 `reduceOnly=true`）时，会进入“外部接管”，撤销我方保护止损并暂停维护，直到外部单消失。<br>
+
+**排查方法**：
+```bash
+# 查看外部接管状态变化（set/release/verify）
+grep "\\[PROTECTIVE_STOP\\]" logs/*.log | grep "external_takeover" | tail -50
+
+# 如果同侧出现多张外部 stop/tp，会打印摘要告警
+grep "\\[PROTECTIVE_STOP\\]" logs/*.log | grep "external_stop_multiple" | tail -20
+```
+
+**解决方案**：
+1. 在 Binance 客户端/网页端取消同侧的手动 stop/tp 条件单（或保留外部单，让系统继续外部接管）。<br>
+2. 若确实希望由本程序维护保护止损：关闭/禁用外部条件单，并确保只有本程序在维护（避免多端同时设置）。<br>
+3. （谨慎）临时禁用外部接管逻辑（不推荐在实盘长期使用）：<br>
+   ```yaml
+   global:
+     risk:
+       protective_stop:
+         external_takeover:
+           enabled: false
+   ```<br>
+
 ### 问题：订单被拒绝，错误码 `-5022`
 
 **完整错误**：`ReduceOnly order is rejected`

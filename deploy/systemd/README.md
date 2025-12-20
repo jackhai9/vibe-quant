@@ -10,7 +10,7 @@
 ## 2) 配置文件与环境变量
 
 - 配置文件：建议放在 `/etc/vibe-quant/config.yaml`
-  - 参考仓库中的 `config/config.yaml`
+  - 参考仓库中的 `config/config.example.yaml`
 - 环境变量：建议放在 `/etc/vibe-quant/vibe-quant.env`
   - 参考 `deploy/systemd/vibe-quant.env.example`
   - 必需：`BINANCE_API_KEY` / `BINANCE_API_SECRET`
@@ -23,7 +23,7 @@
 - 创建目录与环境文件：
   - `sudo mkdir -p /etc/vibe-quant`
   - `sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.env.example /etc/vibe-quant/vibe-quant.env`
-  - `sudo cp /opt/vibe-quant/config/config.yaml /etc/vibe-quant/config.yaml`
+  - `sudo cp /opt/vibe-quant/config/config.example.yaml /etc/vibe-quant/config.yaml`
   - 编辑 `/etc/vibe-quant/vibe-quant.env` 和 `/etc/vibe-quant/config.yaml`
 
 ## 4) 启动与自启
@@ -38,4 +38,3 @@
 
 - `sudo systemctl kill -s SIGKILL vibe-quant`
 - `sudo systemctl status vibe-quant` 应显示已自动拉起，并重新连接 WS（会触发一次重连后校准日志）
-

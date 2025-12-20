@@ -55,6 +55,7 @@ class TestProtectiveStopSync:
     async def test_sync_places_order_when_missing(self):
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
@@ -104,6 +105,7 @@ class TestProtectiveStopSync:
         """LONG 只允许收紧：stopPrice 不允许下调（更松/更远）。"""
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(
             return_value=[
                 {
@@ -161,6 +163,7 @@ class TestProtectiveStopSync:
         """SHORT 只允许收紧：stopPrice 不允许上调（更松/更远）。"""
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(
             return_value=[
                 {
@@ -230,6 +233,16 @@ class TestProtectiveStopSync:
                 }
             ]
         )
+        exchange.fetch_open_orders_raw = AsyncMock(
+            return_value=[
+                {
+                    "id": "123",
+                    "clientOrderId": cid,
+                    "stopPrice": "101.1",
+                    "info": {"positionSide": "LONG", "clientOrderId": cid, "stopPrice": "101.1"},
+                }
+            ]
+        )
         exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
         exchange.cancel_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="123", status=OrderStatus.CANCELED)
@@ -260,6 +273,7 @@ class TestProtectiveStopSync:
     async def test_sync_skips_when_external_close_position_algo_exists(self):
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(
             return_value=[
                 {
@@ -314,6 +328,16 @@ class TestProtectiveStopSync:
     async def test_sync_skips_when_external_reduce_only_stop_exists(self):
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(
+            return_value=[
+                {
+                    "id": "ext-1",
+                    "type": "stop_market",
+                    "reduceOnly": True,
+                    "info": {"positionSide": "SHORT", "reduceOnly": True},
+                }
+            ]
+        )
+        exchange.fetch_open_orders_raw = AsyncMock(
             return_value=[
                 {
                     "id": "ext-1",
@@ -378,6 +402,12 @@ class TestProtectiveStopSync:
                 {"id": "ext-2", "type": "stop_market", "reduceOnly": True, "info": {"positionSide": "SHORT"}},
             ]
         )
+        exchange.fetch_open_orders_raw = AsyncMock(
+            return_value=[
+                {"id": "ext-1", "type": "stop_market", "reduceOnly": True, "info": {"positionSide": "SHORT"}},
+                {"id": "ext-2", "type": "stop_market", "reduceOnly": True, "info": {"positionSide": "SHORT"}},
+            ]
+        )
         exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
@@ -427,6 +457,7 @@ class TestProtectiveStopSync:
 
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(
             return_value=[
                 {
@@ -478,10 +509,7 @@ class TestProtectiveStopSync:
         )
 
         assert any(e.get("reason") == "startup_existing_external_stop" for e in events)
-        assert any(
-            e.get("reason") == "skip_external_stop" and e.get("external_client_order_id") == "external-stop-abc"
-            for e in events
-        )
+        exchange.place_order.assert_not_awaited()
         exchange.place_order.assert_not_called()
 
     async def test_sync_cancels_own_order_when_external_close_position_exists(self):
@@ -491,6 +519,16 @@ class TestProtectiveStopSync:
         own_cid = mgr.build_client_order_id(symbol, PositionSide.LONG)
 
         exchange.fetch_open_orders = AsyncMock(
+            return_value=[
+                {
+                    "id": "123",
+                    "clientOrderId": own_cid,
+                    "stopPrice": "101.1",
+                    "info": {"positionSide": "LONG", "clientOrderId": own_cid, "stopPrice": "101.1"},
+                }
+            ]
+        )
+        exchange.fetch_open_orders_raw = AsyncMock(
             return_value=[
                 {
                     "id": "123",
@@ -554,6 +592,7 @@ class TestProtectiveStopSync:
         """交易所若以 float 返回 triggerPrice，需按 tick 归一化避免反复撤旧建新。"""
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
 
         # 模拟 ccxt/交易所返回 float 抖动：8.267 -> 8.266999999999999
         exchange.fetch_open_algo_orders = AsyncMock(
@@ -613,6 +652,7 @@ class TestProtectiveStopSync:
         """外部接管锁存时，不应下我们自己的保护止损。"""
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
         exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
@@ -655,6 +695,7 @@ class TestProtectiveStopSync:
         """外部接管锁存时，已有我们自己的保护止损单应短暂保留，不撤不建。"""
         exchange = MagicMock(spec=ExchangeAdapter)
         exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
 
         mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
         symbol = "BTC/USDT:USDT"

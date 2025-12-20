@@ -25,15 +25,15 @@
 **动机**：当交易所/外部已有 `closePosition` 条件单时，本程序选择“外部接管”（撤掉自己并停止维护）。为了避免外部单被手动撤销后本程序无法及时恢复维护，本次补齐了 User Data Stream 的条件单事件解析与触发同步。<br>
 **产出**：
 - `src/models.py`：新增 `AlgoOrderUpdate`；`OrderUpdate` 增加 `order_type/close_position`
-- `src/ws/user_data.py`：支持解析 `ALGO_UPDATE`（Algo Service 条件单更新），并在调试阶段直接打印关键字段（后续可降级为 debug 或移除）
-- `src/main.py`：收到 `ALGO_UPDATE`（或外部 `ORDER_TRADE_UPDATE` 的 `closePosition`）后调度一次 protective stop 同步
+- `src/ws/user_data.py`：支持解析 `ALGO_UPDATE`（Algo Service 条件单更新），用于外部接管的 set/release/verify 打点（不打印 WS 原始 payload）
+- `src/main.py`：收到外部条件单状态变化后调度 protective stop 同步；释放外部接管以 REST verify 为准，避免多外部单并存时误释放
 - `tests/test_ws_user_data.py`：新增/更新解析测试覆盖 `cp/o/ALGO_UPDATE`
 <br>
 **补充改进（同批交付）**：<br>
 - 保护性止损只允许“收紧”（LONG stopPrice 只上调；SHORT stopPrice 只下调），避免仓位变安全时把止损越推越远，并减少频繁撤旧建新带来的空窗风险<br>
 - 保护性止损同步采用分级 debounce：`position_update` 1s；`startup/calibration` 0s；其余 0.2s（兼顾 REST 压力与关键场景恢复速度）<br>
-- 启动同步时打印已存在的外部 `closePosition` 条件单（含 order_id/client_id），并在 `skip_external_stop` 时附带外部单关键字段便于排查；新增“外部多单”告警（同侧出现多张外部 stop/tp 时打印摘要）<br>
-- 外部接管从 TTL 提示升级为“锁存 + 保险丝”：外部 stop/tp（`cp=True` 或 `reduceOnly=True`）一旦出现即锁存接管；锁存期间按 `external_takeover.rest_verify_interval_s` 周期触发 REST 校验，若长期无外部单则释放锁存并恢复自维护（配置：`global.risk.protective_stop.external_takeover.*`）<br>
+- 启动同步时若发现外部 stop/tp，打印 `order_id/client_id/stop_price/workingType`；同侧出现多张外部 stop/tp 时打印摘要告警（`external_stop_multiple`）<br>
+- 外部接管采用“锁存 + REST verify”：外部 stop/tp（`cp=True` 或 `reduceOnly=True`）一旦出现即锁存接管；WS 收到某一张终态不直接释放，需 REST verify 确认同侧外部单已清空才恢复自维护（REST 以 raw openOrders 为主；配置：`global.risk.protective_stop.external_takeover.*`）<br>
 - 测试：补充 `tests/test_protective_stop.py`（只收紧语义/启动外部单日志等）与 `tests/test_main_shutdown.py`（debounce 分级逻辑）
 
 ### 可选后续工作
@@ -964,14 +964,13 @@ pytest: 26 passed
 
 ### 目标
 - 将“外部接管”判定扩展为：**只要是 reduceOnly 的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=True`）。<br>
-- 在调试阶段增强 WS 原始消息可观测性：打印关键字段（`cp/R/sp/wt/f/ps` 等），用于确认不同客户端（mac/ios）下单形态。<br>
-- 降低外部接管期间的日志刷屏：对重复的 `skip_external_stop*` 做节流。<br>
+- 明确外部接管释放策略：多外部单并存时，WS 收到某一张终态不代表外部单消失，释放以 REST verify 为准。<br>
+- REST 校验以 raw openOrders 为主：避免 ccxt/openOrders 漏掉部分 closePosition 条件单。<br>
 
 ### 关键改动
 - 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=True`（同时保留 `closePosition=True` 兜底）。<br>
-- 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存，直到终态事件或 REST 保险丝确认外部已消失才释放。<br>
-- 日志增强：新增 `[WS_RAW_DETAIL] ORDER_TRADE_UPDATE` / `[WS_RAW_DETAIL] ALGO_UPDATE` 打印关键字段与 keys 列表。<br>
-- 日志节流：新增 `global.risk.protective_stop.external_takeover.skip_log_throttle_s`（默认 2s）。<br>
+- 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存；WS 终态先触发 verify，只有 REST verify 确认同侧外部 stop/tp 已消失才 release。<br>
+- 日志策略调整：外部接管只在状态变化时打点（set/release/verify）；启动时若存在外部 stop/tp 仅打印一条摘要（order_id/client_id/stop_price/workingType）。<br>
 
 ### 测试结果
 ```

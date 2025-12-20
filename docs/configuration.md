@@ -432,7 +432,11 @@ tiers:
 
 **外部接管判定（当前实现）**：
 - **WS 事件**：`ORDER_TRADE_UPDATE` 或 `ALGO_UPDATE` 中，若订单类型为 `STOP/TAKE_PROFIT*` 且（`closePosition=true` **或** `reduceOnly=true`），则视为外部接管。<br>
-- **REST 校验**：通过 `fetch_open_orders` + `fetch_open_algo_orders` 扫描同侧订单，若存在 `STOP/TAKE_PROFIT*` 且（`closePosition=true` **或** `reduceOnly=true`），则视为外部接管。<br>
+- **REST 校验**：以交易所原始接口 `GET /fapi/v1/openOrders`（raw openOrders）为主，必要时回退 `fetch_open_orders`，并合并 `fetch_open_algo_orders`，扫描同侧订单：若存在 `STOP/TAKE_PROFIT*` 且（`closePosition=true` **或** `reduceOnly=true`），则视为外部接管。<br>
+  - 说明：部分客户端下的条件单在 ccxt 的 openOrders 里可能不完整/缺字段（例如 `origQty=0` 的 closePosition 单），因此 raw openOrders 是可靠兜底。<br>
+
+**释放策略（避免多外部单并存时误释放）**：<br>
+- WS 收到某一张外部 stop/tp 的终态（CANCELED/FILLED/EXPIRED/REJECTED）**不直接释放**外部接管，而是触发一次 REST verify；只有 verify 确认“同侧外部 stop/tp 已不存在”才释放并恢复自维护。<br>
 
 字段说明：
 
@@ -453,11 +457,6 @@ tiers:
 - **说明**: 外部接管锁存的最长持续时间（秒）<br>
 - **行为**: 超时后会触发一次 REST 校验兜底（并可能释放接管）
 
-###### skip_log_throttle_s
-- **类型**: `int`
-- **默认值**: `2`
-- **说明**: 外部接管期间 `skip_external_stop*` 日志节流间隔（秒），`0` 表示不节流
-
 **示例配置**:
 ```yaml
 risk:
@@ -468,7 +467,6 @@ risk:
       enabled: true
       rest_verify_interval_s: 30
       max_hold_s: 300
-      skip_log_throttle_s: 2
 ```
 
 ---
