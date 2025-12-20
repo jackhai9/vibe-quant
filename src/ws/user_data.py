@@ -467,6 +467,31 @@ class UserDataWSClient:
                     f"type={order_type} ps={order_data.get('ps')} cp={close_position} R={reduce_only} "
                     f"X={order_data.get('X')} x={order_data.get('x')}"
                 )
+                detail_keys = (
+                    "s",
+                    "i",
+                    "c",
+                    "S",
+                    "ps",
+                    "o",
+                    "ot",
+                    "f",
+                    "wt",
+                    "cp",
+                    "R",
+                    "X",
+                    "x",
+                    "sp",
+                    "p",
+                    "q",
+                    "ap",
+                    "z",
+                    "l",
+                    "L",
+                    "rp",
+                )
+                detail = {k: order_data.get(k) for k in detail_keys if k in order_data}
+                get_logger().info(f"[WS_RAW_DETAIL] ORDER_TRADE_UPDATE symbol={symbol} o={detail}")
 
             return OrderUpdate(
                 symbol=symbol,
@@ -523,10 +548,16 @@ class UserDataWSClient:
 
             timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
 
-            if close_position is True:
+            order_type_upper = order_type.upper() if isinstance(order_type, str) else ""
+            if close_position is True or reduce_only is True or order_type_upper in ("STOP", "TAKE_PROFIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"):
                 get_logger().info(
                     f"[WS_RAW] ALGO_UPDATE symbol={symbol} aid={algo_id} caid={client_algo_id} "
-                    f"type={order_type} ps={ps_str} cp={close_position} X={status}"
+                    f"type={order_type} ps={ps_str} cp={close_position} R={reduce_only} X={status}"
+                )
+                detail_keys = ("s", "aid", "caid", "o", "S", "ps", "cp", "R", "X", "T", "E")
+                detail = {k: order_data.get(k) for k in detail_keys if k in order_data}
+                get_logger().info(
+                    f"[WS_RAW_DETAIL] ALGO_UPDATE symbol={symbol} o={detail} keys={sorted(list(order_data.keys()))}"
                 )
 
             return AlgoOrderUpdate(

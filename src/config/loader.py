@@ -194,6 +194,9 @@ class ConfigLoader:
             s_et, "rest_verify_interval_s", g_et.rest_verify_interval_s
         )
         protective_stop_external_takeover_max_hold_s = _get_override(s_et, "max_hold_s", g_et.max_hold_s)
+        protective_stop_external_takeover_skip_log_throttle_s = _get_override(
+            s_et, "skip_log_throttle_s", g_et.skip_log_throttle_s
+        )
 
         return MergedSymbolConfig(
             symbol=symbol,
@@ -230,6 +233,7 @@ class ConfigLoader:
             protective_stop_external_takeover_enabled=protective_stop_external_takeover_enabled,
             protective_stop_external_takeover_rest_verify_interval_s=protective_stop_external_takeover_rest_verify_interval_s,
             protective_stop_external_takeover_max_hold_s=protective_stop_external_takeover_max_hold_s,
+            protective_stop_external_takeover_skip_log_throttle_s=protective_stop_external_takeover_skip_log_throttle_s,
             # 限速
             max_orders_per_sec=g_rate.max_orders_per_sec,
             max_cancels_per_sec=g_rate.max_cancels_per_sec,

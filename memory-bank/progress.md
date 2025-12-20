@@ -955,6 +955,32 @@ pytest: 26 passed
 
 ---
 
+## 附加改进：保护止损外部接管（reduceOnly stop/tp）与排障日志增强
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-20<br>
+**提交**：`decc653`<br>
+**产出**：`src/main.py`、`src/risk/protective_stop.py`、`src/ws/user_data.py`、`src/models.py`、`src/config/models.py`、`src/config/loader.py`
+
+### 目标
+- 将“外部接管”判定扩展为：**只要是 reduceOnly 的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=True`）。<br>
+- 在调试阶段增强 WS 原始消息可观测性：打印关键字段（`cp/R/sp/wt/f/ps` 等），用于确认不同客户端（mac/ios）下单形态。<br>
+- 降低外部接管期间的日志刷屏：对重复的 `skip_external_stop*` 做节流。<br>
+
+### 关键改动
+- 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=True`（同时保留 `closePosition=True` 兜底）。<br>
+- 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存，直到终态事件或 REST 保险丝确认外部已消失才释放。<br>
+- 日志增强：新增 `[WS_RAW_DETAIL] ORDER_TRADE_UPDATE` / `[WS_RAW_DETAIL] ALGO_UPDATE` 打印关键字段与 keys 列表。<br>
+- 日志节流：新增 `global.risk.protective_stop.external_takeover.skip_log_throttle_s`（默认 2s）。<br>
+
+### 测试结果
+```
+pyright: 0 errors
+pytest: 全量通过
+```
+
+---
+
 ## 小额实盘验证
 
 > 根据 design-document 第 13 节和 mvp-scope 验收标准

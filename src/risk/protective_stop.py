@@ -59,6 +59,34 @@ class ProtectiveStopManager:
         self._startup_existing_logged: set[tuple[str, PositionSide]] = set()
         self._startup_existing_external_logged: set[tuple[str, PositionSide]] = set()
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
+        self._skip_external_log_state: Dict[tuple[str, PositionSide], tuple[int, Optional[str], str]] = {}
+
+    def _should_log_skip_external(
+        self,
+        *,
+        symbol: str,
+        side: PositionSide,
+        reason: str,
+        external_order_id: Optional[str],
+        throttle_ms: int,
+        now_ms: int,
+    ) -> bool:
+        if throttle_ms <= 0:
+            return True
+        key = (symbol, side)
+        prev = self._skip_external_log_state.get(key)
+        if prev is None:
+            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
+            return True
+        prev_ms, prev_oid, prev_reason = prev
+        # 外部单切换/原因切换：立刻打印
+        if prev_oid != external_order_id or prev_reason != reason:
+            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
+            return True
+        if now_ms - prev_ms >= throttle_ms:
+            self._skip_external_log_state[key] = (now_ms, external_order_id, reason)
+            return True
+        return False
 
     def _get_lock(self, symbol: str) -> asyncio.Lock:
         lock = self._locks.get(symbol)
@@ -316,6 +344,7 @@ class ProtectiveStopManager:
         enabled: bool,
         dist_to_liq: Decimal,
         external_stop_latch_by_side: Optional[Dict[PositionSide, bool]] = None,
+        skip_external_log_throttle_s: float = 2.0,
         sync_reason: Optional[str] = None,
     ) -> Dict[PositionSide, bool]:
         """同步某个 symbol 的保护止损（会访问交易所 openOrders 和 openAlgoOrders）。"""
@@ -473,6 +502,7 @@ class ProtectiveStopManager:
                     has_external_stop=external_stops_by_side.get(side, False),
                     external_stop_sample=external_stop_sample_by_side.get(side),
                     has_external_stop_latch=bool(external_latch_by_side.get(side, False)),
+                    skip_external_log_throttle_ms=max(0, int(skip_external_log_throttle_s * 1000)),
                 )
             return external_stops_by_side
 
@@ -489,6 +519,7 @@ class ProtectiveStopManager:
         has_external_stop: bool = False,
         external_stop_sample: Optional[Dict[str, Any]] = None,
         has_external_stop_latch: bool = False,
+        skip_external_log_throttle_ms: int = 0,
     ) -> None:
         desired_cid = self.build_client_order_id(symbol, side)
 
@@ -558,39 +589,65 @@ class ProtectiveStopManager:
                         log_error(f"保护止损撤单失败: {e}", symbol=symbol, order_id=order_id)
                         return
             self._states.pop((symbol, side), None)
-            log_event(
-                "protective_stop",
-                event_cn="保护止损",
+            now_ms = int(time.time() * 1000)
+            if self._should_log_skip_external(
                 symbol=symbol,
-                side=side.value,
+                side=side,
                 reason="skip_external_stop",
                 external_order_id=external_order_id,
-                external_client_order_id=external_client_order_id,
-                external_order_type=external_order_type,
-                external_stop_price=str(external_stop_price) if external_stop_price is not None else None,
-            )
+                throttle_ms=skip_external_log_throttle_ms,
+                now_ms=now_ms,
+            ):
+                log_event(
+                    "protective_stop",
+                    event_cn="保护止损",
+                    symbol=symbol,
+                    side=side.value,
+                    reason="skip_external_stop",
+                    external_order_id=external_order_id,
+                    external_client_order_id=external_client_order_id,
+                    external_order_type=external_order_type,
+                    external_stop_price=str(external_stop_price) if external_stop_price is not None else None,
+                )
             return
 
         # 外部接管锁存：WS 已见外部 stop/tp（cp=True 或 reduceOnly=True）
         # 锁存期间避免对保护止损做“撤旧建新”，减少外部端刚创建但 REST 尚未可见时的竞态与重复单
         if has_external_stop_latch:
+            now_ms = int(time.time() * 1000)
             if keep_order is None:
-                log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
+                if self._should_log_skip_external(
                     symbol=symbol,
-                    side=side.value,
+                    side=side,
                     reason="skip_external_stop_latch",
-                )
+                    external_order_id=None,
+                    throttle_ms=skip_external_log_throttle_ms,
+                    now_ms=now_ms,
+                ):
+                    log_event(
+                        "protective_stop",
+                        event_cn="保护止损",
+                        symbol=symbol,
+                        side=side.value,
+                        reason="skip_external_stop_latch",
+                    )
             else:
-                log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
+                if self._should_log_skip_external(
                     symbol=symbol,
-                    side=side.value,
+                    side=side,
                     reason="skip_external_stop_latch_keep",
-                    order_id=self._extract_order_id(keep_order),
-                )
+                    external_order_id=self._extract_order_id(keep_order),
+                    throttle_ms=skip_external_log_throttle_ms,
+                    now_ms=now_ms,
+                ):
+                    log_event(
+                        "protective_stop",
+                        event_cn="保护止损",
+                        symbol=symbol,
+                        side=side.value,
+                        reason="skip_external_stop_latch_keep",
+                        order_id=self._extract_order_id(keep_order),
+                    )
             return
 
         liquidation_price = position.liquidation_price

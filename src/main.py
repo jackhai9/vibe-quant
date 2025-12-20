@@ -335,6 +335,7 @@ class Application:
                 enabled=cfg.protective_stop_enabled,
                 dist_to_liq=cfg.protective_stop_dist_to_liq,
                 external_stop_latch_by_side=external_latch,
+                skip_external_log_throttle_s=float(cfg.protective_stop_external_takeover_skip_log_throttle_s),
                 sync_reason=reason,
             )
             enabled, verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)

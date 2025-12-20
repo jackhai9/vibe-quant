@@ -83,6 +83,7 @@ class ProtectiveStopConfig(BaseModel):
         enabled: bool = Field(default=True, description="是否启用外部止损接管锁存")
         rest_verify_interval_s: int = Field(default=30, ge=1, description="锁存期间的 REST 校验间隔(s)")
         max_hold_s: int = Field(default=300, ge=1, description="锁存最长持续时间(s)，超时后触发 REST 校验兜底")
+        skip_log_throttle_s: int = Field(default=2, ge=0, description="skip_external_stop 日志节流(s)，0 表示不节流")
 
     external_takeover: ExternalTakeoverConfig = Field(default_factory=ExternalTakeoverConfig)
 
@@ -196,6 +197,7 @@ class SymbolProtectiveStopConfig(BaseModel):
         enabled: Optional[bool] = None
         rest_verify_interval_s: Optional[int] = Field(default=None, ge=1)
         max_hold_s: Optional[int] = Field(default=None, ge=1)
+        skip_log_throttle_s: Optional[int] = Field(default=None, ge=0)
 
     external_takeover: Optional[SymbolExternalTakeoverConfig] = None
 
@@ -289,6 +291,7 @@ class MergedSymbolConfig(BaseModel):
     protective_stop_external_takeover_enabled: bool
     protective_stop_external_takeover_rest_verify_interval_s: int
     protective_stop_external_takeover_max_hold_s: int
+    protective_stop_external_takeover_skip_log_throttle_s: int
 
     # 限速
     max_orders_per_sec: int
