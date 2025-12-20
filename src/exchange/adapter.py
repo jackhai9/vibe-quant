@@ -553,6 +553,34 @@ class ExchangeAdapter:
         # 转换为 dict 列表
         return [cast(Dict[str, Any], order) for order in orders]
 
+    async def fetch_open_orders_raw(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        获取当前挂单（raw 交易所接口）。
+
+        目的：启动阶段用于排障/兜底。某些 closePosition 的 STOP/TP（例如 origQty=0）可能在 ccxt 解析后丢失，
+        此处直接调用 Binance `GET /fapi/v1/openOrders` 返回原始结构。
+        """
+        self._ensure_initialized()
+
+        params: Dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = symbol.replace("/", "").replace(":USDT", "")
+
+        try:
+            resp = await self.exchange.fapiPrivateGetOpenOrders(params)
+        except Exception as e:
+            logger = get_logger()
+            logger.warning(f"获取 raw openOrders 失败: {e}, symbol={symbol}")
+            return []
+
+        if isinstance(resp, list):
+            return [cast(Dict[str, Any], x) for x in resp if isinstance(x, dict)]
+        if isinstance(resp, dict):
+            data = resp.get("data") or resp.get("orders") or []
+            if isinstance(data, list):
+                return [cast(Dict[str, Any], x) for x in data if isinstance(x, dict)]
+        return []
+
     async def fetch_open_algo_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         获取当前 algo 挂单（条件订单：STOP_MARKET, TAKE_PROFIT_MARKET 等）

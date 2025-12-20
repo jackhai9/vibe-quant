@@ -155,12 +155,12 @@ class ProtectiveStopManager:
 
     def _extract_order_id(self, order: Dict[str, Any]) -> Optional[str]:
         """提取订单 ID（支持 algo order 的 algoId 和普通订单的 id）"""
-        oid = order.get("algoId") or order.get("id")
+        oid = order.get("algoId") or order.get("orderId") or order.get("id")
         if oid:
             return str(oid)
         info = order.get("info")
         if isinstance(info, dict):
-            oid = info.get("algoId") or info.get("id")
+            oid = info.get("algoId") or info.get("orderId") or info.get("id")
             if oid:
                 return str(oid)
         return None
@@ -226,6 +226,39 @@ class ProtectiveStopManager:
         if order_type is None:
             return None
         return order_type.strip().upper()
+
+    def _summarize_order_brief(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        raw_info = order.get("info")
+        info: Dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
+        cp = self._coerce_bool(order.get("closePosition"))
+        if cp is None:
+            cp = self._coerce_bool(info.get("closePosition"))
+        ro = self._coerce_bool(order.get("reduceOnly"))
+        if ro is None:
+            ro = self._coerce_bool(info.get("reduceOnly"))
+        stop_price = self._extract_stop_price(order)
+
+        wt = order.get("workingType")
+        if not isinstance(wt, str):
+            wt = info.get("workingType")
+
+        tif = order.get("timeInForce")
+        if not isinstance(tif, str):
+            tif = info.get("timeInForce")
+
+        ps_obj = self._extract_position_side(order)
+        return {
+            "source": order.get("_vq_source"),
+            "order_id": self._extract_order_id(order),
+            "client_id": self._extract_client_order_id(order),
+            "type": self._extract_order_type(order),
+            "ps": (ps_obj.value if ps_obj else None),
+            "cp": cp,
+            "reduceOnly": ro,
+            "workingType": wt,
+            "timeInForce": tif,
+            "stop_price": str(stop_price) if stop_price is not None else None,
+        }
 
     @staticmethod
     def _coerce_bool(value: Any) -> Optional[bool]:
@@ -353,8 +386,27 @@ class ProtectiveStopManager:
                 # 查询普通挂单和 algo 挂单（条件订单在 2025-12-09 后迁移到 Algo Service）
                 open_orders = await self._exchange.fetch_open_orders(symbol)
                 algo_orders = await self._exchange.fetch_open_algo_orders(symbol)
-                # 合并所有订单
-                all_orders = list(open_orders) + list(algo_orders)
+                # 启动时兜底：ccxt 可能漏掉 closePosition 的 STOP/TP（例如 origQty=0），用 raw 接口补一次
+                raw_open_orders: list[Dict[str, Any]] = []
+                use_raw_open = sync_reason == "startup" or (
+                    isinstance(sync_reason, str) and sync_reason.startswith("external_takeover")
+                )
+                if use_raw_open and hasattr(self._exchange, "fetch_open_orders_raw"):
+                    try:
+                        raw_open_orders = await getattr(self._exchange, "fetch_open_orders_raw")(symbol)  # type: ignore[misc]
+                    except Exception as e:
+                        log_error(f"启动外部止损扫描失败（raw openOrders）: {e}", symbol=symbol)
+                # 合并所有订单，并标记来源（用于启动排障）
+                all_orders: list[Dict[str, Any]] = []
+                for o in list(open_orders):
+                    if isinstance(o, dict):
+                        all_orders.append({**o, "_vq_source": "open"})
+                for o in list(raw_open_orders):
+                    if isinstance(o, dict):
+                        all_orders.append({**o, "_vq_source": "raw_open"})
+                for o in list(algo_orders):
+                    if isinstance(o, dict):
+                        all_orders.append({**o, "_vq_source": "algo"})
             except Exception as e:
                 log_error(f"保护止损同步失败（获取挂单）: {e}", symbol=symbol)
                 return {PositionSide.LONG: False, PositionSide.SHORT: False}
@@ -476,19 +528,37 @@ class ProtectiveStopManager:
                     key = (symbol, side)
                     if key in self._startup_existing_external_logged:
                         continue
-                    if not external_stops_by_side.get(side, False):
+                    # 启动排障：无论是否存在外部单，都输出一次外部 stop/tp 摘要（有仓位时）
+                    pos = positions.get(side)
+                    has_pos = pos is not None and abs(pos.position_amt) > Decimal("0")
+                    if not has_pos:
                         continue
+                    externals = external_stop_orders_by_side.get(side) or []
                     sample = external_stop_sample_by_side.get(side)
                     self._startup_existing_external_logged.add(key)
+                    brief = [self._summarize_order_brief(o) for o in externals[:5]]
                     log_event(
                         "protective_stop",
                         event_cn="保护止损",
                         symbol=symbol,
                         side=side.value,
-                        reason="startup_existing_external_stop",
+                        reason="startup_external_stop_snapshot",
+                        count=len(externals),
+                        sample=brief,
                         order_id=self._extract_order_id(sample) if sample else None,
                         client_order_id=self._extract_client_order_id(sample) if sample else None,
                     )
+                    if externals:
+                        log_event(
+                            "protective_stop",
+                            event_cn="保护止损",
+                            symbol=symbol,
+                            side=side.value,
+                            reason="startup_existing_external_stop",
+                            count=len(externals),
+                            order_id=self._extract_order_id(sample) if sample else None,
+                            client_order_id=self._extract_client_order_id(sample) if sample else None,
+                        )
 
             for side in (PositionSide.LONG, PositionSide.SHORT):
                 await self._sync_side(
