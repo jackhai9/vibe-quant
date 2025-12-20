@@ -360,6 +360,30 @@ roi = unrealized_pnl / initial_margin
 
 三级风控体系：预警 → 强制平仓 → 保护性止损。
 
+#### levels
+风控等级映射（可扩展）。<br>
+用于日志展示 `risk_level`，避免在代码里写死 1/2/3，后续要新增第 4 等级或“在 2 和 3 之间插入新等级”时，只需要改配置，不需要改代码。<br>
+
+- **类型**: `Dict[str, int]`
+- **默认值**（内置）:
+  - `liq_distance_breach: 1`
+  - `panic_close: 2`
+  - `protective_stop: 3`
+- **说明**:
+  - key 为风险阶段/类型（`risk_stage`），value 为等级数字（`risk_level`）。<br>
+  - 当前日志里会在以下事件附带 `risk_stage`/`risk_level`：
+    - `[RISK_TRIGGER]`（风险预警 / 强制平仓）
+    - `[PROTECTIVE_STOP]`（保护性止损相关事件）
+
+**示例配置**:
+```yaml
+risk:
+  levels:
+    liq_distance_breach: 1
+    panic_close: 2
+    protective_stop: 3
+```
+
 #### liq_distance_threshold
 - **类型**: `decimal`
 - **默认值**: `0.015` (1.5%)
@@ -460,6 +484,10 @@ tiers:
 **示例配置**:
 ```yaml
 risk:
+  levels:
+    liq_distance_breach: 1
+    panic_close: 2
+    protective_stop: 3
   protective_stop:
     enabled: true
     dist_to_liq: 0.01
@@ -543,6 +571,11 @@ symbols:
     roi:
       tiers: [...]
     risk:
+      # 可选：覆盖等级映射（只影响日志展示）
+      # levels:
+      #   liq_distance_breach: 1
+      #   panic_close: 2
+      #   protective_stop: 3
       liq_distance_threshold: 0.02
       panic_close:
         enabled: true
@@ -665,4 +698,4 @@ global:
 
 ---
 
-*最后更新: 2025-12-19*
+*最后更新: 2025-12-20*
