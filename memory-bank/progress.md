@@ -959,7 +959,7 @@ pytest: 26 passed
 
 **状态**：✅ 已完成<br>
 **日期**：2025-12-20<br>
-**提交**：`decc653`<br>
+**提交**：`2cb22cf`<br>
 **产出**：`src/main.py`、`src/risk/protective_stop.py`、`src/ws/user_data.py`、`src/models.py`、`src/config/models.py`、`src/config/loader.py`
 
 ### 目标
