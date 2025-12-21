@@ -48,6 +48,15 @@
 - `src/exchange/adapter.py`：新增 `fetch_leverage_map`（调用 `/fapi/v2/positionRisk`）
 - `tests/test_ws_user_data.py`：新增 `ACCOUNT_CONFIG_UPDATE` 解析与回调测试
 
+## Bug 修复：外部接管 release 后保护止损 resync
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-21<br>
+**动机**：外部止损单被用户撤销后，WS 终态事件触发 REST verify，但 release 成功后未立即触发保护止损同步，导致保护止损需等到下一次 sync 周期才会恢复（实测最长 52 秒空档）。<br>
+**产出**：
+- `src/main.py`：`_external_takeover_release()` 返回 `bool` 表示是否实际释放；`_sync_protective_stop()` 在 release 成功后设置 `needs_resync=True` 并立即递归调用 resync
+- `src/risk/protective_stop.py`：新增 `is_own_algo_order()` 双重归属检查（clientAlgoId 前缀 OR algoId 匹配）
+
 ### 可选后续工作
 
 | 优先级 | 内容 | 来源 |
