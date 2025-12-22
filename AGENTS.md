@@ -100,4 +100,5 @@ YAML-based with global defaults and per-symbol overrides. Key sections:
 - 个人项目：**No backward compatibility** - 可自由打破旧格式，重构时可移除 legacy 代码
 
 ## 3. Markdown 编写规范
-- **换行**：单个换行符不会渲染为换行。使用 `<br>` 标签换行（行尾两个空格容易被编辑器自动删除），Markdown 标准语法如 `- ` 开头则无需额外换行标签
+- **换行**：只有在同一段落内需要强制换行才用 `<br>`；列表项（- / 1.）本身就会换行，不应再加 `<br>`
+

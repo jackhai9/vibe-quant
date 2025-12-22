@@ -55,3 +55,5 @@
 
 - `sudo systemctl kill -s SIGKILL vibe-quant`
 - `sudo systemctl status vibe-quant` 应显示已自动拉起，并重新连接 WS（会触发一次重连后校准日志）
+
+*最后更新: 2025-12-22*

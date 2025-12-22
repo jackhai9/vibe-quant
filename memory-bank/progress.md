@@ -34,10 +34,10 @@
 - `tests/test_ws_user_data.py`：新增/更新解析测试覆盖 `cp/o/ALGO_UPDATE`
 <br>
 **补充改进（同批交付）**：<br>
-- 保护性止损只允许“收紧”（LONG stopPrice 只上调；SHORT stopPrice 只下调），避免仓位变安全时把止损越推越远，并减少频繁撤旧建新带来的空窗风险<br>
-- 保护性止损同步采用分级 debounce：`position_update` 1s；`startup/calibration` 0s；其余 0.2s（兼顾 REST 压力与关键场景恢复速度）<br>
-- 启动同步时若发现外部 stop/tp，打印 `order_id/client_id/stop_price/workingType`；同侧出现多张外部 stop/tp 时打印摘要告警（`external_stop_multiple`）<br>
-- 外部接管采用“锁存 + REST verify”：外部 stop/tp（`cp=True` 或 `reduceOnly=True`）一旦出现即锁存接管；WS 收到某一张终态不直接释放，需 REST verify 确认同侧外部单已清空才恢复自维护（REST 以 raw openOrders 为主；配置：`global.risk.protective_stop.external_takeover.*`）<br>
+- 保护性止损只允许“收紧”（LONG stopPrice 只上调；SHORT stopPrice 只下调），避免仓位变安全时把止损越推越远，并减少频繁撤旧建新带来的空窗风险
+- 保护性止损同步采用分级 debounce：`position_update` 1s；`startup/calibration` 0s；其余 0.2s（兼顾 REST 压力与关键场景恢复速度）
+- 启动同步时若发现外部 stop/tp，打印 `order_id/client_id/stop_price/workingType`；同侧出现多张外部 stop/tp 时打印摘要告警（`external_stop_multiple`）
+- 外部接管采用“锁存 + REST verify”：外部 stop/tp（`cp=True` 或 `reduceOnly=True`）一旦出现即锁存接管；WS 收到某一张终态不直接释放，需 REST verify 确认同侧外部单已清空才恢复自维护（REST 以 raw openOrders 为主；配置：`global.risk.protective_stop.external_takeover.*`）
 - 测试：补充 `tests/test_protective_stop.py`（只收紧语义/启动外部单日志等）与 `tests/test_main_shutdown.py`（debounce 分级逻辑）
 
 ## Milestone/附加改进：杠杆实时更新（WS）+ 启动时 REST 校准
@@ -988,14 +988,14 @@ pytest: 26 passed
 **产出**：`src/main.py`、`src/risk/protective_stop.py`、`src/ws/user_data.py`、`src/models.py`、`src/config/models.py`、`src/config/loader.py`
 
 ### 目标
-- 将“外部接管”判定扩展为：**只要是 reduceOnly 的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=True`）。<br>
-- 明确外部接管释放策略：多外部单并存时，WS 收到某一张终态不代表外部单消失，释放以 REST verify 为准。<br>
-- REST 校验以 raw openOrders 为主：避免 ccxt/openOrders 漏掉部分 closePosition 条件单。<br>
+- 将“外部接管”判定扩展为：**只要是 reduceOnly 的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=True`）。
+- 明确外部接管释放策略：多外部单并存时，WS 收到某一张终态不代表外部单消失，释放以 REST verify 为准。
+- REST 校验以 raw openOrders 为主：避免 ccxt/openOrders 漏掉部分 closePosition 条件单。
 
 ### 关键改动
-- 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=True`（同时保留 `closePosition=True` 兜底）。<br>
-- 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存；WS 终态先触发 verify，只有 REST verify 确认同侧外部 stop/tp 已消失才 release。<br>
-- 日志策略调整：外部接管只在状态变化时打点（set/release/verify）；启动时若存在外部 stop/tp 仅打印一条摘要（order_id/client_id/stop_price/workingType）。<br>
+- 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=True`（同时保留 `closePosition=True` 兜底）。
+- 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存；WS 终态先触发 verify，只有 REST verify 确认同侧外部 stop/tp 已消失才 release。
+- 日志策略调整：外部接管只在状态变化时打点（set/release/verify）；启动时若存在外部 stop/tp 仅打印一条摘要（order_id/client_id/stop_price/workingType）。
 
 ### 测试结果
 ```
@@ -1008,12 +1008,12 @@ pytest: 全量通过
 ## 附加改进：文档自描述与文件头规范补全
 
 ### 完成内容
-- 为 `src/*.py` 增加 Input/Output/Pos 文件头注释与自维护声明。<br>
-- 为 `tests/*.py`、`config/config.example.yaml`、`.env.example`、`requirements.txt`、systemd 配置文件补齐文件头注释。<br>
-- 为 `README.md` 与 memory-bank 其余文档补齐文件头注释。<br>
-- 补充文件头注释的例外清单（AGENTS/CLAUDE、本地配置、自动生成目录等）。<br>
-- 补齐目录级 `README.md`（含 docs/deploy/src/tests 等），形成目录级自描述。<br>
-- 同步更新部署/配置/故障排查文档中的日志命名与路径。<br>
+- 为 `src/*.py` 增加 Input/Output/Pos 文件头注释与自维护声明。
+- 为 `tests/*.py`、`config/config.example.yaml`、`.env.example`、`requirements.txt`、systemd 配置文件补齐文件头注释。
+- 为 `README.md` 与 memory-bank 其余文档补齐文件头注释。
+- 补充文件头注释的例外清单（AGENTS/CLAUDE、本地配置、自动生成目录等）。
+- 补齐目录级 `README.md`（含 docs/deploy/src/tests 等），形成目录级自描述。
+- 同步更新部署/配置/故障排查文档中的日志命名与路径。
 
 ### 测试结果
 ```

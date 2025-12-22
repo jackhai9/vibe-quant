@@ -12,3 +12,5 @@ YAML 配置示例与默认模板。<br>
 ## 文件清单
 
 - `config.example.yaml`：配置示例（global/symbol 覆盖）
+
+*最后更新: 2025-12-22*
