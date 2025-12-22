@@ -134,6 +134,7 @@ class Application:
         self._position_update_events: dict[tuple[str, PositionSide], asyncio.Event] = {}
         self._position_revision: dict[tuple[str, PositionSide], int] = {}
         self._position_last_change: dict[tuple[str, PositionSide], tuple[Decimal, Decimal]] = {}
+        self._no_position_logged: set[tuple[str, PositionSide]] = set()
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
         self._external_takeover: dict[tuple[str, PositionSide], ExternalTakeoverState] = {}
 
@@ -1056,6 +1057,26 @@ class Application:
                 reason=f"external_algo:{update.status}:{update.order_type}:{update.close_position}:{update.reduce_only}",
             )
 
+    def _log_no_position(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        cleared: bool = True,
+    ) -> None:
+        key = (symbol, position_side)
+        if key in self._no_position_logged:
+            return
+        self._no_position_logged.add(key)
+        side = position_side.value
+        logger = get_logger()
+        if cleared:
+            logger.info(f"{symbol} {side} ✅ 仓位已全部平掉")
+        logger.info(f"{symbol} {side} ⏳ 当前无持仓，等待开仓...")
+
+    def _clear_no_position_log(self, symbol: str, position_side: PositionSide) -> None:
+        self._no_position_logged.discard((symbol, position_side))
+
     def _on_position_update(self, update: PositionUpdate) -> None:
         """处理仓位更新回调（ACCOUNT_UPDATE）。"""
         if not self._running:
@@ -1084,6 +1105,7 @@ class Application:
                     side=update.position_side.value,
                     position_amt=Decimal("0"),
                 )
+                self._log_no_position(update.symbol, update.position_side, cleared=True)
                 # 仓位归零：尽快撤销该侧遗留挂单，避免后续触发导致反向开仓
                 asyncio.create_task(
                     self._cancel_run_prefix_orders_for_side(
@@ -1094,6 +1116,8 @@ class Application:
                 )
             self._schedule_protective_stop_sync(update.symbol, reason=f"position_update:{update.position_side.value}")
             return
+
+        self._clear_no_position_log(update.symbol, update.position_side)
 
         # 开仓/加仓告警（本程序主目标是 reduce-only 平仓，任何加仓都值得提示）
         if (
@@ -1260,11 +1284,23 @@ class Application:
                 if pos.leverage > 0:
                     self._symbol_leverage[symbol] = pos.leverage
                 if abs(pos.position_amt) > Decimal("0"):
+                    self._clear_no_position_log(symbol, pos.position_side)
                     log_position_update(
                         symbol=symbol,
                         side=pos.position_side.value,
                         position_amt=pos.position_amt,
                     )
+
+    def _log_startup_no_positions(self) -> None:
+        if not self.config_loader:
+            return
+
+        for symbol in self.config_loader.get_symbols():
+            for position_side in (PositionSide.LONG, PositionSide.SHORT):
+                position = self._positions.get(symbol, {}).get(position_side)
+                if position and abs(position.position_amt) > Decimal("0"):
+                    continue
+                self._log_no_position(symbol, position_side, cleared=False)
 
     async def run(self) -> None:
         """运行应用"""
@@ -1275,6 +1311,7 @@ class Application:
             # 获取初始仓位
             logger.info("获取初始仓位...")
             await self._fetch_positions()
+            self._log_startup_no_positions()
             self._positions_ready = True
             await self._sync_protective_stops_all(reason="startup")
 
@@ -1610,6 +1647,8 @@ class Application:
             self._positions[symbol][pos.position_side] = pos
             if pos.leverage > 0:
                 self._symbol_leverage[symbol] = pos.leverage
+            if abs(pos.position_amt) > Decimal("0"):
+                self._clear_no_position_log(symbol, pos.position_side)
 
     async def _timeout_check_loop(self) -> None:
         """超时检查循环"""
