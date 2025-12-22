@@ -102,3 +102,6 @@ YAML-based with global defaults and per-symbol overrides. Key sections:
 ## 3. Markdown 编写规范
 - **换行**：只有在同一段落内需要强制换行才用 `<br>`；列表项（- / 1.）本身就会换行，不应再加 `<br>`
 - **最后更新**：仅 `README.md` 与 `docs/` 下文档末尾保留 `*最后更新: YYYY-MM-DD*`（`memory-bank/` 不要求）
+
+## 4. 安全审计
+- ultrathink：完整研究这个项目，重点看其是否有安全问题，是否有密钥泄漏。列出其对外交互的所有ur和接口。
