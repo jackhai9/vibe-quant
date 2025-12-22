@@ -101,4 +101,4 @@ YAML-based with global defaults and per-symbol overrides. Key sections:
 
 ## 3. Markdown 编写规范
 - **换行**：只有在同一段落内需要强制换行才用 `<br>`；列表项（- / 1.）本身就会换行，不应再加 `<br>`
-
+- **最后更新**：`README.md` 与 `docs/` 下文档末尾保留 `*最后更新: YYYY-MM-DD*`

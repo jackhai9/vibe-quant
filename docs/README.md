@@ -15,4 +15,4 @@
 - `configuration.md`：配置参数手册（global/symbol 覆盖）
 - `troubleshooting.md`：故障排查指南
 
-*最后更新: 2025-12-22（日志命名与文档对齐）*
+*最后更新: 2025-12-22*
