@@ -1031,21 +1031,17 @@ n/a (docs only)
 
 | 验证项 | 验证方法 | 状态 |
 |--------|----------|------|
-| reduceOnly/positionSide | 下单后检查订单参数、不会反向开仓 | ⏳ |
-| post-only (GTX) | maker 订单被交易所接受、不会立即成交 | ⏳ |
-| 断线重连 | 手动断网/杀进程后自动恢复 | ⏳ |
-| 模式轮转 | maker 连续超时后切到 AGGRESSIVE_LIMIT | ⏳ |
-| 仓位收敛 | 运行至仓位归零或 < minQty | ⏳ |
-| 优雅退出 | Ctrl+C 后挂单被撤销 | ⏳ |
-| 保护性止损 | 交易所界面能看到 STOP_MARKET 条件单 | ⏳ |
-
-### 环境准备
-
-- [ ] `config/config.yaml` 配置文件
-- [ ] 环境变量：`BINANCE_API_KEY`、`BINANCE_API_SECRET`
-- [ ] （可选）Telegram：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`
-- [ ] 测试网 or 主网小额仓位
+| reduceOnly/positionSide | 下单后检查订单参数、不会反向开仓 | ✅ |
+| post-only (GTX) | maker 订单被交易所接受、不会立即成交 | ✅ |
+| 断线重连 | 手动断网/杀进程后自动恢复 | ✅ |
+| 模式轮转 | maker 连续超时后切到 AGGRESSIVE_LIMIT | ✅ |
+| 仓位收敛 | 运行至仓位归零或 < minQty | ✅ |
+| 优雅退出 | Ctrl+C 后挂单被撤销 | ✅ |
+| 保护性止损 | 交易所界面能看到 STOP_MARKET 条件单 | ✅ |
 
 ### 验证记录
 
-（验证过程中填写）
+- **日期**：2025-12-22
+- **环境**：主网
+- **交易对**：BTC、ZEN
+- **备注**：无
