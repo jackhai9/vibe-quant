@@ -1011,6 +1011,7 @@ pytest: 全量通过
 - 为 `src/*.py` 增加 Input/Output/Pos 文件头注释与自维护声明。<br>
 - 为 `tests/*.py`、`config/config.example.yaml`、`.env.example`、`requirements.txt`、systemd 配置文件补齐文件头注释。<br>
 - 为 `README.md` 与 memory-bank 其余文档补齐文件头注释。<br>
+- 补充文件头注释的例外清单（AGENTS/CLAUDE、本地配置、自动生成目录等）。<br>
 - 补齐目录级 `README.md`（含 docs/deploy/src/tests 等），形成目录级自描述。<br>
 - 同步更新部署/配置/故障排查文档中的日志命名与路径。<br>
 

@@ -1,8 +1,3 @@
-# Input: global 与 symbols 配置值
-# Output: 示例配置模板
-# Pos: 配置示例文件
-# 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
-
 # vibe-quant 配置文件示例
 # 复制此文件为 config.yaml 并根据需要修改
 

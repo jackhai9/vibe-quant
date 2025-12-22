@@ -87,6 +87,12 @@ YAML-based with global defaults and per-symbol overrides. Key sections:
 - `Pos`: 在系统中的地位是什么
 - **自维护声明**：注释后必须声明："一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。"
 
+**例外（无需文件头注释）**：
+- 代理指引/协作约束文件：`AGENTS.md`、`CLAUDE.md`
+- 运行时本地配置：`config/*.yaml`、`.env`（含 `.env.*`）
+- 自动生成目录/文件：`.pytest_cache/`、`logs/`、`__pycache__/`、`*.log`、`*.log.gz`
+- 其他明确标注“不要改动/自动生成”的文件
+
 ## 2. 开发规范
 - 强调模块化（多文件），避免单体巨型文件
 - 编码前必须阅读 memory-bank/architecture.md 和 memory-bank/design-document.md
