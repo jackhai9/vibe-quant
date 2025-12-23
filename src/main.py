@@ -1062,8 +1062,14 @@ class Application:
         symbol: str,
         position_side: PositionSide,
         *,
-        cleared: bool = True,
+        cleared: bool = False,
     ) -> None:
+        """
+        打印无持仓提示日志（去重）。
+
+        Args:
+            cleared: True 表示仓位刚归零，False 表示启动时无仓位
+        """
         key = (symbol, position_side)
         if key in self._no_position_logged:
             return
@@ -1071,8 +1077,15 @@ class Application:
         side = position_side.value
         logger = get_logger()
         if cleared:
-            logger.info(f"{symbol} {side} ✅ 仓位已全部平掉")
-        logger.info(f"{symbol} {side} ⏳ 当前无持仓，等待开仓...")
+            # 仓位归零：延迟打印，让 ORDER_FILL 日志先显示（因果顺序更直观）
+            async def _delayed_log() -> None:
+                await asyncio.sleep(0.1)  # 100ms 延迟
+                logger.info(f"{symbol} {side} ✅ 仓位已全部平掉")
+                logger.info(f"{symbol} {side} ⏳ 当前无持仓，等待开仓...")
+            asyncio.create_task(_delayed_log())
+        else:
+            # 启动时无仓位：立即打印
+            logger.info(f"{symbol} {side} ⏳ 当前无持仓，等待开仓...")
 
     def _clear_no_position_log(self, symbol: str, position_side: PositionSide) -> None:
         self._no_position_logged.discard((symbol, position_side))
