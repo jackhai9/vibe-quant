@@ -1,5 +1,5 @@
-<!-- Input: 系统模块与运行方式 -->
-<!-- Output: 架构与文件结构说明 -->
+<!-- Input: 系统模块、运行方式与关键约束 -->
+<!-- Output: 架构与文件结构说明（含关键行为） -->
 <!-- Pos: memory-bank/architecture -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -155,6 +155,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 ### 挂单清理（已实现）
 
 - 下单时设置 `newClientOrderId`（前缀 `<client_order_prefix>-{run_id}-`，其中 `client_order_prefix` 为固定前缀，`run_id` 每次启动自动生成）。退出时只撤销本次运行前缀挂单（优先按 symbol 拉取 openOrders，降低交易所权重），避免误撤手动订单；注意：若进程崩溃/强杀，遗留挂单不会自动清理。
+- 订单 TTL 超时后进入 `COOLDOWN` 但保留订单上下文，允许迟到的 WS 回执继续更新状态，避免因 WS 丢包导致状态机卡死。
 
 ### 倍数系统（已实现）
 
@@ -327,6 +328,7 @@ vibe-quant/
 | 2025-12-20 | 增强用户数据 WS：解析 ALGO_UPDATE 与 ORDER_TRADE_UPDATE 的 closePosition(cp) 字段，并在外部条件单状态变化时触发保护止损同步（外部接管/自动恢复） |
 | 2025-12-20 | 保护性止损策略增强：只允许"收紧"止损（不放松），同步调度采用分级 debounce（position_update 1s，startup/calibration 0s，其余 0.2s）；外部接管采用锁存 + REST 保险丝（可配），并在启动/接管时打印外部单摘要与外部多单告警 |
 | 2025-12-21 | Bug 修复：外部接管 release 后立即触发 resync（避免保护止损 52s 空档）；新增杠杆同步功能（LeverageUpdate + ACCOUNT_CONFIG_UPDATE 解析 + REST positionRisk 启动校准） |
+| 2025-12-23 | Bug 修复：WS 重连 guard 与撤单超时后的状态机恢复（COOLDOWN 保留订单上下文） |
 
 ---
 

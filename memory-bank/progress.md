@@ -1,4 +1,4 @@
-<!-- Input: 开发进度与里程碑记录 -->
+<!-- Input: 开发进度、里程碑与缺陷修复记录 -->
 <!-- Output: 可追溯的变更与状态 -->
 <!-- Pos: memory-bank/progress -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
@@ -30,7 +30,21 @@
 **产出**：
 - `src/main.py`：新增无持仓提示日志，按 `symbol+side` 去重；启动仅输出等待提示，归零时先输出平掉再输出等待
 
-## Milestone/附加改进：保护性止损“外部接管”事件驱动恢复
+## Milestone/Bug 修复：WS 重连失败 + 执行状态机卡死
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-23<br>
+**动机**：实盘发现两个 bug 导致程序"只有信号无订单"并最终卡死：
+1. WS 重连 bug：`connect()` 检查 `if self._running: return`，而 `_reconnect()` 调用时 `_running=True`，导致重连直接返回、无实际重连
+2. CANCELING 状态卡死：撤单后状态设为 `CANCELING`，等待 WS `ORDER_TRADE_UPDATE` 确认才转 `COOLDOWN`；若 WS 断连/丢消息，状态永远卡在 `CANCELING`，新信号全部跳过
+
+**产出**：
+- `src/ws/user_data.py`：`connect()` guard 改为 `if self.is_connected: return`，只有已连接时才跳过
+- `src/ws/market.py`：同上
+- `src/execution/engine.py`：撤单超时进入 `COOLDOWN` 且保留订单上下文，允许迟到 WS 回执更新状态
+- `tests/test_execution.py`：补充撤单回执延迟仍可处理的用例，超时撤单后状态期望调整为 `COOLDOWN`
+
+## Milestone/附加改进：保护性止损"外部接管"事件驱动恢复
 
 **状态**：✅ 已完成<br>
 **日期**：2025-12-20<br>

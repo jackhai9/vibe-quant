@@ -1,6 +1,6 @@
-# Input: ExitSignal, config, rules
-# Output: OrderIntent and state transitions
-# Pos: execution state machine
+# Input: ExitSignal, OrderUpdate, OrderResult, config, rules
+# Output: OrderIntent and execution state transitions
+# Pos: execution state machine (per side)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -632,17 +632,19 @@ class ExecutionEngine:
         # 发起撤单请求
         if state.current_order_id:
             try:
-                await self.cancel_order(symbol, state.current_order_id)
+                result = await self.cancel_order(symbol, state.current_order_id)
+                if not result.success:
+                    get_logger().warning(
+                        f"撤单请求失败: {symbol} {state.current_order_id} - {result.error_message}"
+                    )
+                # 进入冷却期但保留订单上下文，确保后续 WS 回执仍可被处理
+                state.state = ExecutionState.COOLDOWN
+                state.current_order_placed_ms = current_ms
             except Exception as e:
                 get_logger().warning(f"撤单请求失败: {symbol} {state.current_order_id} - {e}")
                 # 即使撤单请求失败，也进入 COOLDOWN（等待下次重试）
                 state.state = ExecutionState.COOLDOWN
-                state.current_order_id = None
                 state.current_order_placed_ms = current_ms
-                state.current_order_mode = None
-                state.current_order_reason = None
-                state.current_order_is_risk = False
-                state.current_order_filled_qty = Decimal("0")
 
         return True
 

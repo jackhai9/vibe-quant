@@ -1,5 +1,5 @@
 # Input: 被测模块与 pytest 夹具
-# Output: pytest 断言结果
+# Output: pytest 断言结果与状态机行为验证
 # Pos: 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -860,9 +860,39 @@ class TestCheckTimeout:
         result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
 
         assert result is True
-        assert state.state == ExecutionState.CANCELING
+        # 修复后：撤单成功直接进入 COOLDOWN（不等 WS 回执）
+        assert state.state == ExecutionState.COOLDOWN
         assert state.maker_timeout_count == 1
         mock_cancel_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_timeout_allows_late_cancel_update(self, engine):
+        """测试撤单回执延迟仍可处理"""
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_placed_ms = 1000
+
+        await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
+
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id == "order_123"
+
+        update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="order_123",
+            client_order_id="client_123",
+            side=OrderSide.SELL,
+            position_side=PositionSide.LONG,
+            status=OrderStatus.CANCELED,
+            filled_qty=Decimal("0"),
+            avg_price=Decimal("0"),
+            timestamp_ms=2100,
+        )
+        await engine.on_order_update(update, current_ms=2100)
+
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id is None
 
     @pytest.mark.asyncio
     async def test_timeout_skip_non_waiting(self, engine):
@@ -1052,28 +1082,12 @@ class TestStateMachine:
 
         assert state.state == ExecutionState.WAITING
 
-        # 3. WAITING -> 超时 -> CANCELING
+        # 3. WAITING -> 超时 -> COOLDOWN（修复后：撤单成功直接进入 COOLDOWN）
         await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
-
-        assert state.state == ExecutionState.CANCELING
-
-        # 4. 收到 CANCELED 更新 -> COOLDOWN
-        update = OrderUpdate(
-            symbol="BTC/USDT:USDT",
-            order_id="order_123",
-            client_order_id="client_123",
-            side=OrderSide.SELL,
-            position_side=PositionSide.LONG,
-            status=OrderStatus.CANCELED,
-            filled_qty=Decimal("0"),
-            avg_price=Decimal("0"),
-            timestamp_ms=2100,
-        )
-        await engine.on_order_update(update, current_ms=2100)
 
         assert state.state == ExecutionState.COOLDOWN
 
-        # 5. COOLDOWN -> 冷却结束 -> IDLE
+        # 4. COOLDOWN -> 冷却结束 -> IDLE
         engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=2300)
 
         assert state.state == ExecutionState.IDLE
@@ -1239,8 +1253,8 @@ class TestPanicClose:
         result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=400)
 
         assert result is True
-        assert state.state == ExecutionState.CANCELING
-        assert state.ttl_ms_override == 400
+        # 修复后：撤单成功直接进入 COOLDOWN
+        assert state.state == ExecutionState.COOLDOWN
         mock_cancel_order.assert_called_once()
 
     @pytest.mark.asyncio

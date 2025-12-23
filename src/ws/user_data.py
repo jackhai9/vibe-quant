@@ -1,6 +1,6 @@
-# Input: API keys, listenKey, callbacks
-# Output: order and position updates
-# Pos: user data WS client
+# Input: API keys, listenKey, callbacks, reconnect state
+# Output: order/position/leverage updates
+# Pos: user data WS client (account stream)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -147,7 +147,9 @@ class UserDataWSClient:
         """
         获取 listenKey 并建立 WS 连接
         """
-        if self._running:
+        # 修复：只有已连接时才跳过，而非 _running=True 时跳过
+        # 否则 _reconnect() 调用 connect() 时会直接返回，导致重连失败
+        if self.is_connected:
             return
 
         self._running = True

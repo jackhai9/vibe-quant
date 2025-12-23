@@ -1,6 +1,6 @@
-# Input: WS URLs, symbols, callbacks
-# Output: MarketEvent stream
-# Pos: market WS client
+# Input: WS URLs, symbols, callbacks, reconnect state
+# Output: MarketEvent stream + reconnect callbacks
+# Pos: market WS client (market data)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -132,7 +132,9 @@ class MarketWSClient:
         """
         建立 WS 连接并开始接收数据
         """
-        if self._running:
+        # 修复：只有已连接时才跳过，而非 _running=True 时跳过
+        # 否则 _reconnect() 调用 connect() 时会直接返回，导致重连失败
+        if self.is_connected:
             return
 
         self._running = True
