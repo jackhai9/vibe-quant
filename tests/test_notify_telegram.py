@@ -1,5 +1,5 @@
 # Input: 被测模块与 pytest 夹具
-# Output: pytest 断言结果
+# Output: pytest 断言结果（含限流重试）
 # Pos: 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
+import src.notify.telegram as telegram_module
 from src.notify.telegram import TelegramNotifier
 from src.utils.logger import setup_logger
 
@@ -70,7 +71,6 @@ async def test_send_message_retries_until_success(monkeypatch):
     async def fast_sleep(delay: float, result=None):  # noqa: ANN001
         return result
 
-    import src.notify.telegram as telegram_module
     monkeypatch.setattr(telegram_module.asyncio, "sleep", fast_sleep)
 
     ok = await notifier._send_message("hello")  # noqa: SLF001
@@ -159,3 +159,33 @@ async def test_notify_open_alert_formats_chinese_multiline(monkeypatch):
         "  交易对: ETH/USDT\n"
         "  仓位: 0 -> 1.2"
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_message_respects_retry_after(monkeypatch):
+    notifier = TelegramNotifier(token="token", chat_id="chat", enabled=True, max_retries=1)
+    fake_session = FakeSession(
+        responses=[
+            (429, {"ok": False, "parameters": {"retry_after": 2}}),
+            (200, {"ok": True}),
+        ]
+    )
+    notifier._session = fake_session  # type: ignore[assignment]
+
+    async def noop_ensure_session() -> None:
+        return
+
+    notifier._ensure_session = noop_ensure_session  # type: ignore[method-assign]
+
+    sleeps: List[float] = []
+
+    async def capture_sleep(delay: float, result=None):  # noqa: ANN001
+        sleeps.append(delay)
+        return result
+
+    monkeypatch.setattr(telegram_module.asyncio, "sleep", capture_sleep)
+
+    ok = await notifier._send_message("hello")  # noqa: SLF001
+    assert ok is True
+    assert len(fake_session.post_calls) == 2
+    assert notifier._cooldown_until > 0

@@ -7,10 +7,9 @@
 
 通知渠道封装。<br>
 当前仅支持 Telegram Bot。<br>
-对外提供发送接口。
+发送串行化并遵守限流等待。
 
 ## 文件清单
 
 - `telegram.py`：Telegram 通知实现
 - `__init__.py`：模块导出
-

@@ -100,6 +100,20 @@
 
 ---
 
+### 问题：`Telegram 发送失败 (status=429 Too Many Requests)`
+
+**原因**：短时间内消息过多触发 Telegram 限流
+
+**说明**：
+- 系统会按 `retry_after` 等待后继续发送
+- 消息不会丢失，但可能出现延迟
+
+**建议**：
+- 减少高频通知（如关闭 `on_open_alert`）
+- 确认策略是否过度频繁触发
+
+---
+
 ## 连接问题
 
 ### 问题：`连接币安 API 超时`
@@ -760,4 +774,3 @@ watch -n 5 'ps aux | grep vibe-quant'
 - [README](../README.md)
 
 ---
-

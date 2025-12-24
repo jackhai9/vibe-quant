@@ -87,7 +87,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **ExecutionEngine** | 状态机管理，下单/撤单/TTL 超时处理 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
-| **Notifier** | Telegram 通知（成交/重连/风险触发/开仓告警） | 关键事件 | 消息推送 |
+| **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待） | 关键事件 | 消息推送 |
 
 ---
 

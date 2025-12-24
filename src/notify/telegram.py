@@ -1,5 +1,5 @@
-# Input: token, chat_id, events
-# Output: Telegram message delivery
+# Input: token, chat_id, events, rate limit state
+# Output: serialized Telegram delivery with retry_after handling
 # Pos: Telegram notifier
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -59,6 +59,10 @@ class TelegramNotifier:
 
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self._min_interval_s = 1.0
+        self._next_send_time = 0.0
+        self._cooldown_until = 0.0
 
         if self.enabled and (not self.token or not self.chat_id):
             get_logger().warning("Telegram 已启用但 token/chat_id 为空，将自动禁用 Telegram 通知")
@@ -201,33 +205,64 @@ class TelegramNotifier:
 
         logger = get_logger()
         last_error: Optional[str] = None
+        attempt = 0
+        loop = asyncio.get_running_loop()
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                assert self._session is not None
-                async with self._session.post(url, json=payload, proxy=self.proxy) as resp:
-                    data = await resp.json(content_type=None)
-                    ok = bool(data.get("ok")) if isinstance(data, dict) else False
+        async with self._send_lock:
+            while attempt < self.max_retries:
+                await self._wait_for_send_slot()
+                try:
+                    assert self._session is not None
+                    async with self._session.post(url, json=payload, proxy=self.proxy) as resp:
+                        data = await resp.json(content_type=None)
+                        ok = bool(data.get("ok")) if isinstance(data, dict) else False
 
-                    if resp.status == 200 and ok:
-                        return True
+                        if resp.status == 200 and ok:
+                            return True
 
-                    last_error = f"status={resp.status} resp={data}"
-                    logger.warning(f"Telegram 发送失败 attempt={attempt}/{self.max_retries}: {last_error}")
-            except asyncio.CancelledError:
-                raise
-            except asyncio.TimeoutError:
-                last_error = f"TimeoutError after {self.timeout_s:.1f}s (proxy={self.proxy or 'none'})"
-                logger.warning(f"Telegram 发送超时 attempt={attempt}/{self.max_retries}: {last_error}")
-            except Exception as e:
-                last_error = f"{type(e).__name__}: {e!r} (proxy={self.proxy or 'none'})"
-                logger.warning(f"Telegram 发送异常 attempt={attempt}/{self.max_retries}: {last_error}")
+                        if resp.status == 429:
+                            retry_after = _extract_retry_after(data) or 5.0
+                            self._cooldown_until = max(self._cooldown_until, loop.time() + retry_after)
+                            logger.warning(
+                                f"Telegram 触发限流，等待 retry_after={retry_after}s"
+                            )
+                            continue
 
-            if attempt < self.max_retries:
-                await asyncio.sleep(min(2 ** (attempt - 1), 5))
+                        last_error = f"status={resp.status} resp={data}"
+                        attempt += 1
+                        logger.warning(
+                            f"Telegram 发送失败 attempt={attempt}/{self.max_retries}: {last_error}"
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    last_error = f"TimeoutError after {self.timeout_s:.1f}s (proxy={self.proxy or 'none'})"
+                    attempt += 1
+                    logger.warning(
+                        f"Telegram 发送超时 attempt={attempt}/{self.max_retries}: {last_error}"
+                    )
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {e!r} (proxy={self.proxy or 'none'})"
+                    attempt += 1
+                    logger.warning(
+                        f"Telegram 发送异常 attempt={attempt}/{self.max_retries}: {last_error}"
+                    )
+                finally:
+                    self._next_send_time = max(self._next_send_time, loop.time() + self._min_interval_s)
 
-        logger.error(f"Telegram 最终发送失败: {last_error or 'unknown_error'}")
-        return False
+                if attempt < self.max_retries:
+                    await asyncio.sleep(min(2 ** (attempt - 1), 5))
+
+            logger.error(f"Telegram 最终发送失败: {last_error or 'unknown_error'}")
+            return False
+
+    async def _wait_for_send_slot(self) -> None:
+        """等待可用发送窗口（限速 + 限流冷却）。"""
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        wait_until = max(self._next_send_time, self._cooldown_until)
+        if wait_until > now:
+            await asyncio.sleep(wait_until - now)
 
     async def _ensure_session(self) -> None:
         if self._session and not self._session.closed:
@@ -239,3 +274,19 @@ class TelegramNotifier:
 
             timeout = aiohttp.ClientTimeout(total=self.timeout_s)
             self._session = aiohttp.ClientSession(timeout=timeout)
+
+
+def _extract_retry_after(data: Any) -> Optional[float]:
+    """从 Telegram 429 响应中提取 retry_after 秒数。"""
+    if not isinstance(data, dict):
+        return None
+    params = data.get("parameters")
+    if not isinstance(params, dict):
+        return None
+    retry_after = params.get("retry_after")
+    if retry_after is None:
+        return None
+    try:
+        return float(retry_after)
+    except (TypeError, ValueError):
+        return None
