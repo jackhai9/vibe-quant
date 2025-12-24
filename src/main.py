@@ -213,8 +213,7 @@ class Application:
             st.last_verify_present = None
             st.pending_release = False
             log_event(
-                "protective_stop",
-                event_cn="保护止损",
+                "risk",
                 symbol=symbol,
                 side=position_side.value,
                 reason="external_takeover_set",
@@ -222,6 +221,7 @@ class Application:
                 order_id=order_id,
                 client_order_id=client_order_id,
                 order_type=order_type,
+                level="debug",
             )
         st.last_seen_ms = now_ms
 
@@ -252,8 +252,7 @@ class Application:
             st.last_verify_present = None
             st.pending_release = False
             log_event(
-                "protective_stop",
-                event_cn="保护止损",
+                "risk",
                 symbol=symbol,
                 side=position_side.value,
                 reason=reason,
@@ -487,12 +486,12 @@ class Application:
                         if st2.last_verify_present is None or st2.last_verify_present != present:
                             st2.last_verify_present = present
                             log_event(
-                                "protective_stop",
-                                event_cn="保护止损",
+                                "risk",
                                 symbol=symbol,
                                 side=side.value,
                                 reason="external_takeover_verify",
                                 external_present=present,
+                                level="debug",
                             )
         except Exception as e:
             log_error(f"保护止损同步异常: {e}", symbol=symbol, reason=reason)
@@ -1304,16 +1303,20 @@ class Application:
                         position_amt=pos.position_amt,
                     )
 
-    def _log_startup_no_positions(self) -> None:
+    def _log_startup_pos(self) -> None:
+        """启动时打印所有 symbol+side 的持仓状态。"""
         if not self.config_loader:
             return
 
+        logger = get_logger()
         for symbol in self.config_loader.get_symbols():
             for position_side in (PositionSide.LONG, PositionSide.SHORT):
                 position = self._positions.get(symbol, {}).get(position_side)
+                side = position_side.value
                 if position and abs(position.position_amt) > Decimal("0"):
-                    continue
-                self._log_no_position(symbol, position_side, cleared=False)
+                    logger.info(f"{symbol} {side} 📦 当前持仓 {position.position_amt}，准备执行平仓...")
+                else:
+                    self._log_no_position(symbol, position_side, cleared=False)
 
     async def run(self) -> None:
         """运行应用"""
@@ -1324,7 +1327,7 @@ class Application:
             # 获取初始仓位
             logger.info("获取初始仓位...")
             await self._fetch_positions()
-            self._log_startup_no_positions()
+            self._log_startup_pos()
             self._positions_ready = True
             await self._sync_protective_stops_all(reason="startup")
 
@@ -1487,7 +1490,7 @@ class Application:
                 slice_display = format_decimal(selected_tier.slice_ratio, precision=4)
                 risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
                 log_event(
-                    "risk_trigger",
+                    "risk",
                     symbol=symbol,
                     side=position_side.value,
                     risk_stage="panic_close",
@@ -1601,7 +1604,7 @@ class Application:
                         risk_stage = risk_flag.reason or "liq_distance_breach"
                         risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
                         log_event(
-                            "risk_trigger",
+                            "risk",
                             symbol=symbol,
                             side=position_side.value,
                             mode=target_mode.value,

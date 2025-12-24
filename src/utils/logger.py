@@ -50,7 +50,7 @@ EVENT_TYPE_CN = {
     "leverage_snapshot": "杠杆快照",
     "mode_change": "模式切换",
     "calibration": "校准",
-    "risk_trigger": "风险触发",
+    "risk": "风控",
     "rate_limit": "限速",
     "error": "错误",
 }
@@ -159,121 +159,86 @@ def _format_value(value: Any) -> str:
 
 
 def _build_extra_fields(**kwargs) -> str:
-    """构建额外字段字符串"""
+    """构建额外字段字符串，cn 字段始终在最前面且不带 key"""
     fields = []
+    # cn 字段优先，且直接显示值（不带 cn=）
+    if "cn" in kwargs and kwargs["cn"] is not None:
+        fields.append(str(kwargs["cn"]))
+    # 其他字段
     for key, value in kwargs.items():
-        if value is not None:
+        if key != "cn" and value is not None:
             fields.append(f"{key}={_format_value(value)}")
     return " | ".join(fields) if fields else ""
 
 
-def log_event(
-    event_type: str,
-    symbol: Optional[str] = None,
-    side: Optional[str] = None,
-    mode: Optional[str] = None,
-    state: Optional[str] = None,
-    reason: Optional[str] = None,
-    best_bid: Optional[Decimal] = None,
-    best_ask: Optional[Decimal] = None,
-    last_trade: Optional[Decimal] = None,
-    order_id: Optional[str] = None,
-    qty: Optional[Decimal] = None,
-    price: Optional[Decimal] = None,
-    filled_qty: Optional[Decimal] = None,
-    avg_price: Optional[Decimal] = None,
-    position_amt: Optional[Decimal] = None,
-    error: Optional[str] = None,
-    **kwargs,
-) -> None:
+def log_event(event_type: str, *, level: str | None = None, **fields) -> None:
     """
     记录结构化事件日志
 
     Args:
-        event_type: 事件类型
-            - startup: 启动
-            - shutdown: 关闭
-            - ws_connect: WS 连接
-            - ws_disconnect: WS 断开
-            - ws_reconnect: WS 重连
-            - market_update: 行情更新
-            - signal: 信号触发
-            - order_place: 下单
-            - order_cancel: 撤单
-            - order_fill: 成交
-            - order_timeout: 超时
-            - position_update: 仓位更新
-            - leverage_update: 杠杆更新
-            - leverage_snapshot: 杠杆快照
-            - error: 错误
-        symbol: 交易对
-        side: 方向（LONG/SHORT）
-        mode: 执行模式（MAKER_ONLY/AGGRESSIVE_LIMIT）
-        state: 状态（IDLE/PLACING/WAITING/CANCELING/COOLDOWN）
-        reason: 原因
-        best_bid: 买一价
-        best_ask: 卖一价
-        last_trade: 最近成交价
-        order_id: 订单 ID
-        qty: 数量
-        price: 价格
-        filled_qty: 成交数量
-        avg_price: 平均成交价
-        position_amt: 仓位数量
-        error: 错误信息
-        **kwargs: 其他字段
+        event_type: 事件类型（startup/shutdown/ws_connect/signal/order_place/order_fill/...）
+        level: 日志级别覆盖（debug/info/warning/error），不传则根据 event_type 自动选择
+        **fields: 事件字段，常用字段会自动缩短名称：
+            - best_bid → bid
+            - best_ask → ask
+            - last_trade → last
+            - filled_qty → filled
+            - position_amt → pos
     """
     normalized_event_type = event_type.lower()
     event_cn = EVENT_TYPE_CN.get(normalized_event_type)
 
-    # 构建基础字段
-    base_fields = {
-        "cn": event_cn if event_cn and "cn" not in kwargs else None,
-        "symbol": symbol,
-        "side": side,
-        "mode": mode,
-        "state": state,
-        "reason": reason,
-        "order_id": order_id,
+    # event_cn 统一转为 cn
+    if "event_cn" in fields:
+        fields["cn"] = fields.pop("event_cn")
+
+    # 自动添加中文名（若未手动传入）
+    if event_cn and "cn" not in fields:
+        fields["cn"] = event_cn
+
+    # 字段名缩短（保持日志简洁）
+    field_renames = {
+        "best_bid": "bid",
+        "best_ask": "ask",
+        "last_trade": "last",
+        "filled_qty": "filled",
+        "position_amt": "pos",
     }
+    for old_name, new_name in field_renames.items():
+        if old_name in fields:
+            fields[new_name] = fields.pop(old_name)
 
-    # 构建价格字段
-    price_fields = {
-        "bid": best_bid,
-        "ask": best_ask,
-        "last": last_trade,
-        "price": price,
-        "avg_price": avg_price,
-    }
+    # symbol 简写：ZEN/USDT:USDT → ZEN
+    if "symbol" in fields and fields["symbol"]:
+        symbol = str(fields["symbol"])
+        if "/" in symbol:
+            fields["symbol"] = symbol.split("/")[0]
 
-    # 构建数量字段
-    qty_fields = {
-        "qty": qty,
-        "filled": filled_qty,
-        "pos": position_amt,
-    }
-
-    # 合并所有字段
-    all_fields = {**base_fields, **price_fields, **qty_fields, **kwargs}
-
-    # 过滤掉 None 值
-    fields_str = _build_extra_fields(**all_fields)
+    # 提取 error 字段用于日志级别判断
+    error = fields.get("error")
 
     # 构建日志消息
+    fields_str = _build_extra_fields(**fields)
     message = f"[{event_type.upper()}]"
     if fields_str:
         message = f"{message} {fields_str}"
 
-    # 根据事件类型选择日志级别
-    if event_type == "error" or error:
-        if error:
-            message = f"{message} | error={error}"
+    # 根据事件类型选择日志级别（level 参数可覆盖）
+    if level == "debug":
+        _logger.debug(message)
+    elif level == "info":
+        _logger.info(message)
+    elif level == "warning":
+        _logger.warning(message)
+    elif level == "error":
+        _logger.error(message)
+    elif event_type == "error" or error:
         _logger.error(message)
     elif event_type in (
         "ws_disconnect",
         "ws_reconnect",
         "order_timeout",
-        "risk_trigger",
+        "risk",
         "rate_limit",
         "order_reject",
     ):
@@ -289,7 +254,7 @@ def log_event(
 # 便捷函数
 def log_startup(symbols: list[str]) -> None:
     """记录启动事件"""
-    log_event("startup", reason=f"symbols={','.join(symbols)}")
+    log_event("startup", symbols=",".join(symbols))
 
 
 def log_shutdown(reason: str = "normal") -> None:
@@ -421,8 +386,8 @@ def log_order_timeout(
         "order_timeout",
         symbol=symbol,
         side=side,
+        timeout_count=timeout_count,
         order_id=order_id,
-        reason=f"timeout_count={timeout_count}",
     )
 
 

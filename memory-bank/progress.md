@@ -22,6 +22,20 @@
 | 阶段 11：systemd 部署 | ✅ |
 | **小额实盘验证** | ✅ |
 
+## Milestone/附加改进：日志系统重构
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-24<br>
+**动机**：简化日志 API、统一风控事件类型、优化日志输出格式。<br>
+**产出**：
+- `src/utils/logger.py`：`log_event` 签名从 17 个参数简化为 `event_type + level + **fields`
+- 风控事件统一：`PROTECTIVE_STOP` + `RISK_TRIGGER` → `RISK`，用 `risk_stage` 区分
+- 日志格式优化：cn 字段不带 key 直接显示、symbol 自动简写（`ZEN/USDT:USDT` → `ZEN`）
+- `log_order_timeout`：`reason=timeout_count=1` → `timeout_count=1`
+- `log_startup`：`reason=symbols=...` → `symbols=...`
+- `src/main.py`：新增 `_log_startup_pos` 启动时显示有持仓状态
+- 文档同步更新：`docs/configuration.md`、`docs/troubleshooting.md`、`memory-bank/design-document.md`
+
 ## Milestone/附加改进：无持仓提示日志
 
 **状态**：✅ 已完成<br>

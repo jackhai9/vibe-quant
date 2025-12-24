@@ -326,8 +326,7 @@ class ProtectiveStopManager:
             if update.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
                 self._states.pop(key, None)
                 log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
+                    "risk",
                     symbol=update.symbol,
                     side=side.value,
                     risk_stage=self._risk_stage,
@@ -358,8 +357,7 @@ class ProtectiveStopManager:
                 continue
             self._states.pop(key, None)
             log_event(
-                "protective_stop",
-                event_cn="保护止损",
+                "risk",
                 symbol=update.symbol,
                 side=side.value,
                 risk_stage=self._risk_stage,
@@ -448,8 +446,7 @@ class ProtectiveStopManager:
                     continue
                 self._external_multi_sig[key] = ids
                 log_event(
-                    "protective_stop",
-                    event_cn="保护止损",
+                    "risk",
                     symbol=symbol,
                     side=side.value,
                     risk_stage=self._risk_stage,
@@ -470,8 +467,7 @@ class ProtectiveStopManager:
                     first = existing[0]
                     self._startup_existing_logged.add(key)
                     log_event(
-                        "protective_stop",
-                        event_cn="保护止损",
+                        "risk",
                         symbol=symbol,
                         side=side.value,
                         risk_stage=self._risk_stage,
@@ -497,8 +493,7 @@ class ProtectiveStopManager:
                         working_type = info.get("workingType")
                     stop_price = self._extract_stop_price(sample) if isinstance(sample, dict) else None
                     log_event(
-                        "protective_stop",
-                        event_cn="保护止损",
+                        "risk",
                         symbol=symbol,
                         side=side.value,
                         risk_stage=self._risk_stage,
@@ -566,8 +561,7 @@ class ProtectiveStopManager:
                     try:
                         await self._exchange.cancel_order(symbol, order_id)
                         log_event(
-                            "protective_stop",
-                            event_cn="保护止损",
+                            "risk",
                             symbol=symbol,
                             side=side.value,
                             risk_stage=self._risk_stage,
@@ -623,8 +617,7 @@ class ProtectiveStopManager:
                     try:
                         await self._exchange.cancel_order(symbol, external_order_id)
                         log_event(
-                            "protective_stop",
-                            event_cn="保护止损",
+                            "risk",
                             symbol=symbol,
                             side=side.value,
                             risk_stage=self._risk_stage,
@@ -645,8 +638,7 @@ class ProtectiveStopManager:
                         try:
                             await self._exchange.cancel_order(symbol, order_id)
                             log_event(
-                                "protective_stop",
-                                event_cn="保护止损",
+                                "risk",
                                 symbol=symbol,
                                 side=side.value,
                                 risk_stage=self._risk_stage,
@@ -671,8 +663,7 @@ class ProtectiveStopManager:
         liquidation_price = position.liquidation_price
         if liquidation_price is None or liquidation_price <= Decimal("0"):
             log_event(
-                "protective_stop",
-                event_cn="保护止损",
+                "risk",
                 symbol=symbol,
                 side=side.value,
                 risk_stage=self._risk_stage,
@@ -777,8 +768,7 @@ class ProtectiveStopManager:
         )
 
         log_event(
-            "protective_stop",
-            event_cn="保护止损",
+            "risk",
             symbol=symbol,
             side=side.value,
             risk_stage=self._risk_stage,

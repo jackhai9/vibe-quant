@@ -384,9 +384,10 @@ roi = unrealized_pnl / initial_margin
   - `protective_stop: 3`
 - **说明**:
   - key 为风险阶段/类型（`risk_stage`），value 为等级数字（`risk_level`）。
-  - 当前日志里会在以下事件附带 `risk_stage`/`risk_level`：
-    - `[RISK_TRIGGER]`（风险预警 / 强制平仓）
-    - `[PROTECTIVE_STOP]`（保护性止损相关事件）
+  - 当前日志里会在 `[RISK]` 事件附带 `risk_stage`/`risk_level`：
+    - `risk_stage=liq_distance_breach`（清算距离触发）
+    - `risk_stage=panic_close`（恐慌平仓）
+    - `risk_stage=protective_stop`（保护性止损）
 
 **示例配置**:
 ```yaml
