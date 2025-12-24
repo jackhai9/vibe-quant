@@ -7,7 +7,7 @@
 
 Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 
-通过小单分批 + 执行模式轮转（Maker → Aggressive Limit）+ 超时撤单，实现低滑点、低市场冲击的仓位退出。
+通过小单分批 + 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
 
 ## 核心特性
 
