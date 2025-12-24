@@ -16,7 +16,7 @@ pytest 测试集。<br>
 - `test_execution.py`：执行引擎测试
 - `test_logger.py`：日志系统测试
 - `test_main_shutdown.py`：优雅退出测试
-- `test_notify_telegram.py`：Telegram 通知测试
+- `test_notify_telegram.py`：Telegram 通知测试（含 429 冷却等待）
 - `test_order_cleanup.py`：退出撤单隔离测试
 - `test_protective_stop.py`：保护性止损测试
 - `test_risk_manager.py`：风控与限速测试
@@ -24,4 +24,3 @@ pytest 测试集。<br>
 - `test_ws_market.py`：市场 WS 测试
 - `test_ws_user_data.py`：用户数据 WS 测试
 - `__init__.py`：测试包初始化
-

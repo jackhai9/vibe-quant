@@ -564,6 +564,10 @@ risk:
 - **默认值**: `true`
 - **说明**: 开仓/加仓告警（检测到新仓位或仓位增加）
 
+**发送策略**:
+- 串行发送，最小间隔 1 秒
+- 若触发 429（限流），按 `retry_after` 等待后继续发送（可能延迟但不丢消息）
+
 ---
 
 ## Symbol 级别覆盖 (symbols)
@@ -711,4 +715,3 @@ global:
 - **开发进度**: [`memory-bank/progress.md`](../memory-bank/progress.md)
 
 ---
-

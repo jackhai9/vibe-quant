@@ -44,6 +44,16 @@
 - `src/execution/engine.py`：撤单超时进入 `COOLDOWN` 且保留订单上下文，允许迟到 WS 回执更新状态
 - `tests/test_execution.py`：补充撤单回执延迟仍可处理的用例，超时撤单后状态期望调整为 `COOLDOWN`
 
+## Milestone/附加改进：Telegram 429 限流等待与串行发送
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-23<br>
+**动机**：实盘触发 Telegram 429（Too Many Requests），需要严格遵守 `retry_after` 并串行发送，确保消息最终送达。<br>
+**产出**：
+- `src/notify/telegram.py`：串行发送 + 1s 最小间隔；429 按 `retry_after` 冷却等待并记录日志
+- `tests/test_notify_telegram.py`：新增 429 冷却等待测试
+- `docs/configuration.md` / `docs/troubleshooting.md`：补充发送策略与 429 说明
+
 ## Milestone/附加改进：无效外部止损检测与接管
 
 **状态**：✅ 已完成<br>
