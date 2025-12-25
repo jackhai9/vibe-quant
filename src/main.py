@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and order events
+# Output: application lifecycle, async tasks, and order events (including fill meta)
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -516,6 +516,8 @@ class Application:
         reason: str,
         role: Optional[str],
         pnl: Optional[Decimal],
+        fee: Optional[Decimal],
+        fee_asset: Optional[str],
     ) -> None:
         """ExecutionEngine 成交回调：用于触发 Telegram 通知（不得阻塞）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -534,6 +536,8 @@ class Application:
                 reason=reason,
                 role=role,
                 pnl=pnl,
+                fee=fee,
+                fee_asset=fee_asset,
             ),
             name=f"fill:{symbol}:{position_side.value}",
         )
@@ -545,6 +549,14 @@ class Application:
         if formatted is None:
             return None
         return f"{formatted} USDT"
+
+    def _format_fee(self, fee: Optional[Decimal], fee_asset: Optional[str]) -> Optional[str]:
+        if fee is None or not fee_asset:
+            return None
+        formatted = format_decimal_fixed(fee, precision=4)
+        if formatted is None:
+            return None
+        return f"{formatted} {fee_asset}"
 
     async def _wait_for_position_change(
         self,
@@ -588,6 +600,8 @@ class Application:
         reason: str,
         role: Optional[str],
         pnl: Optional[Decimal],
+        fee: Optional[Decimal],
+        fee_asset: Optional[str],
     ) -> None:
         """带仓位 before->after 的成交通知（尽量等一次 ACCOUNT_UPDATE）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -640,6 +654,7 @@ class Application:
             position_after=str(abs(after_amt)),
             role=role,
             pnl=self._format_realized_pnl(pnl),
+            fee=self._format_fee(fee, fee_asset),
         )
 
     async def _gather_with_timeout(

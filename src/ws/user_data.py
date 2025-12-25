@@ -1,5 +1,5 @@
 # Input: API keys, listenKey, callbacks, reconnect state
-# Output: order/position/leverage updates (including maker role and realized pnl)
+# Output: order/position/leverage updates (including maker role, pnl, fee)
 # Pos: user data WS client (account stream)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -478,12 +478,20 @@ class UserDataWSClient:
             reduce_only = order_data.get("R")
             is_maker = order_data.get("m")
             realized_pnl_raw = order_data.get("rp")
+            commission_raw = order_data.get("n")
+            commission_asset = order_data.get("N")
             realized_pnl: Optional[Decimal] = None
             if realized_pnl_raw is not None:
                 try:
                     realized_pnl = Decimal(str(realized_pnl_raw))
                 except Exception:
                     realized_pnl = None
+            fee: Optional[Decimal] = None
+            if commission_raw is not None:
+                try:
+                    fee = Decimal(str(commission_raw))
+                except Exception:
+                    fee = None
 
             # 时间戳
             timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
@@ -503,6 +511,8 @@ class UserDataWSClient:
                 reduce_only=bool(reduce_only) if isinstance(reduce_only, bool) else None,
                 is_maker=bool(is_maker) if isinstance(is_maker, bool) else None,
                 realized_pnl=realized_pnl,
+                fee=fee,
+                fee_asset=str(commission_asset) if commission_asset else None,
             )
 
         except Exception as e:

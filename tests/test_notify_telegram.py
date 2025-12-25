@@ -158,6 +158,7 @@ async def test_notify_fill_includes_pnl(monkeypatch):
         position_after="0.9",
         role="maker",
         pnl="-0.1234 USDT",
+        fee="0.0001 USDT",
     )
 
     assert sent == [
@@ -167,6 +168,7 @@ async def test_notify_fill_includes_pnl(monkeypatch):
         "  执行: 挂单模式\n"
         "  角色: maker\n"
         "  盈亏: -0.1234 USDT\n"
+        "  手续费: 0.0001 USDT\n"
         "  原因: long_primary\n"
         "  仓位: 1.0 -> 0.9"
     ]

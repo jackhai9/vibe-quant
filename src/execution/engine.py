@@ -63,12 +63,26 @@ class ExecutionEngine:
         cancel_order: Callable[[str, str], Awaitable[OrderResult]],
         on_fill: Optional[
             Callable[
-                [str, PositionSide, ExecutionMode, Decimal, Decimal, str, Optional[str], Optional[Decimal]],
+                [
+                    str,
+                    PositionSide,
+                    ExecutionMode,
+                    Decimal,
+                    Decimal,
+                    str,
+                    Optional[str],
+                    Optional[Decimal],
+                    Optional[Decimal],
+                    Optional[str],
+                ],
                 None,
             ]
         ] = None,
         fetch_order_trade_meta: Optional[
-            Callable[[str, str], Awaitable[tuple[Optional[bool], Optional[Decimal]]]]
+            Callable[
+                [str, str],
+                Awaitable[tuple[Optional[bool], Optional[Decimal], Optional[Decimal], Optional[str]]],
+            ]
         ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
@@ -90,7 +104,7 @@ class ExecutionEngine:
             place_order: 下单函数
             cancel_order: 撤单函数
             on_fill: 成交通知回调（不得阻塞主链路）
-            fetch_order_trade_meta: 查询订单 maker 状态/已实现盈亏（用于 WS 超时时回退查询）
+            fetch_order_trade_meta: 查询订单 maker 状态/已实现盈亏/手续费（用于 WS 超时时回退查询）
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
             base_lot_mult: 基础片大小倍数
@@ -411,6 +425,8 @@ class ExecutionEngine:
                 state.last_completed_mode = state.current_order_mode or state.mode
                 state.last_completed_reason = state.current_order_reason or "unknown"
                 state.last_completed_realized_pnl = None
+                state.last_completed_fee = None
+                state.last_completed_fee_asset = None
                 await self._handle_filled(
                     intent.symbol,
                     intent.position_side,
@@ -460,20 +476,28 @@ class ExecutionEngine:
             # 尝试通过 REST 查询 maker 状态与已实现盈亏
             role: Optional[str] = None
             pnl: Optional[Decimal] = None
+            fee: Optional[Decimal] = None
+            fee_asset: Optional[str] = None
             if self._fetch_order_trade_meta:
                 try:
-                    is_maker, realized_pnl = await self._fetch_order_trade_meta(
+                    is_maker, realized_pnl, fee_value, fee_asset_value = await self._fetch_order_trade_meta(
                         state.symbol, state.last_completed_order_id
                     )
                     if is_maker is not None:
                         role = "maker" if is_maker else "taker"
                     pnl = realized_pnl
+                    fee = fee_value
+                    fee_asset = fee_asset_value
                 except Exception as e:
-                    get_logger().warning(f"查询 maker 状态失败: {e}")
+                    get_logger().warning(f"查询成交元数据失败: {e}")
             if role is None:
                 role = "unknown"
             if pnl is None:
                 pnl = state.last_completed_realized_pnl
+            if fee is None:
+                fee = state.last_completed_fee
+            if fee_asset is None:
+                fee_asset = state.last_completed_fee_asset
 
             log_order_fill(
                 symbol=state.symbol,
@@ -483,6 +507,8 @@ class ExecutionEngine:
                 avg_price=state.last_completed_avg_price,
                 role=role,
                 pnl=pnl,
+                fee=fee,
+                # fee_asset=fee_asset,
             )
             # 触发成交通知（使用缓存的 mode 和 reason）
             if self._on_fill:
@@ -496,6 +522,8 @@ class ExecutionEngine:
                         state.last_completed_reason or "unknown",
                         role,
                         pnl,
+                        fee,
+                        fee_asset,
                     )
                 except Exception as e:
                     get_logger().warning(f"on_fill 回调异常: {e}")
@@ -504,6 +532,8 @@ class ExecutionEngine:
         state.last_completed_mode = None
         state.last_completed_reason = None
         state.last_completed_realized_pnl = None
+        state.last_completed_fee = None
+        state.last_completed_fee_asset = None
 
     async def on_order_update(self, update: OrderUpdate, current_ms: int) -> None:
         """
@@ -522,6 +552,8 @@ class ExecutionEngine:
             if self._should_accept_late_fill(state, update, current_ms):
                 role = None
                 pnl = update.realized_pnl
+                fee = update.fee
+                fee_asset = update.fee_asset
                 if update.is_maker is not None:
                     role = "maker" if update.is_maker else "taker"
                 log_order_fill(
@@ -532,6 +564,8 @@ class ExecutionEngine:
                     avg_price=update.avg_price,
                     role=role,
                     pnl=pnl,
+                    fee=fee,
+                    # fee_asset=fee_asset,
                 )
                 # 触发成交通知（使用缓存的 mode 和 reason）
                 if self._on_fill:
@@ -545,6 +579,8 @@ class ExecutionEngine:
                             state.last_completed_reason or "unknown",
                             role,
                             pnl,
+                            fee,
+                            fee_asset,
                         )
                     except Exception as e:
                         get_logger().warning(f"on_fill 回调异常: {e}")
@@ -553,6 +589,8 @@ class ExecutionEngine:
                 state.last_completed_ms = 0
                 state.last_completed_filled_qty = Decimal("0")
                 state.last_completed_avg_price = Decimal("0")
+                state.last_completed_fee = None
+                state.last_completed_fee_asset = None
                 state.last_completed_mode = None
                 state.last_completed_reason = None
                 state.last_completed_realized_pnl = None
@@ -583,6 +621,8 @@ class ExecutionEngine:
                 avg_price=update.avg_price,
                 role=role,
                 pnl=update.realized_pnl,
+                fee=update.fee,
+                # fee_asset=update.fee_asset,
             )
             state.current_order_filled_qty = update.filled_qty
 
@@ -618,10 +658,14 @@ class ExecutionEngine:
 
         role = None
         pnl: Optional[Decimal] = None
+        fee: Optional[Decimal] = None
+        fee_asset: Optional[str] = None
         if isinstance(update, OrderUpdate) and update.is_maker is not None:
             role = "maker" if update.is_maker else "taker"
         if isinstance(update, OrderUpdate):
             pnl = update.realized_pnl
+            fee = update.fee
+            fee_asset = update.fee_asset
         if emit_fill_log:
             log_order_fill(
                 symbol=symbol,
@@ -631,12 +675,25 @@ class ExecutionEngine:
                 avg_price=avg_price,
                 role=role,
                 pnl=pnl,
+                fee=fee,
+                # fee_asset=fee_asset,
             )
 
         # 成交通知（必须不阻塞主链路）
         if emit_on_fill and self._on_fill:
             try:
-                self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason, role, pnl)
+                self._on_fill(
+                    symbol,
+                    position_side,
+                    order_mode,
+                    filled_qty,
+                    avg_price,
+                    order_reason,
+                    role,
+                    pnl,
+                    fee,
+                    fee_asset,
+                )
             except Exception as e:
                 get_logger().warning(f"on_fill 回调异常: {e}")
 
@@ -742,6 +799,8 @@ class ExecutionEngine:
                 state.last_completed_filled_qty = Decimal("0")
                 state.last_completed_avg_price = Decimal("0")
                 state.last_completed_realized_pnl = None
+                state.last_completed_fee = None
+                state.last_completed_fee_asset = None
 
         # 只在 WAITING 状态检查超时
         if state.state != ExecutionState.WAITING:

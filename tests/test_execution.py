@@ -1104,8 +1104,8 @@ class TestFillCallback:
     async def test_on_fill_callback_receives_mode_and_reason(self, mock_place_order, mock_cancel_order, symbol_rules, market_state):
         events = []
 
-        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl):  # noqa: ANN001
-            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl))
+        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl, fee, fee_asset):  # noqa: ANN001
+            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl, fee, fee_asset))
 
         engine = ExecutionEngine(
             place_order=mock_place_order,
@@ -1157,6 +1157,8 @@ class TestFillCallback:
             timestamp_ms=1200,
             is_maker=True,
             realized_pnl=Decimal("-0.1234"),
+            fee=Decimal("0.0001"),
+            fee_asset="USDT",
         )
         await engine.on_order_update(ws_update, current_ms=1200)
 
@@ -1167,13 +1169,15 @@ class TestFillCallback:
         assert events[0][5] == SignalReason.LONG_PRIMARY.value
         assert events[0][6] == "maker"
         assert events[0][7] == Decimal("-0.1234")
+        assert events[0][8] == Decimal("0.0001")
+        assert events[0][9] == "USDT"
 
     @pytest.mark.asyncio
     async def test_on_fill_callback_uses_order_mode_at_placement(self, mock_place_order, mock_cancel_order, symbol_rules, market_state):
         events = []
 
-        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl):  # noqa: ANN001
-            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl))
+        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl, fee, fee_asset):  # noqa: ANN001
+            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role, pnl, fee, fee_asset))
 
         engine = ExecutionEngine(
             place_order=mock_place_order,

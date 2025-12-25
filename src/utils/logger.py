@@ -371,6 +371,8 @@ def log_order_fill(
     avg_price: Decimal,
     role: Optional[str] = None,
     pnl: Optional[Decimal] = None,
+    fee: Optional[Decimal] = None,
+    # fee_asset: Optional[str] = None,
 ) -> None:
     """记录成交事件"""
     log_event(
@@ -382,6 +384,8 @@ def log_order_fill(
         avg_price=avg_price,
         role=role,
         pnl=pnl,
+        fee=fee,
+        # fee_asset=fee_asset,
     )
 
 

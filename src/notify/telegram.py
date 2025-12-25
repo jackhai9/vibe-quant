@@ -80,6 +80,7 @@ class TelegramNotifier:
         position_after: str,
         role: Optional[str] = None,
         pnl: Optional[str] = None,
+        fee: Optional[str] = None,
     ) -> None:
         """
         发送成交通知
@@ -95,6 +96,7 @@ class TelegramNotifier:
             position_after: 成交后仓位
             role: 成交角色（maker/taker）
             pnl: 已实现盈亏（格式化字符串）
+            fee: 手续费（格式化字符串）
         """
         short_symbol = symbol.split(":")[0]
         action = "平多" if side == "LONG" else "平空"
@@ -109,12 +111,15 @@ class TelegramNotifier:
         pnl_str = ""
         if pnl:
             pnl_str = f"\n  盈亏: {pnl}"
+        fee_str = ""
+        if fee:
+            fee_str = f"\n  手续费: {fee}"
 
         text = (
             f"【已成交】{action}\n"
             f"  交易对: {short_symbol}\n"
             f"  成交: {qty} @ {avg_price}\n"
-            f"  执行: {mode_cn}{role_str}{pnl_str}\n"
+            f"  执行: {mode_cn}{role_str}{pnl_str}{fee_str}\n"
             f"  原因: {reason}\n"
             f"  仓位: {position_before} -> {position_after}"
         )

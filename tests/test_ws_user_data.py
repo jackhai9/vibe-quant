@@ -1,5 +1,5 @@
 # Input: User Data WS 被测模块与 pytest 夹具
-# Output: 订单/仓位/杠杆解析断言
+# Output: 订单/仓位/杠杆/手续费解析断言
 # Pos: User Data WS 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -241,6 +241,8 @@ class TestParseOrderUpdate:
                 "ap": "3000.50",
                 "m": True,
                 "rp": "-0.1234",
+                "n": "0.0001",
+                "N": "USDT",
                 "ps": "SHORT",
             }
         }
@@ -259,6 +261,8 @@ class TestParseOrderUpdate:
         assert result.reduce_only is None
         assert result.is_maker is True
         assert result.realized_pnl == Decimal("-0.1234")
+        assert result.fee == Decimal("0.0001")
+        assert result.fee_asset == "USDT"
 
     def test_parse_order_update_partially_filled(self):
         """测试解析部分成交订单"""
