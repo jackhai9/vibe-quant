@@ -130,7 +130,7 @@ async def test_notify_fill_formats_chinese_multiline(monkeypatch):
         "【已成交】平多\n"
         "  交易对: BTC/USDT\n"
         "  成交: 0.1 @ 50000\n"
-        "  执行: 挂单\n"
+        "  执行: 挂单模式\n"
         "  原因: long_primary\n"
         "  仓位: 1.0 -> 0.9"
     ]
