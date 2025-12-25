@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data, order results, and maker status
+# Output: market/position data, order results, and trade meta
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -692,16 +692,20 @@ class ExchangeAdapter:
             logger.warning(f"获取 algo 挂单失败: {e}, symbol={symbol}")
             return []
 
-    async def fetch_order_maker_status(self, symbol: str, order_id: str) -> Optional[bool]:
+    async def fetch_order_trade_meta(
+        self,
+        symbol: str,
+        order_id: str,
+    ) -> tuple[Optional[bool], Optional[Decimal]]:
         """
-        查询订单成交的 maker 状态
+        查询订单成交的 maker 状态与已实现盈亏
 
         Args:
             symbol: 交易对（ccxt 格式，如 BTC/USDT:USDT）
             order_id: 订单 ID
 
         Returns:
-            True=maker, False=taker, None=未查到或出错
+            (is_maker, realized_pnl)，None 表示未查到或出错
         """
         self._ensure_initialized()
 
@@ -716,19 +720,25 @@ class ExchangeAdapter:
             resp = await self.exchange.fapiPrivateGetUserTrades(params)
 
             if not isinstance(resp, list) or len(resp) == 0:
-                return None
+                return None, None
 
             # 多笔成交取第一笔（通常同一订单的成交 maker 状态一致）
             first_trade = resp[0]
             maker_value = first_trade.get("maker")
-            if isinstance(maker_value, bool):
-                return maker_value
-            return None
+            realized_value = first_trade.get("realizedPnl")
+            is_maker = maker_value if isinstance(maker_value, bool) else None
+            realized_pnl: Optional[Decimal] = None
+            if realized_value is not None:
+                try:
+                    realized_pnl = Decimal(str(realized_value))
+                except Exception:
+                    realized_pnl = None
+            return is_maker, realized_pnl
 
         except Exception as e:
             logger = get_logger()
             logger.warning(f"查询订单 maker 状态失败: {e}, symbol={symbol}, order_id={order_id}")
-            return None
+            return None, None
 
     def _parse_order_status(self, status_str: str) -> OrderStatus:
         """解析订单状态"""

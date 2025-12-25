@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
 # Output: OrderIntent and per-side execution state transitions
-# Pos: per-side execution state machine with WS/REST fill role handling
+# Pos: per-side execution state machine with WS/REST fill meta handling
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -62,9 +62,14 @@ class ExecutionEngine:
         place_order: Callable[[OrderIntent], Awaitable[OrderResult]],
         cancel_order: Callable[[str, str], Awaitable[OrderResult]],
         on_fill: Optional[
-            Callable[[str, PositionSide, ExecutionMode, Decimal, Decimal, str, Optional[str]], None]
+            Callable[
+                [str, PositionSide, ExecutionMode, Decimal, Decimal, str, Optional[str], Optional[Decimal]],
+                None,
+            ]
         ] = None,
-        fetch_order_maker_status: Optional[Callable[[str, str], Awaitable[Optional[bool]]]] = None,
+        fetch_order_trade_meta: Optional[
+            Callable[[str, str], Awaitable[tuple[Optional[bool], Optional[Decimal]]]]
+        ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
         base_lot_mult: int = 1,
@@ -85,7 +90,7 @@ class ExecutionEngine:
             place_order: 下单函数
             cancel_order: 撤单函数
             on_fill: 成交通知回调（不得阻塞主链路）
-            fetch_order_maker_status: 查询订单 maker 状态的函数（用于 WS 超时时回退查询）
+            fetch_order_trade_meta: 查询订单 maker 状态/已实现盈亏（用于 WS 超时时回退查询）
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
             base_lot_mult: 基础片大小倍数
@@ -102,7 +107,7 @@ class ExecutionEngine:
         self.place_order = place_order
         self.cancel_order = cancel_order
         self._on_fill = on_fill
-        self._fetch_order_maker_status = fetch_order_maker_status
+        self._fetch_order_trade_meta = fetch_order_trade_meta
         self.order_ttl_ms = order_ttl_ms
         self.repost_cooldown_ms = repost_cooldown_ms
         self.base_lot_mult = base_lot_mult
@@ -405,6 +410,7 @@ class ExecutionEngine:
                 state.last_completed_avg_price = result.avg_price
                 state.last_completed_mode = state.current_order_mode or state.mode
                 state.last_completed_reason = state.current_order_reason or "unknown"
+                state.last_completed_realized_pnl = None
                 await self._handle_filled(
                     intent.symbol,
                     intent.position_side,
@@ -451,19 +457,23 @@ class ExecutionEngine:
         if current_ms - state.last_completed_ms <= self.ws_fill_grace_ms:
             return
         if state.last_completed_order_id:
-            # 尝试通过 REST 查询 maker 状态
+            # 尝试通过 REST 查询 maker 状态与已实现盈亏
             role: Optional[str] = None
-            if self._fetch_order_maker_status:
+            pnl: Optional[Decimal] = None
+            if self._fetch_order_trade_meta:
                 try:
-                    is_maker = await self._fetch_order_maker_status(
+                    is_maker, realized_pnl = await self._fetch_order_trade_meta(
                         state.symbol, state.last_completed_order_id
                     )
                     if is_maker is not None:
                         role = "maker" if is_maker else "taker"
+                    pnl = realized_pnl
                 except Exception as e:
                     get_logger().warning(f"查询 maker 状态失败: {e}")
             if role is None:
                 role = "unknown"
+            if pnl is None:
+                pnl = state.last_completed_realized_pnl
 
             log_order_fill(
                 symbol=state.symbol,
@@ -472,6 +482,7 @@ class ExecutionEngine:
                 filled_qty=state.last_completed_filled_qty,
                 avg_price=state.last_completed_avg_price,
                 role=role,
+                pnl=pnl,
             )
             # 触发成交通知（使用缓存的 mode 和 reason）
             if self._on_fill:
@@ -484,6 +495,7 @@ class ExecutionEngine:
                         state.last_completed_avg_price,
                         state.last_completed_reason or "unknown",
                         role,
+                        pnl,
                     )
                 except Exception as e:
                     get_logger().warning(f"on_fill 回调异常: {e}")
@@ -491,6 +503,7 @@ class ExecutionEngine:
         state.last_completed_ms = current_ms
         state.last_completed_mode = None
         state.last_completed_reason = None
+        state.last_completed_realized_pnl = None
 
     async def on_order_update(self, update: OrderUpdate, current_ms: int) -> None:
         """
@@ -508,6 +521,7 @@ class ExecutionEngine:
         if state.current_order_id != update.order_id:
             if self._should_accept_late_fill(state, update, current_ms):
                 role = None
+                pnl = update.realized_pnl
                 if update.is_maker is not None:
                     role = "maker" if update.is_maker else "taker"
                 log_order_fill(
@@ -517,6 +531,7 @@ class ExecutionEngine:
                     filled_qty=update.filled_qty,
                     avg_price=update.avg_price,
                     role=role,
+                    pnl=pnl,
                 )
                 # 触发成交通知（使用缓存的 mode 和 reason）
                 if self._on_fill:
@@ -529,6 +544,7 @@ class ExecutionEngine:
                             state.last_completed_avg_price,
                             state.last_completed_reason or "unknown",
                             role,
+                            pnl,
                         )
                     except Exception as e:
                         get_logger().warning(f"on_fill 回调异常: {e}")
@@ -539,6 +555,7 @@ class ExecutionEngine:
                 state.last_completed_avg_price = Decimal("0")
                 state.last_completed_mode = None
                 state.last_completed_reason = None
+                state.last_completed_realized_pnl = None
             else:
                 if state.last_completed_order_id == update.order_id:
                     # TODO: WS 回执迟到且已超时忽略，后续落库时补数据一致性
@@ -565,6 +582,7 @@ class ExecutionEngine:
                 filled_qty=update.filled_qty,
                 avg_price=update.avg_price,
                 role=role,
+                pnl=update.realized_pnl,
             )
             state.current_order_filled_qty = update.filled_qty
 
@@ -599,8 +617,11 @@ class ExecutionEngine:
         order_reason = state.current_order_reason or "unknown"
 
         role = None
+        pnl: Optional[Decimal] = None
         if isinstance(update, OrderUpdate) and update.is_maker is not None:
             role = "maker" if update.is_maker else "taker"
+        if isinstance(update, OrderUpdate):
+            pnl = update.realized_pnl
         if emit_fill_log:
             log_order_fill(
                 symbol=symbol,
@@ -609,12 +630,13 @@ class ExecutionEngine:
                 filled_qty=filled_qty,
                 avg_price=avg_price,
                 role=role,
+                pnl=pnl,
             )
 
         # 成交通知（必须不阻塞主链路）
         if emit_on_fill and self._on_fill:
             try:
-                self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason, role)
+                self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason, role, pnl)
             except Exception as e:
                 get_logger().warning(f"on_fill 回调异常: {e}")
 
@@ -719,6 +741,7 @@ class ExecutionEngine:
                 state.last_completed_ms = 0
                 state.last_completed_filled_qty = Decimal("0")
                 state.last_completed_avg_price = Decimal("0")
+                state.last_completed_realized_pnl = None
 
         # 只在 WAITING 状态检查超时
         if state.state != ExecutionState.WAITING:

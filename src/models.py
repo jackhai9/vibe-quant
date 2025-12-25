@@ -260,6 +260,7 @@ class OrderUpdate:
     close_position: Optional[bool] = None  # WS 字段 o.cp，closePosition/Close-All
     reduce_only: Optional[bool] = None  # WS 字段 o.R
     is_maker: Optional[bool] = None  # WS 字段 o.m，成交方向（maker/taker）
+    realized_pnl: Optional[Decimal] = None  # WS 字段 o.rp，已实现盈亏
 
 
 # ============================================================
@@ -316,6 +317,7 @@ class SideExecutionState:
     last_completed_avg_price: Decimal = Decimal("0")
     last_completed_mode: Optional["ExecutionMode"] = None
     last_completed_reason: Optional[str] = None
+    last_completed_realized_pnl: Optional[Decimal] = None
 
     # 风控兜底（panic close）覆盖项：仅在 risk_active 时生效
     risk_active: bool = False

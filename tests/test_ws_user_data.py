@@ -216,6 +216,7 @@ class TestParseOrderUpdate:
         assert result.close_position is None
         assert result.reduce_only is None
         assert result.is_maker is None
+        assert result.realized_pnl is None
 
     def test_parse_order_update_filled(self):
         """测试解析 FILLED 订单"""
@@ -239,6 +240,7 @@ class TestParseOrderUpdate:
                 "z": "0.5",
                 "ap": "3000.50",
                 "m": True,
+                "rp": "-0.1234",
                 "ps": "SHORT",
             }
         }
@@ -256,6 +258,7 @@ class TestParseOrderUpdate:
         assert result.close_position is None
         assert result.reduce_only is None
         assert result.is_maker is True
+        assert result.realized_pnl == Decimal("-0.1234")
 
     def test_parse_order_update_partially_filled(self):
         """测试解析部分成交订单"""
@@ -291,6 +294,7 @@ class TestParseOrderUpdate:
         assert result.close_position is None
         assert result.reduce_only is None
         assert result.is_maker is None
+        assert result.realized_pnl is None
 
     def test_parse_order_update_canceled(self):
         """测试解析取消订单"""

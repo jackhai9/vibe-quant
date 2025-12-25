@@ -33,9 +33,10 @@
 - 日志格式优化：cn 字段不带 key 直接显示、symbol 自动简写（`ZEN/USDT:USDT` → `ZEN`）
 - 事件类型精简：`order_*` → `place/cancel/fill/timeout`，`leverage_update` → `leverage`，`mode_change` → `mode`，`order_reject` → `reject`
 - 成交日志补充 `role=maker|taker`（仅在 WS 回执含 `is_maker` 时输出）
-- 成交日志以 WS 回执为准：REST 立即成交只完成状态并缓存 `order_id`，迟到回执在 `ws_fill_grace_ms` 内补打，超时后先通过 REST 查询 maker 状态；查询成功则输出 `maker/taker`，失败才回退为 `role=unknown`
+- 成交日志以 WS 回执为准：REST 立即成交只完成状态并缓存 `order_id`，迟到回执在 `ws_fill_grace_ms` 内补打，超时后先通过 REST 查询 maker 状态与已实现盈亏；查询成功则输出 `maker/taker` 与 `pnl`，失败才回退为 `role=unknown`
 - Telegram 成交通知新增角色显示（挂单/吃单）
 - Telegram 成交通知延迟到 WS 回执到来后发送（确保 role 正确）
+- 成交日志/Telegram 补充 `pnl`（来自 WS `rp`，Telegram 显示 `-0.1234 USDT` 固定 4 位）
 - `log_order_timeout`：`reason=timeout_count=1` → `timeout_count=1`
 - `log_startup`：`reason=symbols=...` → `symbols=...`
 - `src/main.py`：新增 `_log_startup_pos` 启动时显示有持仓状态

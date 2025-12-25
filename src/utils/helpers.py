@@ -1,6 +1,6 @@
 # Input: numeric values, time, symbols
-# Output: rounded values and helpers
-# Pos: utility functions
+# Output: rounded values and formatting helpers
+# Pos: utility functions and formatters
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -157,3 +157,20 @@ def format_decimal(value: Optional[Decimal], precision: int = 4) -> Optional[str
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text
+
+
+def format_decimal_fixed(value: Optional[Decimal], precision: int = 4) -> Optional[str]:
+    """
+    固定小数位格式化 Decimal（用于通知），保留指定小数位。
+
+    Args:
+        value: 原始 Decimal
+        precision: 小数位数
+    """
+    if value is None:
+        return None
+    if precision < 0:
+        raise ValueError("precision must be non-negative")
+    quantizer = Decimal("1").scaleb(-precision)
+    quantized = value.quantize(quantizer, rounding=ROUND_HALF_UP)
+    return format(quantized, "f")

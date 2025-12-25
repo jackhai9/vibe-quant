@@ -64,7 +64,7 @@ from src.utils.logger import (
     log_event,
     log_error,
 )
-from src.utils.helpers import current_time_ms, format_decimal
+from src.utils.helpers import current_time_ms, format_decimal, format_decimal_fixed
 
 
 CLIENT_ORDER_PREFIX = "vq"
@@ -515,6 +515,7 @@ class Application:
         avg_price: Decimal,
         reason: str,
         role: Optional[str],
+        pnl: Optional[Decimal],
     ) -> None:
         """ExecutionEngine 成交回调：用于触发 Telegram 通知（不得阻塞）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -532,9 +533,18 @@ class Application:
                 avg_price=avg_price,
                 reason=reason,
                 role=role,
+                pnl=pnl,
             ),
             name=f"fill:{symbol}:{position_side.value}",
         )
+
+    def _format_realized_pnl(self, pnl: Optional[Decimal]) -> Optional[str]:
+        if pnl is None:
+            return None
+        formatted = format_decimal_fixed(pnl, precision=4)
+        if formatted is None:
+            return None
+        return f"{formatted} USDT"
 
     async def _wait_for_position_change(
         self,
@@ -577,6 +587,7 @@ class Application:
         avg_price: Decimal,
         reason: str,
         role: Optional[str],
+        pnl: Optional[Decimal],
     ) -> None:
         """带仓位 before->after 的成交通知（尽量等一次 ACCOUNT_UPDATE）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -628,6 +639,7 @@ class Application:
             position_before=str(abs(before_amt)),
             position_after=str(abs(after_amt)),
             role=role,
+            pnl=self._format_realized_pnl(pnl),
         )
 
     async def _gather_with_timeout(
@@ -822,7 +834,7 @@ class Application:
                 place_order=self._place_order,
                 cancel_order=self._cancel_order,
                 on_fill=self._on_engine_fill,
-                fetch_order_maker_status=self.exchange.fetch_order_maker_status,
+                fetch_order_trade_meta=self.exchange.fetch_order_trade_meta,
                 order_ttl_ms=config.order_ttl_ms,
                 repost_cooldown_ms=config.repost_cooldown_ms,
                 base_lot_mult=config.base_lot_mult,

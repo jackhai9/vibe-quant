@@ -119,7 +119,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | `ExitSignal` | 平仓信号 | symbol, position_side, reason, timestamp_ms, roi_mult, accel_mult, roi, ret_window |
 | `OrderIntent` | 下单意图 | symbol, side, position_side, qty, price, reduce_only=True, is_risk, client_order_id |
 | `OrderResult` | 下单结果 | success, order_id, status, filled_qty, avg_price |
-| `OrderUpdate` | 订单更新事件（WS） | order_id, status, filled_qty, is_maker |
+| `OrderUpdate` | 订单更新事件（WS） | order_id, status, filled_qty, is_maker, realized_pnl |
 | `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器 |
 | `RiskFlag` | 风险标记 | is_triggered, dist_to_liq, reason |
 
@@ -175,7 +175,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
   - 多外部单并存时，WS 收到某一张终态不代表接管结束：先标记 pending，并触发一次 REST verify，只有 verify 确认“同侧外部 stop/tp 已不存在”才 release 并恢复自维护。
 - risk 订单优先级：`OrderIntent.is_risk=true` 的下单/撤单绕过软限速（`max_orders_per_sec`/`max_cancels_per_sec`），避免在强平风险区被限速“卡住”
 - 部分成交语义：`PARTIALLY_FILLED` 视为“有成交”，重置 `timeout_count`，避免误升级执行模式
-- 成交日志：以 WS 成交回执为准输出 `role=maker|taker`；REST 立即成交仅完成状态并缓存 `order_id`，在 `ws_fill_grace_ms` 窗口内接收迟到 WS 回执补打日志，超时后先通过 REST 查询 maker 状态；查询成功则输出 `maker/taker`，失败才回退为 `role=unknown`
+- 成交日志：以 WS 成交回执为准输出 `role=maker|taker`；REST 立即成交仅完成状态并缓存 `order_id`，在 `ws_fill_grace_ms` 窗口内接收迟到 WS 回执补打日志，超时后先通过 REST 查询 maker 状态与已实现盈亏；查询成功则输出 `maker/taker` 与 `pnl`，失败才回退为 `role=unknown`
 - 全局限速（Step 9.2）：`max_orders_per_sec` / `max_cancels_per_sec`（滑动窗口计数），在主流程下单/撤单前检查
 
 ### 重连后校准（已实现）

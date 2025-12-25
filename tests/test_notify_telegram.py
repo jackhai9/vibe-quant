@@ -1,6 +1,6 @@
-# Input: 被测模块与 pytest 夹具
-# Output: pytest 断言结果（含限流重试）
-# Pos: 测试用例
+# Input: Telegram 通知模块与 pytest 夹具
+# Output: 通知格式与限流重试断言
+# Pos: Telegram 通知测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -131,6 +131,42 @@ async def test_notify_fill_formats_chinese_multiline(monkeypatch):
         "  交易对: BTC/USDT\n"
         "  成交: 0.1 @ 50000\n"
         "  执行: 挂单模式\n"
+        "  原因: long_primary\n"
+        "  仓位: 1.0 -> 0.9"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_notify_fill_includes_pnl(monkeypatch):
+    notifier = TelegramNotifier(token="token", chat_id="chat", enabled=True)
+    sent: List[str] = []
+
+    async def capture(text: str) -> bool:  # noqa: ANN001
+        sent.append(text)
+        return True
+
+    notifier._send_message = capture  # type: ignore[method-assign]  # noqa: SLF001
+
+    await notifier.notify_fill(
+        symbol="BTC/USDT:USDT",
+        side="LONG",
+        mode="MAKER_ONLY",
+        qty="0.1",
+        avg_price="50000",
+        reason="long_primary",
+        position_before="1.0",
+        position_after="0.9",
+        role="maker",
+        pnl="-0.1234 USDT",
+    )
+
+    assert sent == [
+        "【已成交】平多\n"
+        "  交易对: BTC/USDT\n"
+        "  成交: 0.1 @ 50000\n"
+        "  执行: 挂单模式\n"
+        "  角色: maker\n"
+        "  盈亏: -0.1234 USDT\n"
         "  原因: long_primary\n"
         "  仓位: 1.0 -> 0.9"
     ]
