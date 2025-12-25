@@ -514,6 +514,7 @@ class Application:
         filled_qty: Decimal,
         avg_price: Decimal,
         reason: str,
+        role: Optional[str],
     ) -> None:
         """ExecutionEngine 成交回调：用于触发 Telegram 通知（不得阻塞）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -530,6 +531,7 @@ class Application:
                 filled_qty=filled_qty,
                 avg_price=avg_price,
                 reason=reason,
+                role=role,
             ),
             name=f"fill:{symbol}:{position_side.value}",
         )
@@ -574,6 +576,7 @@ class Application:
         filled_qty: Decimal,
         avg_price: Decimal,
         reason: str,
+        role: Optional[str],
     ) -> None:
         """带仓位 before->after 的成交通知（尽量等一次 ACCOUNT_UPDATE）。"""
         if not self.config_loader or not self.telegram_notifier:
@@ -624,6 +627,7 @@ class Application:
             reason=reason,
             position_before=str(abs(before_amt)),
             position_after=str(abs(after_amt)),
+            role=role,
         )
 
     async def _gather_with_timeout(

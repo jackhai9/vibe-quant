@@ -78,6 +78,7 @@ class TelegramNotifier:
         reason: str,
         position_before: str,
         position_after: str,
+        role: Optional[str] = None,
     ) -> None:
         """
         发送成交通知
@@ -91,6 +92,7 @@ class TelegramNotifier:
             reason: 触发原因
             position_before: 成交前仓位
             position_after: 成交后仓位
+            role: 成交角色（maker/taker）
         """
         short_symbol = symbol.split(":")[0]
         action = "平多" if side == "LONG" else "平空"
@@ -99,10 +101,15 @@ class TelegramNotifier:
             "AGGRESSIVE_LIMIT": "激进限价",
         }.get(mode, mode)
 
+        role_str = ""
+        if role:
+            role_cn = {"maker": "挂单", "taker": "吃单"}.get(role, role)
+            role_str = f"\n  角色: {role_cn}"
+
         text = (
             f"【已成交】{action}\n"
             f"  交易对: {short_symbol}\n"
-            f"  成交: {qty} @ {avg_price}\n"
+            f"  成交: {qty} @ {avg_price}{role_str}\n"
             f"  执行: {mode_cn}\n"
             f"  原因: {reason}\n"
             f"  仓位: {position_before} -> {position_after}"

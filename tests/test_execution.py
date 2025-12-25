@@ -1104,8 +1104,8 @@ class TestFillCallback:
     async def test_on_fill_callback_receives_mode_and_reason(self, mock_place_order, mock_cancel_order, symbol_rules, market_state):
         events = []
 
-        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason):  # noqa: ANN001
-            events.append((symbol, position_side, mode, filled_qty, avg_price, reason))
+        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role):  # noqa: ANN001
+            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role))
 
         engine = ExecutionEngine(
             place_order=mock_place_order,
@@ -1151,8 +1151,8 @@ class TestFillCallback:
     async def test_on_fill_callback_uses_order_mode_at_placement(self, mock_place_order, mock_cancel_order, symbol_rules, market_state):
         events = []
 
-        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason):  # noqa: ANN001
-            events.append((symbol, position_side, mode, filled_qty, avg_price, reason))
+        def on_fill(symbol, position_side, mode, filled_qty, avg_price, reason, role):  # noqa: ANN001
+            events.append((symbol, position_side, mode, filled_qty, avg_price, reason, role))
 
         engine = ExecutionEngine(
             place_order=mock_place_order,

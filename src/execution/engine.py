@@ -62,7 +62,7 @@ class ExecutionEngine:
         place_order: Callable[[OrderIntent], Awaitable[OrderResult]],
         cancel_order: Callable[[str, str], Awaitable[OrderResult]],
         on_fill: Optional[
-            Callable[[str, PositionSide, ExecutionMode, Decimal, Decimal, str], None]
+            Callable[[str, PositionSide, ExecutionMode, Decimal, Decimal, str, Optional[str]], None]
         ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
@@ -561,7 +561,7 @@ class ExecutionEngine:
         # 成交通知（必须不阻塞主链路）
         if self._on_fill:
             try:
-                self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason)
+                self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason, role)
             except Exception as e:
                 get_logger().warning(f"on_fill 回调异常: {e}")
 
