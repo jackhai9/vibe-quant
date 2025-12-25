@@ -37,6 +37,7 @@
 - Telegram 成交通知新增角色显示（挂单/吃单）
 - Telegram 成交通知延迟到 WS 回执到来后发送（确保 role 正确）
 - 成交日志/Telegram 补充 `pnl`（来自 WS `rp`，Telegram 显示 `-0.1234 USDT` 固定 4 位）
+- 控制台 `fill` 日志的 `{message}` 内容着色为绿色（仅控制台）
 - `log_order_timeout`：`reason=timeout_count=1` → `timeout_count=1`
 - `log_startup`：`reason=symbols=...` → `symbols=...`
 - `src/main.py`：新增 `_log_startup_pos` 启动时显示有持仓状态

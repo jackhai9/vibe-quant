@@ -1,6 +1,6 @@
 # Input: log dir and normalized event fields
 # Output: configured logger and structured logging helpers
-# Pos: logging setup and event normalization (including fill roles/pnl)
+# Pos: logging setup and event normalization (including fill roles/pnl/console color for fill)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -225,16 +225,21 @@ def log_event(event_type: str, *, level: str | None = None, **fields) -> None:
         message = f"{message} {fields_str}"
 
     # 根据事件类型选择日志级别（level 参数可覆盖）
+    event_logger = _logger
+    if event_type == "fill":
+        event_logger = _logger.opt(colors=True)
+        message = f"<green>{message}</green>"
+
     if level == "debug":
-        _logger.debug(message)
+        event_logger.debug(message)
     elif level == "info":
-        _logger.info(message)
+        event_logger.info(message)
     elif level == "warning":
-        _logger.warning(message)
+        event_logger.warning(message)
     elif level == "error":
-        _logger.error(message)
+        event_logger.error(message)
     elif event_type == "error" or error:
-        _logger.error(message)
+        event_logger.error(message)
     elif event_type in (
         "ws_disconnect",
         "ws_reconnect",
@@ -243,13 +248,13 @@ def log_event(event_type: str, *, level: str | None = None, **fields) -> None:
         "rate_limit",
         "reject",
     ):
-        _logger.warning(message)
+        event_logger.warning(message)
     elif event_type in ("startup", "shutdown", "signal", "fill"):
-        _logger.info(message)
+        event_logger.info(message)
     elif event_type in ("market_update",):
-        _logger.debug(message)
+        event_logger.debug(message)
     else:
-        _logger.info(message)
+        event_logger.info(message)
 
 
 # 便捷函数
