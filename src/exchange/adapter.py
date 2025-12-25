@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data and order results
+# Output: market/position data, order results, and maker status
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -691,6 +691,44 @@ class ExchangeAdapter:
             logger = get_logger()
             logger.warning(f"获取 algo 挂单失败: {e}, symbol={symbol}")
             return []
+
+    async def fetch_order_maker_status(self, symbol: str, order_id: str) -> Optional[bool]:
+        """
+        查询订单成交的 maker 状态
+
+        Args:
+            symbol: 交易对（ccxt 格式，如 BTC/USDT:USDT）
+            order_id: 订单 ID
+
+        Returns:
+            True=maker, False=taker, None=未查到或出错
+        """
+        self._ensure_initialized()
+
+        # 转换 symbol 格式：BTC/USDT:USDT -> BTCUSDT
+        binance_symbol = symbol.replace("/", "").replace(":USDT", "")
+
+        try:
+            params = {
+                "symbol": binance_symbol,
+                "orderId": int(order_id),
+            }
+            resp = await self.exchange.fapiPrivateGetUserTrades(params)
+
+            if not isinstance(resp, list) or len(resp) == 0:
+                return None
+
+            # 多笔成交取第一笔（通常同一订单的成交 maker 状态一致）
+            first_trade = resp[0]
+            maker_value = first_trade.get("maker")
+            if isinstance(maker_value, bool):
+                return maker_value
+            return None
+
+        except Exception as e:
+            logger = get_logger()
+            logger.warning(f"查询订单 maker 状态失败: {e}, symbol={symbol}, order_id={order_id}")
+            return None
 
     def _parse_order_status(self, status_str: str) -> OrderStatus:
         """解析订单状态"""

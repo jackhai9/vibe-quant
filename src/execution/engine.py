@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
 # Output: OrderIntent and per-side execution state transitions
-# Pos: per-side execution state machine with WS fill role handling
+# Pos: per-side execution state machine with WS/REST fill role handling
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -64,6 +64,7 @@ class ExecutionEngine:
         on_fill: Optional[
             Callable[[str, PositionSide, ExecutionMode, Decimal, Decimal, str, Optional[str]], None]
         ] = None,
+        fetch_order_maker_status: Optional[Callable[[str, str], Awaitable[Optional[bool]]]] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
         base_lot_mult: int = 1,
@@ -84,6 +85,7 @@ class ExecutionEngine:
             place_order: 下单函数
             cancel_order: 撤单函数
             on_fill: 成交通知回调（不得阻塞主链路）
+            fetch_order_maker_status: 查询订单 maker 状态的函数（用于 WS 超时时回退查询）
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
             base_lot_mult: 基础片大小倍数
@@ -100,6 +102,7 @@ class ExecutionEngine:
         self.place_order = place_order
         self.cancel_order = cancel_order
         self._on_fill = on_fill
+        self._fetch_order_maker_status = fetch_order_maker_status
         self.order_ttl_ms = order_ttl_ms
         self.repost_cooldown_ms = repost_cooldown_ms
         self.base_lot_mult = base_lot_mult
@@ -438,7 +441,7 @@ class ExecutionEngine:
             return False
         return update.status == OrderStatus.FILLED and update.filled_qty > Decimal("0")
 
-    def _flush_pending_fill_if_expired(
+    async def _flush_pending_fill_if_expired(
         self,
         state: SideExecutionState,
         current_ms: int,
@@ -448,15 +451,29 @@ class ExecutionEngine:
         if current_ms - state.last_completed_ms <= self.ws_fill_grace_ms:
             return
         if state.last_completed_order_id:
+            # 尝试通过 REST 查询 maker 状态
+            role: Optional[str] = None
+            if self._fetch_order_maker_status:
+                try:
+                    is_maker = await self._fetch_order_maker_status(
+                        state.symbol, state.last_completed_order_id
+                    )
+                    if is_maker is not None:
+                        role = "maker" if is_maker else "taker"
+                except Exception as e:
+                    get_logger().warning(f"查询 maker 状态失败: {e}")
+            if role is None:
+                role = "unknown"
+
             log_order_fill(
                 symbol=state.symbol,
                 side=state.position_side.value,
                 order_id=state.last_completed_order_id,
                 filled_qty=state.last_completed_filled_qty,
                 avg_price=state.last_completed_avg_price,
-                role="unknown",
+                role=role,
             )
-            # 触发成交通知（使用缓存的 mode 和 reason，role=unknown）
+            # 触发成交通知（使用缓存的 mode 和 reason）
             if self._on_fill:
                 try:
                     self._on_fill(
@@ -466,7 +483,7 @@ class ExecutionEngine:
                         state.last_completed_filled_qty,
                         state.last_completed_avg_price,
                         state.last_completed_reason or "unknown",
-                        "unknown",
+                        role,
                     )
                 except Exception as e:
                     get_logger().warning(f"on_fill 回调异常: {e}")
@@ -485,7 +502,7 @@ class ExecutionEngine:
         """
         state = self.get_state(update.symbol, update.position_side)
 
-        self._flush_pending_fill_if_expired(state, current_ms)
+        await self._flush_pending_fill_if_expired(state, current_ms)
 
         # 检查是否是当前订单
         if state.current_order_id != update.order_id:
@@ -695,7 +712,7 @@ class ExecutionEngine:
             True 如果触发了撤单
         """
         state = self.get_state(symbol, position_side)
-        self._flush_pending_fill_if_expired(state, current_ms)
+        await self._flush_pending_fill_if_expired(state, current_ms)
         if not state.pending_fill_log and state.last_completed_order_id:
             if current_ms - state.last_completed_ms > self.ws_fill_grace_ms:
                 state.last_completed_order_id = None

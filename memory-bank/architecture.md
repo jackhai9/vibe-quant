@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含关键行为） -->
+<!-- Output: 架构与文件结构说明（含关键行为与日志规则） -->
 <!-- Pos: memory-bank/architecture 总览 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -175,7 +175,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
   - 多外部单并存时，WS 收到某一张终态不代表接管结束：先标记 pending，并触发一次 REST verify，只有 verify 确认“同侧外部 stop/tp 已不存在”才 release 并恢复自维护。
 - risk 订单优先级：`OrderIntent.is_risk=true` 的下单/撤单绕过软限速（`max_orders_per_sec`/`max_cancels_per_sec`），避免在强平风险区被限速“卡住”
 - 部分成交语义：`PARTIALLY_FILLED` 视为“有成交”，重置 `timeout_count`，避免误升级执行模式
-- 成交日志：以 WS 成交回执为准输出 `role=maker|taker`；REST 立即成交仅完成状态并缓存 `order_id`，在 `ws_fill_grace_ms` 窗口内接收迟到 WS 回执补打日志，超时则补打 `role=unknown`
+- 成交日志：以 WS 成交回执为准输出 `role=maker|taker`；REST 立即成交仅完成状态并缓存 `order_id`，在 `ws_fill_grace_ms` 窗口内接收迟到 WS 回执补打日志，超时后先通过 REST 查询 maker 状态；查询成功则输出 `maker/taker`，失败才回退为 `role=unknown`
 - 全局限速（Step 9.2）：`max_orders_per_sec` / `max_cancels_per_sec`（滑动窗口计数），在主流程下单/撤单前检查
 
 ### 重连后校准（已实现）

@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and events
+# Output: application lifecycle, async tasks, and order events
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -822,6 +822,7 @@ class Application:
                 place_order=self._place_order,
                 cancel_order=self._cancel_order,
                 on_fill=self._on_engine_fill,
+                fetch_order_maker_status=self.exchange.fetch_order_maker_status,
                 order_ttl_ms=config.order_ttl_ms,
                 repost_cooldown_ms=config.repost_cooldown_ms,
                 base_lot_mult=config.base_lot_mult,
