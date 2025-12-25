@@ -400,11 +400,14 @@ class ExecutionEngine:
                 state.pending_fill_log = True
                 state.last_completed_filled_qty = result.filled_qty
                 state.last_completed_avg_price = result.avg_price
+                state.last_completed_mode = state.current_order_mode or state.mode
+                state.last_completed_reason = state.current_order_reason or "unknown"
                 await self._handle_filled(
                     intent.symbol,
                     intent.position_side,
                     result,
                     emit_fill_log=False,
+                    emit_on_fill=False,
                 )
         else:
             # 下单失败，回到 IDLE 状态
@@ -453,8 +456,24 @@ class ExecutionEngine:
                 avg_price=state.last_completed_avg_price,
                 role="unknown",
             )
+            # 触发成交通知（使用缓存的 mode 和 reason，role=unknown）
+            if self._on_fill:
+                try:
+                    self._on_fill(
+                        state.symbol,
+                        state.position_side,
+                        state.last_completed_mode or state.mode,
+                        state.last_completed_filled_qty,
+                        state.last_completed_avg_price,
+                        state.last_completed_reason or "unknown",
+                        "unknown",
+                    )
+                except Exception as e:
+                    get_logger().warning(f"on_fill 回调异常: {e}")
         state.pending_fill_log = False
         state.last_completed_ms = current_ms
+        state.last_completed_mode = None
+        state.last_completed_reason = None
 
     async def on_order_update(self, update: OrderUpdate, current_ms: int) -> None:
         """
@@ -482,11 +501,27 @@ class ExecutionEngine:
                     avg_price=update.avg_price,
                     role=role,
                 )
+                # 触发成交通知（使用缓存的 mode 和 reason）
+                if self._on_fill:
+                    try:
+                        self._on_fill(
+                            update.symbol,
+                            update.position_side,
+                            state.last_completed_mode or state.mode,
+                            state.last_completed_filled_qty,
+                            state.last_completed_avg_price,
+                            state.last_completed_reason or "unknown",
+                            role,
+                        )
+                    except Exception as e:
+                        get_logger().warning(f"on_fill 回调异常: {e}")
                 state.pending_fill_log = False
                 state.last_completed_order_id = None
                 state.last_completed_ms = 0
                 state.last_completed_filled_qty = Decimal("0")
                 state.last_completed_avg_price = Decimal("0")
+                state.last_completed_mode = None
+                state.last_completed_reason = None
             else:
                 if state.last_completed_order_id == update.order_id:
                     # TODO: WS 回执迟到且已超时忽略，后续落库时补数据一致性
@@ -534,6 +569,7 @@ class ExecutionEngine:
         update: OrderUpdate | OrderResult,
         *,
         emit_fill_log: bool = True,
+        emit_on_fill: bool = True,
     ) -> None:
         """处理完全成交"""
         state = self.get_state(symbol, position_side)
@@ -559,7 +595,7 @@ class ExecutionEngine:
             )
 
         # 成交通知（必须不阻塞主链路）
-        if self._on_fill:
+        if emit_on_fill and self._on_fill:
             try:
                 self._on_fill(symbol, position_side, order_mode, filled_qty, avg_price, order_reason, role)
             except Exception as e:

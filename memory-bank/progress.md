@@ -35,6 +35,7 @@
 - 成交日志补充 `role=maker|taker`（仅在 WS 回执含 `is_maker` 时输出）
 - 成交日志以 WS 回执为准：REST 立即成交只完成状态并缓存 `order_id`，迟到回执在 `ws_fill_grace_ms` 内补打，超时补打 `role=unknown`
 - Telegram 成交通知新增角色显示（挂单/吃单）
+- Telegram 成交通知延迟到 WS 回执到来后发送（确保 role 正确）
 - `log_order_timeout`：`reason=timeout_count=1` → `timeout_count=1`
 - `log_startup`：`reason=symbols=...` → `symbols=...`
 - `src/main.py`：新增 `_log_startup_pos` 启动时显示有持仓状态

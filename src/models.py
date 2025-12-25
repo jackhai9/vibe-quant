@@ -314,6 +314,8 @@ class SideExecutionState:
     pending_fill_log: bool = False
     last_completed_filled_qty: Decimal = Decimal("0")
     last_completed_avg_price: Decimal = Decimal("0")
+    last_completed_mode: Optional["ExecutionMode"] = None
+    last_completed_reason: Optional[str] = None
 
     # 风控兜底（panic close）覆盖项：仅在 risk_active 时生效
     risk_active: bool = False

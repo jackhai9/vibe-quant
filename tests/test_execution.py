@@ -1141,11 +1141,30 @@ class TestFillCallback:
         )
         await engine.on_order_placed(intent=intent, result=result, current_ms=1100)
 
+        # REST 成交后 on_fill 不触发，等待 WS 回执
+        assert len(events) == 0
+
+        # 模拟 WS 回执到来
+        ws_update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="order_123",
+            client_order_id="client_123",
+            side=OrderSide.SELL,
+            status=OrderStatus.FILLED,
+            position_side=PositionSide.LONG,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50000"),
+            timestamp_ms=1200,
+            is_maker=True,
+        )
+        await engine.on_order_update(ws_update, current_ms=1200)
+
         assert len(events) == 1
         assert events[0][0] == "BTC/USDT:USDT"
         assert events[0][1] == PositionSide.LONG
         assert events[0][2] == ExecutionMode.MAKER_ONLY
         assert events[0][5] == SignalReason.LONG_PRIMARY.value
+        assert events[0][6] == "maker"
 
     @pytest.mark.asyncio
     async def test_on_fill_callback_uses_order_mode_at_placement(self, mock_place_order, mock_cancel_order, symbol_rules, market_state):
@@ -1191,8 +1210,27 @@ class TestFillCallback:
         )
         await engine.on_order_placed(intent=intent, result=result, current_ms=1100)
 
+        # REST 成交后 on_fill 不触发，等待 WS 回执
+        assert len(events) == 0
+
+        # 模拟 WS 回执到来
+        ws_update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="order_123",
+            client_order_id="client_123",
+            side=OrderSide.SELL,
+            status=OrderStatus.FILLED,
+            position_side=PositionSide.LONG,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50000"),
+            timestamp_ms=1200,
+            is_maker=False,
+        )
+        await engine.on_order_update(ws_update, current_ms=1200)
+
         assert len(events) == 1
         assert events[0][2] == ExecutionMode.AGGRESSIVE_LIMIT
+        assert events[0][6] == "taker"
 
         state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
         assert state.mode == ExecutionMode.MAKER_ONLY
