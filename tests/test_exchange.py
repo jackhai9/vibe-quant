@@ -10,6 +10,7 @@
 import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+import ccxt.async_support as ccxt
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
@@ -260,6 +261,7 @@ class TestAsyncMethods:
             "filled": 0,
             "average": None,
         })
+        mock.fapiPrivateDeleteAlgoOrder = AsyncMock(return_value={})
         mock.cancel_all_orders = AsyncMock(return_value=[])
         mock.fetch_open_orders = AsyncMock(return_value=[])
         mock.close = AsyncMock()
@@ -383,6 +385,22 @@ class TestAsyncMethods:
         assert result.success is True
         assert result.order_id == "12345"
         assert result.status == OrderStatus.CANCELED
+
+    @pytest.mark.asyncio
+    async def test_cancel_any_order_fallback_to_algo(self, mock_exchange):
+        """测试混合撤单回退到 algo"""
+        adapter = ExchangeAdapter("key", "secret")
+        adapter._exchange = mock_exchange
+        adapter._initialized = True
+
+        mock_exchange.cancel_order = AsyncMock(side_effect=ccxt.OrderNotFound("not found"))
+        mock_exchange.fapiPrivateDeleteAlgoOrder = AsyncMock(return_value={})
+
+        result = await adapter.cancel_any_order("BTC/USDT:USDT", "12345")
+        assert result.success is True
+        assert result.order_id == "12345"
+        assert result.status == OrderStatus.CANCELED
+        mock_exchange.fapiPrivateDeleteAlgoOrder.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_fetch_positions(self, mock_exchange):

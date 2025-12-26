@@ -721,7 +721,7 @@ class Application:
             if not order_id:
                 continue
             try:
-                await exchange.cancel_order(str(symbol), str(order_id))
+                await exchange.cancel_any_order(str(symbol), str(order_id))
                 cancelled += 1
             except Exception as e:
                 log_error(f"撤销挂单失败: {e}", symbol=str(symbol), order_id=str(order_id))
@@ -1865,7 +1865,7 @@ class Application:
                         f"撤销本程序挂单: {symbol} {order_id} client_order_id={client_order_id} reason={reason}"
                     )
                     try:
-                        await exchange.cancel_order(str(symbol), str(order_id))
+                        await exchange.cancel_any_order(str(symbol), str(order_id))
                         cancelled += 1
                     except Exception as e:
                         log_error(
@@ -1894,7 +1894,7 @@ class Application:
                     f"撤销本程序挂单: {symbol} {order_id} client_order_id={client_order_id} reason={reason}"
                 )
                 try:
-                    await exchange.cancel_order(str(symbol), str(order_id))
+                    await exchange.cancel_any_order(str(symbol), str(order_id))
                     cancelled += 1
                 except Exception as e:
                     log_error(

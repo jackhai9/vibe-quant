@@ -65,7 +65,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
         )
 
@@ -126,7 +126,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
         )
 
@@ -161,7 +161,7 @@ class TestProtectiveStopSync:
             dist_to_liq=Decimal("0.005"),
         )
 
-        exchange.cancel_order.assert_not_called()
+        exchange.cancel_algo_order.assert_not_called()
         exchange.place_order.assert_not_called()
 
     async def test_sync_does_not_relax_short_stop_price(self):
@@ -184,7 +184,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
         )
 
@@ -219,7 +219,7 @@ class TestProtectiveStopSync:
             dist_to_liq=Decimal("0.005"),
         )
 
-        exchange.cancel_order.assert_not_called()
+        exchange.cancel_algo_order.assert_not_called()
         exchange.place_order.assert_not_called()
 
     async def test_sync_cancels_order_when_no_position(self):
@@ -249,7 +249,7 @@ class TestProtectiveStopSync:
             ]
         )
         exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="123", status=OrderStatus.CANCELED)
         )
         exchange.place_order = AsyncMock(
@@ -272,7 +272,7 @@ class TestProtectiveStopSync:
             dist_to_liq=Decimal("0.01"),
         )
 
-        exchange.cancel_order.assert_called_once_with(symbol, "123")
+        exchange.cancel_algo_order.assert_called_once_with(symbol, "123")
         exchange.place_order.assert_not_called()
 
     async def test_sync_skips_when_external_close_position_algo_exists(self):
@@ -294,7 +294,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
         )
 
@@ -356,7 +356,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
         )
 
@@ -478,7 +478,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
         )
 
@@ -558,7 +558,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="123", status=OrderStatus.CANCELED)
         )
 
@@ -590,7 +590,7 @@ class TestProtectiveStopSync:
             dist_to_liq=Decimal("0.01"),
         )
 
-        exchange.cancel_order.assert_called_once_with(symbol, "123")
+        exchange.cancel_algo_order.assert_called_once_with(symbol, "123")
         exchange.place_order.assert_not_called()
 
     async def test_sync_does_not_churn_on_float_trigger_price(self):
@@ -615,7 +615,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
         )
 
@@ -650,7 +650,7 @@ class TestProtectiveStopSync:
             dist_to_liq=Decimal("0.015"),
         )
 
-        exchange.cancel_order.assert_not_called()
+        exchange.cancel_algo_order.assert_not_called()
         exchange.place_order.assert_not_called()
 
     async def test_sync_skips_when_ws_external_hint_active(self):
@@ -721,7 +721,7 @@ class TestProtectiveStopSync:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
         )
 
@@ -754,7 +754,7 @@ class TestProtectiveStopSync:
             external_stop_latch_by_side={PositionSide.SHORT: True},
         )
 
-        exchange.cancel_order.assert_not_called()
+        exchange.cancel_algo_order.assert_not_called()
         exchange.place_order.assert_not_called()
 
 
@@ -986,7 +986,7 @@ class TestInvalidExternalStop:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="new-1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="ext-invalid", status=OrderStatus.CANCELED)
         )
 
@@ -1021,7 +1021,7 @@ class TestInvalidExternalStop:
         )
 
         # 应该取消无效的外部止损
-        exchange.cancel_order.assert_called()
+        exchange.cancel_algo_order.assert_called()
         # 应该下新的有效止损单
         exchange.place_order.assert_called()
         # 应该有 cancel_invalid_external_stop 日志
@@ -1060,7 +1060,7 @@ class TestInvalidExternalStop:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="new-1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="ext-invalid", status=OrderStatus.CANCELED)
         )
 
@@ -1094,7 +1094,7 @@ class TestInvalidExternalStop:
             dist_to_liq=Decimal("0.01"),
         )
 
-        exchange.cancel_order.assert_called()
+        exchange.cancel_algo_order.assert_called()
         exchange.place_order.assert_not_called()
         assert any(e.get("reason") == "cancel_invalid_external_stop" for e in events)
 
@@ -1124,7 +1124,7 @@ class TestInvalidExternalStop:
         exchange.place_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="new-1", status=OrderStatus.NEW)
         )
-        exchange.cancel_order = AsyncMock(
+        exchange.cancel_algo_order = AsyncMock(
             return_value=OrderResult(success=True, order_id="ext-invalid", status=OrderStatus.CANCELED)
         )
 
@@ -1159,6 +1159,6 @@ class TestInvalidExternalStop:
             external_stop_latch_by_side={PositionSide.SHORT: True},
         )
 
-        exchange.cancel_order.assert_called()
+        exchange.cancel_algo_order.assert_called()
         exchange.place_order.assert_called()
         assert any(e.get("reason") == "cancel_invalid_external_stop" for e in events)

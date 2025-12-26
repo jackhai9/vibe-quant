@@ -485,21 +485,11 @@ class ExchangeAdapter:
                 error_message=str(e),
             )
 
-    async def cancel_order(self, symbol: str, order_id: str) -> OrderResult:
-        """
-        撤单（自动尝试普通订单和 algo 订单）
-
-        Args:
-            symbol: 交易对
-            order_id: 订单 ID
-
-        Returns:
-            OrderResult
-        """
+    async def _cancel_normal_order(self, symbol: str, order_id: str) -> OrderResult:
+        """撤销普通订单（不回退 algo）。"""
         self._ensure_initialized()
         logger = get_logger()
 
-        # 先尝试撤普通订单
         try:
             order = await self.exchange.cancel_order(order_id, symbol)
 
@@ -516,13 +506,35 @@ class ExchangeAdapter:
             logger.debug(f"撤单成功: {symbol} order_id={order_id}")
             return result
 
-        except ccxt.OrderNotFound:
-            # 普通订单不存在，尝试撤 algo 订单
-            return await self.cancel_algo_order(symbol, order_id)
+        except ccxt.OrderNotFound as e:
+            logger.debug(f"撤普通订单失败（不存在）: {symbol} order_id={order_id} - {e}")
+            return OrderResult(
+                success=False,
+                order_id=order_id,
+                status=None,
+                error_message=str(e),
+            )
         except Exception as e:
-            # 其他错误，也尝试撤 algo 订单
-            logger.debug(f"撤普通订单失败: {e}，尝试撤 algo 订单")
-            return await self.cancel_algo_order(symbol, order_id)
+            logger.debug(f"撤普通订单失败: {symbol} order_id={order_id} - {e}")
+            return OrderResult(
+                success=False,
+                order_id=order_id,
+                status=None,
+                error_message=str(e),
+            )
+
+    async def cancel_order(self, symbol: str, order_id: str) -> OrderResult:
+        """
+        撤单（普通订单，不回退 algo）
+
+        Args:
+            symbol: 交易对
+            order_id: 订单 ID
+
+        Returns:
+            OrderResult
+        """
+        return await self._cancel_normal_order(symbol, order_id)
 
     async def cancel_algo_order(self, symbol: str, algo_id: str) -> OrderResult:
         """
@@ -562,6 +574,22 @@ class ExchangeAdapter:
                 status=None,
                 error_message=str(e),
             )
+
+    async def cancel_any_order(self, symbol: str, order_id: str) -> OrderResult:
+        """
+        撤单（混合场景：先撤普通，失败后尝试撤 algo）
+
+        Args:
+            symbol: 交易对
+            order_id: 订单 ID
+
+        Returns:
+            OrderResult
+        """
+        result = await self._cancel_normal_order(symbol, order_id)
+        if result.success:
+            return result
+        return await self.cancel_algo_order(symbol, order_id)
 
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> List[OrderResult]:
         """

@@ -82,7 +82,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 |------|------|------|------|
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s + User Data Stream（含 ACCOUNT_UPDATE/ACCOUNT_CONFIG_UPDATE），断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
-| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单 | 配置, OrderIntent | OrderResult, Position |
+| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order） | 配置, OrderIntent | OrderResult, Position |
 | **SignalEngine** | 评估平仓触发条件，维护 prev/last trade price；计算 accel/ROI 倍数 | MarketEvent, Position | ExitSignal |
 | **ExecutionEngine** | 状态机管理，下单/撤单/TTL 超时处理 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
@@ -228,7 +228,7 @@ vibe-quant/
 │   ├── exchange/
 │   │   ├── README.md         # src/exchange 目录说明
 │   │   ├── __init__.py
-│   │   └── adapter.py        # ccxt 封装（markets/positions/下单/撤单）
+│   │   └── adapter.py        # ccxt 封装（markets/positions/下单/撤单：普通/条件单分离）
 │   ├── ws/
 │   │   ├── README.md         # src/ws 目录说明
 │   │   ├── __init__.py

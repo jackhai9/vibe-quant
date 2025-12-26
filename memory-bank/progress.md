@@ -22,6 +22,18 @@
 | 阶段 11：systemd 部署 | ✅ |
 | **小额实盘验证** | ✅ |
 
+## Milestone/附加改进：撤单接口分层（普通/条件单/混合）
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-26<br>
+**动机**：撤单调用方已知订单类型时不应自动回退，避免多余 REST 请求与重复日志；混合场景保留兜底。<br>
+**产出**：
+- `src/exchange/adapter.py`：新增 `cancel_any_order`，`cancel_order` 仅撤普通订单
+- `src/main.py`：启动/退出清理改用 `cancel_any_order` 覆盖混合订单场景
+- `src/risk/protective_stop.py`：保护止损改用 `cancel_algo_order`
+- `tests/test_exchange.py`：补充 `cancel_any_order` 回退测试
+- `tests/test_protective_stop.py`：撤单 mock 更新为 algo 撤单
+
 ## Milestone/附加改进：日志系统重构
 
 **状态**：✅ 已完成<br>

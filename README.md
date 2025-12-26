@@ -17,6 +17,7 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 - **多级风控**：强平距离预警 → 强制分片平仓 → 交易所端保护止损
 - **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
+- **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
 
 ## 架构概览
 
@@ -242,4 +243,3 @@ pyright src/
 ## License
 
 MIT
-

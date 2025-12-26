@@ -30,6 +30,7 @@ class DummyExchange:
     def __init__(self, orders):
         self.fetch_open_orders = AsyncMock(return_value=orders)
         self.cancel_order = AsyncMock(return_value=None)
+        self.cancel_any_order = AsyncMock(return_value=None)
 
 
 class DummyConfigLoader:
@@ -59,9 +60,9 @@ async def test_cancel_own_orders_should_only_cancel_instance_prefix():
     await app._cancel_own_orders(reason="test")
 
     exchange.fetch_open_orders.assert_called_once()
-    assert exchange.cancel_order.call_count == 2
-    exchange.cancel_order.assert_any_call("BTC/USDT:USDT", "1")
-    exchange.cancel_order.assert_any_call("ETH/USDT:USDT", "4")
+    assert exchange.cancel_any_order.call_count == 2
+    exchange.cancel_any_order.assert_any_call("BTC/USDT:USDT", "1")
+    exchange.cancel_any_order.assert_any_call("ETH/USDT:USDT", "4")
 
 
 @pytest.mark.asyncio
@@ -96,6 +97,6 @@ async def test_cancel_own_orders_should_fetch_per_symbol_when_symbols_known():
     await app._cancel_own_orders(reason="test")
 
     assert exchange.fetch_open_orders.call_args_list == [call("BTC/USDT:USDT"), call("ETH/USDT:USDT")]
-    assert exchange.cancel_order.call_count == 2
-    exchange.cancel_order.assert_any_call("BTC/USDT:USDT", "1")
-    exchange.cancel_order.assert_any_call("ETH/USDT:USDT", "4")
+    assert exchange.cancel_any_order.call_count == 2
+    exchange.cancel_any_order.assert_any_call("BTC/USDT:USDT", "1")
+    exchange.cancel_any_order.assert_any_call("ETH/USDT:USDT", "4")

@@ -547,7 +547,7 @@ class ProtectiveStopManager:
             order_id = self._extract_order_id(order)
             if order_id:
                 try:
-                    await self._exchange.cancel_order(symbol, order_id)
+                    await self._exchange.cancel_algo_order(symbol, order_id)
                 except Exception as e:
                     log_error(f"保护止损撤单失败: {e}", symbol=symbol, order_id=order_id)
 
@@ -559,7 +559,7 @@ class ProtectiveStopManager:
                 order_id = self._extract_order_id(keep_order)
                 if order_id:
                     try:
-                        await self._exchange.cancel_order(symbol, order_id)
+                        await self._exchange.cancel_algo_order(symbol, order_id)
                         log_event(
                             "risk",
                             symbol=symbol,
@@ -615,7 +615,7 @@ class ProtectiveStopManager:
                     if not external_order_id:
                         continue
                     try:
-                        await self._exchange.cancel_order(symbol, external_order_id)
+                        await self._exchange.cancel_algo_order(symbol, external_order_id)
                         log_event(
                             "risk",
                             symbol=symbol,
@@ -636,7 +636,7 @@ class ProtectiveStopManager:
                     order_id = self._extract_order_id(keep_order)
                     if order_id:
                         try:
-                            await self._exchange.cancel_order(symbol, order_id)
+                            await self._exchange.cancel_algo_order(symbol, order_id)
                             log_event(
                                 "risk",
                                 symbol=symbol,
@@ -730,7 +730,7 @@ class ProtectiveStopManager:
         # stopPrice 不同：撤旧建新（尽量保持系统端始终有单）
         if existing_order_id:
             try:
-                await self._exchange.cancel_order(symbol, existing_order_id)
+                await self._exchange.cancel_algo_order(symbol, existing_order_id)
             except Exception as e:
                 log_error(f"保护止损撤单失败: {e}", symbol=symbol, order_id=existing_order_id)
                 # 撤单失败：不继续建新，避免重复
