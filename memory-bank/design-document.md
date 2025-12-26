@@ -117,6 +117,15 @@ short_exit_condition_met = short_primary or short_ask_improve
   - **improve 信号**：信号类型为 `long_bid_improve` 或 `short_ask_improve` 时，直接使用 `AGGRESSIVE_LIMIT`（价格正在朝有利方向移动）
   - 风险兜底触发（接近强平）：强制切到 `AGGRESSIVE_LIMIT`
 
+**improve 信号触发路径（简化）**：
+```text
+MarketEvent -> SignalEngine 判定 improve
+           -> ExecutionEngine 切到 AGGRESSIVE_LIMIT
+           -> on_signal 生成 AGGRESSIVE_LIMIT 限价单
+           -> 立即下单（同一轮信号内）
+```
+说明：仍为 LIMIT 单（SELL=best_bid / BUY=best_ask），成交取决于盘口与状态机是否处于 IDLE。  
+
 ### 4.3 状态机（每侧）
 - `IDLE` → `PLACE` → `WAIT` → (`FILLED` | `TIMEOUT`) → `CANCEL` → `COOLDOWN` → `IDLE`
 

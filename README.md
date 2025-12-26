@@ -168,6 +168,8 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 | `MAKER_ONLY` | Post-only 限价（GTX），享受 Maker 费率 | 默认模式，流动性充足时 |
 | `AGGRESSIVE_LIMIT` | 普通限价（GTC），价格更贴近成交方向 | Maker 连续超时后自动升级 |
 
+补充：`long_bid_improve` / `short_ask_improve` 信号触发时，系统会直接切换到 `AGGRESSIVE_LIMIT` 并在同一轮信号内提交限价单（仍可能因盘口变化未立即成交）。
+
 ## 倍数系统
 
 最终下单数量 = `base_lot_mult × roi_mult × accel_mult`（受 `max_mult` 和 `max_order_notional` 约束）
