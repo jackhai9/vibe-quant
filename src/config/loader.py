@@ -1,5 +1,5 @@
 # Input: YAML config path and env vars
-# Output: AppConfig and merged symbol config
+# Output: AppConfig and merged symbol config (including execution feedback overrides)
 # Pos: config loader/merger
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -173,6 +173,25 @@ class ConfigLoader:
         maker_timeouts_to_escalate = _get_override(s_exec, "maker_timeouts_to_escalate", g_exec.maker_timeouts_to_escalate)
         aggr_fills_to_deescalate = _get_override(s_exec, "aggr_fills_to_deescalate", g_exec.aggr_fills_to_deescalate)
         aggr_timeouts_to_deescalate = _get_override(s_exec, "aggr_timeouts_to_deescalate", g_exec.aggr_timeouts_to_deescalate)
+        fill_rate_feedback_enabled = _get_override(
+            s_exec,
+            "fill_rate_feedback_enabled",
+            g_exec.fill_rate_feedback_enabled,
+        )
+        fill_rate_window_ms = _get_override(s_exec, "fill_rate_window_ms", g_exec.fill_rate_window_ms)
+        fill_rate_min_samples = _get_override(s_exec, "fill_rate_min_samples", g_exec.fill_rate_min_samples)
+        fill_rate_low_threshold = _get_override(s_exec, "fill_rate_low_threshold", g_exec.fill_rate_low_threshold)
+        fill_rate_high_threshold = _get_override(s_exec, "fill_rate_high_threshold", g_exec.fill_rate_high_threshold)
+        fill_rate_low_maker_timeouts_to_escalate = _get_override(
+            s_exec,
+            "fill_rate_low_maker_timeouts_to_escalate",
+            g_exec.fill_rate_low_maker_timeouts_to_escalate,
+        )
+        fill_rate_high_maker_timeouts_to_escalate = _get_override(
+            s_exec,
+            "fill_rate_high_maker_timeouts_to_escalate",
+            g_exec.fill_rate_high_maker_timeouts_to_escalate,
+        )
 
         # 合并加速配置
         accel_window_ms = _get_override(s_accel, "window_ms", g_accel.window_ms)
@@ -227,6 +246,13 @@ class ConfigLoader:
             maker_timeouts_to_escalate=maker_timeouts_to_escalate,
             aggr_fills_to_deescalate=aggr_fills_to_deescalate,
             aggr_timeouts_to_deescalate=aggr_timeouts_to_deescalate,
+            fill_rate_feedback_enabled=fill_rate_feedback_enabled,
+            fill_rate_window_ms=fill_rate_window_ms,
+            fill_rate_min_samples=fill_rate_min_samples,
+            fill_rate_low_threshold=fill_rate_low_threshold,
+            fill_rate_high_threshold=fill_rate_high_threshold,
+            fill_rate_low_maker_timeouts_to_escalate=fill_rate_low_maker_timeouts_to_escalate,
+            fill_rate_high_maker_timeouts_to_escalate=fill_rate_high_maker_timeouts_to_escalate,
             # 加速
             accel_window_ms=accel_window_ms,
             accel_tiers=accel_tiers,

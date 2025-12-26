@@ -1,5 +1,5 @@
 <!-- Input: 项目概述与使用方式 -->
-<!-- Output: 使用说明与快速上手 -->
+<!-- Output: 使用说明与快速上手（含执行反馈） -->
 <!-- Pos: 项目根 README -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -14,6 +14,7 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 - **Hedge 模式专用**：所有订单 `reduceOnly=True`，支持 `positionSide=LONG/SHORT`
 - **执行模式轮转**：Maker 挂单优先，超时自动升级为 Aggressive Limit
 - **智能倍数系统**：ROI + 加速度双倍数叠加，动态调整单笔数量
+- **成交率反馈**：根据 maker 成交率动态调整升级阈值
 - **多级风控**：强平距离预警 → 强制分片平仓 → 交易所端保护止损
 - **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream
 - **Telegram 通知**：成交、重连、风险触发、开仓告警

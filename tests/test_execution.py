@@ -1,5 +1,5 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言
+# Output: 状态机行为断言与执行反馈校验
 # Pos: ExecutionEngine 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -142,6 +142,42 @@ class TestExecutionEngineInit:
         assert engine.maker_n_ticks == 3
         assert engine.max_mult == 100
         assert engine.max_order_notional == Decimal("500")
+
+
+@pytest.mark.asyncio
+async def test_fill_rate_feedback_low_sets_override():
+    """成交率低时应覆盖 maker_timeouts_to_escalate。"""
+    engine = ExecutionEngine(
+        place_order=AsyncMock(),
+        cancel_order=AsyncMock(),
+        fill_rate_feedback_enabled=True,
+        fill_rate_window_ms=1000,
+        fill_rate_min_samples=2,
+        fill_rate_low_threshold=Decimal("0.5"),
+        fill_rate_high_threshold=Decimal("0.9"),
+        fill_rate_low_maker_timeouts_to_escalate=1,
+        fill_rate_high_maker_timeouts_to_escalate=3,
+    )
+    state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+    state.mode = ExecutionMode.MAKER_ONLY
+    state.current_order_mode = ExecutionMode.MAKER_ONLY
+
+    intent = OrderIntent(
+        symbol="BTC/USDT:USDT",
+        side=OrderSide.SELL,
+        position_side=PositionSide.LONG,
+        qty=Decimal("0.01"),
+        price=Decimal("100"),
+        time_in_force=TimeInForce.GTX,
+        reduce_only=True,
+    )
+    result = OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+    await engine.on_order_placed(intent, result, current_ms=0)
+    result2 = OrderResult(success=True, order_id="2", status=OrderStatus.NEW)
+    await engine.on_order_placed(intent, result2, current_ms=10)
+
+    assert state.fill_rate_bucket == "low"
+    assert state.fill_rate_maker_timeouts_override == 1
 
 
 class TestStateManagement:

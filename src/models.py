@@ -1,5 +1,5 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts
+# Output: shared enums and dataclasses for module contracts and execution metrics
 # Pos: core data contracts, events, and execution state
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -10,9 +10,10 @@
 """
 
 from dataclasses import dataclass, field
+from collections import deque
 from decimal import Decimal
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal, Optional, Deque
 
 
 # ============================================================
@@ -338,6 +339,13 @@ class SideExecutionState:
 
     # 冷却结束时间
     cooldown_until_ms: int = 0
+
+    # 成交率反馈（maker 提交/成交）
+    recent_maker_submits: Deque[int] = field(default_factory=deque)
+    recent_maker_fills: Deque[int] = field(default_factory=deque)
+    fill_rate: Optional[Decimal] = None
+    fill_rate_bucket: Optional[str] = None
+    fill_rate_maker_timeouts_override: Optional[int] = None
 
 
 # ============================================================

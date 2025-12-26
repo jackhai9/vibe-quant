@@ -6,7 +6,7 @@
 # src/config 目录说明
 
 YAML 配置加载与模型验证。<br>
-支持 global 默认 + symbol 覆盖合并。<br>
+支持 global 默认 + symbol 覆盖合并（含执行反馈参数）。<br>
 对外提供合并后的配置对象。
 
 ## 文件清单
@@ -14,4 +14,3 @@ YAML 配置加载与模型验证。<br>
 - `loader.py`：配置加载与合并逻辑
 - `models.py`：pydantic 配置模型
 - `__init__.py`：模块导出
-

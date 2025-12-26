@@ -6,7 +6,7 @@
 # src/execution 目录说明
 
 执行状态机与下单逻辑。<br>
-支持 maker/aggressive 模式轮转。<br>
+支持 maker/aggressive 模式轮转与成交率反馈。<br>
 管理普通订单撤单、冷却与 TTL（含成交角色/盈亏/手续费兜底）。
 
 ## 文件清单

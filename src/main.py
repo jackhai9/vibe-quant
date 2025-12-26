@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and order events (including fill meta)
+# Output: application lifecycle, async tasks, and order events (including fill meta and feedback)
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -862,6 +862,13 @@ class Application:
                 maker_timeouts_to_escalate=config.maker_timeouts_to_escalate,
                 aggr_fills_to_deescalate=config.aggr_fills_to_deescalate,
                 aggr_timeouts_to_deescalate=config.aggr_timeouts_to_deescalate,
+                fill_rate_feedback_enabled=config.fill_rate_feedback_enabled,
+                fill_rate_window_ms=config.fill_rate_window_ms,
+                fill_rate_min_samples=config.fill_rate_min_samples,
+                fill_rate_low_threshold=config.fill_rate_low_threshold,
+                fill_rate_high_threshold=config.fill_rate_high_threshold,
+                fill_rate_low_maker_timeouts_to_escalate=config.fill_rate_low_maker_timeouts_to_escalate,
+                fill_rate_high_maker_timeouts_to_escalate=config.fill_rate_high_maker_timeouts_to_escalate,
                 max_mult=config.max_mult,
                 max_order_notional=config.max_order_notional,
             )

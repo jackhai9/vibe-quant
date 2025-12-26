@@ -48,6 +48,15 @@ global:
     aggr_fills_to_deescalate: 1
     aggr_timeouts_to_deescalate: 2
 
+    # 成交率反馈（可选）
+    fill_rate_feedback_enabled: false
+    fill_rate_window_ms: 300000
+    fill_rate_min_samples: 10
+    fill_rate_low_threshold: 0.25
+    fill_rate_high_threshold: 0.75
+    fill_rate_low_maker_timeouts_to_escalate: 1
+    fill_rate_high_maker_timeouts_to_escalate: 3
+
   # 加速倍数
   accel:
     window_ms: 2000       # 2秒窗口

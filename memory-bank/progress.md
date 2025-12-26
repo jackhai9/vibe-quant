@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态 -->
+<!-- Output: 可追溯的变更与状态（含执行反馈） -->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -43,6 +43,18 @@
 - `src/main.py`：Post-only 被拒后，同一轮信号内切到 `AGGRESSIVE_LIMIT` 重试一次
 - `tests/test_post_only_retry.py`：新增重试行为测试
 - `docs/troubleshooting.md` / `memory-bank/design-document.md`：补充行为说明
+
+## Milestone/附加改进：成交率反馈闭环
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-26<br>
+**动机**：根据 maker 成交率动态调整升级阈值，减少无效等待。<br>
+**产出**：
+- `src/execution/engine.py`：记录 maker 提交/成交并根据成交率动态覆盖 `maker_timeouts_to_escalate`
+- `src/models.py`：补充成交率统计字段
+- `src/config/models.py` / `src/config/loader.py`：新增执行反馈参数并支持覆盖
+- `config/config.example.yaml` / `docs/configuration.md`：补充配置说明
+- `tests/test_execution.py`：新增成交率反馈测试
 
 ## Milestone/附加改进：日志系统重构
 

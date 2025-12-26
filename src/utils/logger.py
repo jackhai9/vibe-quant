@@ -1,5 +1,5 @@
 # Input: log dir and normalized event fields
-# Output: configured logger and structured logging helpers
+# Output: configured logger and structured logging helpers (including event type CN map)
 # Pos: logging setup and event normalization (including fill roles/pnl/console color for fill)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -54,6 +54,7 @@ EVENT_TYPE_CN = {
     "rate_limit": "限速",
     "reject": "拒单",
     "order_retry": "重试",
+    "fill_rate": "成交率",
     "error": "错误",
 }
 
