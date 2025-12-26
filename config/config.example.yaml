@@ -52,7 +52,7 @@ global:
     fill_rate_feedback_enabled: false
     fill_rate_window_min: 5                # 成交率反馈窗口（分钟）
     fill_rate_low_threshold: 0.25          # <25% 视为低成交率（本轮信号直接切 AGGRESSIVE_LIMIT）
-    fill_rate_high_threshold: 0.75         # >75% 视为高成交率（execution.order_ttl_ms +25%）
+    fill_rate_high_threshold: 0.75         # >75% 视为高成交率（execution.order_ttl_ms + 25%）
     fill_rate_log_windows_min: [1, 5, 15]  # 成交率日志窗口（分钟），为空表示关闭日志
 
   # 加速倍数
