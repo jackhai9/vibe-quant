@@ -289,10 +289,10 @@ symbols:
 - **默认值**: `false`
 - **说明**: 是否启用成交率反馈（低成交率时本轮信号直接切换为 AGGRESSIVE_LIMIT，高成交率时 maker TTL 延长 25%）
 
-##### fill_rate_window_ms
-- **类型**: `int`
-- **默认值**: `300000`
-- **单位**: 毫秒
+##### fill_rate_window_min
+- **类型**: `decimal`
+- **默认值**: `5`
+- **单位**: 分钟
 - **说明**: 成交率统计窗口
 
 ##### fill_rate_low_threshold
@@ -306,6 +306,12 @@ symbols:
 - **默认值**: `0.75`
 - **范围**: `[0, 1]`
 - **说明**: 成交率高阈值（高于该值时 maker TTL 延长 25%）
+
+##### fill_rate_log_windows_min
+- **类型**: `list[decimal]`
+- **默认值**: `[]`
+- **单位**: 分钟
+- **说明**: 成交率日志输出窗口列表；为空则使用 `fill_rate_window_min` 单窗口输出
 
 ##### fill_rate_log_interval_ms
 - **类型**: `int`

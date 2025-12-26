@@ -24,7 +24,7 @@
 IDLE → PLACING → WAITING → (FILLED|TIMEOUT) → CANCELING → COOLDOWN → IDLE
 """
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Callable, Dict, Optional, Awaitable
 
 from src.models import (
@@ -97,9 +97,10 @@ class ExecutionEngine:
         max_order_notional: Decimal = Decimal("200"),
         ws_fill_grace_ms: int = 5000,
         fill_rate_feedback_enabled: bool = False,
-        fill_rate_window_ms: int = 300000,
+        fill_rate_window_min: Decimal = Decimal("5"),
         fill_rate_low_threshold: Decimal = Decimal("0.25"),
         fill_rate_high_threshold: Decimal = Decimal("0.75"),
+        fill_rate_log_windows_min: Optional[list[Decimal]] = None,
     ):
         """
         初始化执行引擎
@@ -122,9 +123,10 @@ class ExecutionEngine:
             max_order_notional: 最大订单名义价值
             ws_fill_grace_ms: 已完成订单等待 WS 成交回执的最大时间
             fill_rate_feedback_enabled: 是否启用成交率反馈
-            fill_rate_window_ms: 成交率统计窗口(ms)
+            fill_rate_window_min: 成交率统计窗口(分钟)
             fill_rate_low_threshold: 低成交率阈值
             fill_rate_high_threshold: 高成交率阈值
+            fill_rate_log_windows_min: 成交率日志窗口列表(分钟)
         """
         self.place_order = place_order
         self.cancel_order = cancel_order
@@ -145,15 +147,21 @@ class ExecutionEngine:
         self.max_order_notional = max_order_notional
         self.ws_fill_grace_ms = ws_fill_grace_ms
         self.fill_rate_feedback_enabled = fill_rate_feedback_enabled
-        self.fill_rate_window_ms = fill_rate_window_ms
+        self.fill_rate_window_ms = self._minutes_to_ms(fill_rate_window_min)
         self.fill_rate_low_threshold = fill_rate_low_threshold
         self.fill_rate_high_threshold = fill_rate_high_threshold
+        log_windows = [w for w in (fill_rate_log_windows_min or []) if w and w > 0]
+        if log_windows:
+            max_window_ms = max(self._minutes_to_ms(w) for w in log_windows)
+            self.fill_rate_retain_window_ms = max(self.fill_rate_window_ms, max_window_ms)
+        else:
+            self.fill_rate_retain_window_ms = self.fill_rate_window_ms
 
         if self.fill_rate_feedback_enabled:
             if self.fill_rate_low_threshold > self.fill_rate_high_threshold:
                 raise ValueError("fill_rate_low_threshold must be <= fill_rate_high_threshold")
             if self.fill_rate_window_ms <= 0:
-                raise ValueError("fill_rate_window_ms must be > 0")
+                raise ValueError("fill_rate_window_min must be > 0")
 
         self._states: Dict[str, SideExecutionState] = {}  # key: symbol:position_side
 
@@ -198,20 +206,16 @@ class ExecutionEngine:
         if is_fill:
             state.recent_maker_fills.append(current_ms)
 
-        cutoff = current_ms - self.fill_rate_window_ms
-        while state.recent_maker_submits and state.recent_maker_submits[0] < cutoff:
-            state.recent_maker_submits.popleft()
-        while state.recent_maker_fills and state.recent_maker_fills[0] < cutoff:
-            state.recent_maker_fills.popleft()
-
-        submits = len(state.recent_maker_submits)
+        self._trim_fill_rate_buffers(state, current_ms)
+        decision_cutoff = current_ms - self.fill_rate_window_ms
+        submits = self._count_since(state.recent_maker_submits, decision_cutoff)
         if submits == 0:
             state.fill_rate = None
             state.fill_rate_bucket = None
             state.fill_rate_ttl_override = None
             return
 
-        fills = len(state.recent_maker_fills)
+        fills = self._count_since(state.recent_maker_fills, decision_cutoff)
         fill_rate = Decimal(fills) / Decimal(submits)
         bucket: str
         ttl_override: Optional[int]
@@ -250,6 +254,57 @@ class ExecutionEngine:
         """刷新成交率窗口（不强制输出日志）。"""
         state = self.get_state(symbol, position_side)
         self._update_fill_rate(state, current_ms)
+
+    def get_fill_rate_windows(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        current_ms: int,
+        windows_min: list[Decimal],
+    ) -> list[dict]:
+        """返回多个窗口的成交率统计（用于周期性日志）。"""
+        if not self.fill_rate_feedback_enabled:
+            return []
+        state = self.get_state(symbol, position_side)
+        self._trim_fill_rate_buffers(state, current_ms)
+        metrics: list[dict] = []
+        for window_min in windows_min:
+            if window_min <= 0:
+                continue
+            window_ms = self._minutes_to_ms(window_min)
+            cutoff = current_ms - window_ms
+            submits = self._count_since(state.recent_maker_submits, cutoff)
+            if submits == 0:
+                continue
+            fills = self._count_since(state.recent_maker_fills, cutoff)
+            metrics.append(
+                {
+                    "window_min": window_min,
+                    "window_ms": window_ms,
+                    "submits": submits,
+                    "fills": fills,
+                    "fill_rate": Decimal(fills) / Decimal(submits),
+                }
+            )
+        return metrics
+
+    def _trim_fill_rate_buffers(self, state: SideExecutionState, current_ms: int) -> None:
+        retain_cutoff = current_ms - self.fill_rate_retain_window_ms
+        while state.recent_maker_submits and state.recent_maker_submits[0] < retain_cutoff:
+            state.recent_maker_submits.popleft()
+        while state.recent_maker_fills and state.recent_maker_fills[0] < retain_cutoff:
+            state.recent_maker_fills.popleft()
+
+    @staticmethod
+    def _count_since(values, cutoff: int) -> int:
+        for idx, ts in enumerate(values):
+            if ts >= cutoff:
+                return len(values) - idx
+        return 0
+
+    @staticmethod
+    def _minutes_to_ms(minutes: Decimal) -> int:
+        return int((minutes * Decimal("60000")).to_integral_value(rounding=ROUND_HALF_UP))
 
     async def on_signal(
         self,

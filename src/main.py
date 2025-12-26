@@ -865,9 +865,10 @@ class Application:
                 aggr_fills_to_deescalate=config.aggr_fills_to_deescalate,
                 aggr_timeouts_to_deescalate=config.aggr_timeouts_to_deescalate,
                 fill_rate_feedback_enabled=config.fill_rate_feedback_enabled,
-                fill_rate_window_ms=config.fill_rate_window_ms,
+                fill_rate_window_min=config.fill_rate_window_min,
                 fill_rate_low_threshold=config.fill_rate_low_threshold,
                 fill_rate_high_threshold=config.fill_rate_high_threshold,
+                fill_rate_log_windows_min=config.fill_rate_log_windows_min,
                 max_mult=config.max_mult,
                 max_order_notional=config.max_order_notional,
             )
@@ -1831,10 +1832,16 @@ class Application:
             return
 
         intervals_ms: dict[tuple[str, PositionSide], int] = {}
+        windows_ms_map: dict[tuple[str, PositionSide], list[int]] = {}
         for symbol, cfg in self._symbol_configs.items():
             interval_ms = int(cfg.fill_rate_log_interval_ms)
+            if cfg.fill_rate_log_windows_min:
+                windows_min = [Decimal(str(v)) for v in cfg.fill_rate_log_windows_min if Decimal(str(v)) > 0]
+            else:
+                windows_min = [cfg.fill_rate_window_min]
             for side in (PositionSide.LONG, PositionSide.SHORT):
                 intervals_ms[(symbol, side)] = interval_ms
+                windows_ms_map[(symbol, side)] = windows_min
 
         enabled_intervals = [v for v in intervals_ms.values() if v > 0]
         if not enabled_intervals:
@@ -1855,7 +1862,18 @@ class Application:
                     engine = self.execution_engines.get(symbol)
                     if not engine:
                         continue
-                    engine.log_fill_rate_snapshot(symbol, side, now_ms)
+                    windows_min = windows_ms_map.get((symbol, side), [])
+                    metrics = engine.get_fill_rate_windows(symbol, side, now_ms, windows_min)
+                    for metric in metrics:
+                        log_event(
+                            "fill_rate",
+                            symbol=symbol,
+                            side=side.value,
+                            window_min=metric["window_min"],
+                            fill_rate=metric["fill_rate"],
+                            submits=metric["submits"],
+                            fills=metric["fills"],
+                        )
                     self._fill_rate_last_log_ms[(symbol, side)] = now_ms
             except asyncio.CancelledError:
                 break

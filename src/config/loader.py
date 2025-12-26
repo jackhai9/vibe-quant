@@ -178,9 +178,14 @@ class ConfigLoader:
             "fill_rate_feedback_enabled",
             g_exec.fill_rate_feedback_enabled,
         )
-        fill_rate_window_ms = _get_override(s_exec, "fill_rate_window_ms", g_exec.fill_rate_window_ms)
+        fill_rate_window_min = _get_override(s_exec, "fill_rate_window_min", g_exec.fill_rate_window_min)
         fill_rate_low_threshold = _get_override(s_exec, "fill_rate_low_threshold", g_exec.fill_rate_low_threshold)
         fill_rate_high_threshold = _get_override(s_exec, "fill_rate_high_threshold", g_exec.fill_rate_high_threshold)
+        fill_rate_log_windows_min = _get_override(
+            s_exec,
+            "fill_rate_log_windows_min",
+            g_exec.fill_rate_log_windows_min,
+        )
         fill_rate_log_interval_ms = _get_override(
             s_exec,
             "fill_rate_log_interval_ms",
@@ -241,9 +246,10 @@ class ConfigLoader:
             aggr_fills_to_deescalate=aggr_fills_to_deescalate,
             aggr_timeouts_to_deescalate=aggr_timeouts_to_deescalate,
             fill_rate_feedback_enabled=fill_rate_feedback_enabled,
-            fill_rate_window_ms=fill_rate_window_ms,
+            fill_rate_window_min=fill_rate_window_min,
             fill_rate_low_threshold=fill_rate_low_threshold,
             fill_rate_high_threshold=fill_rate_high_threshold,
+            fill_rate_log_windows_min=fill_rate_log_windows_min,
             fill_rate_log_interval_ms=fill_rate_log_interval_ms,
             # 加速
             accel_window_ms=accel_window_ms,

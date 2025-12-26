@@ -170,7 +170,7 @@ class ExecutionConfig(BaseModel):
         default=False,
         description="是否启用成交率反馈（低成交率直接切 AGGRESSIVE_LIMIT，高成交率延长 maker TTL）",
     )
-    fill_rate_window_ms: int = Field(default=300000, description="成交率统计窗口(ms)")
+    fill_rate_window_min: Decimal = Field(default=Decimal("5"), gt=Decimal("0"), description="成交率统计窗口(分钟)")
     fill_rate_low_threshold: Decimal = Field(
         default=Decimal("0.25"),
         ge=Decimal("0"),
@@ -182,6 +182,10 @@ class ExecutionConfig(BaseModel):
         ge=Decimal("0"),
         le=Decimal("1"),
         description="高成交率阈值（高于该值延长 maker TTL）",
+    )
+    fill_rate_log_windows_min: List[Decimal] = Field(
+        default_factory=list,
+        description="成交率日志窗口列表(分钟)，为空则使用 fill_rate_window_min",
     )
     fill_rate_log_interval_ms: int = Field(default=30000, description="成交率日志输出间隔(ms)，<=0 表示关闭")
 
@@ -205,9 +209,10 @@ class SymbolExecutionConfig(BaseModel):
     aggr_fills_to_deescalate: Optional[int] = None
     aggr_timeouts_to_deescalate: Optional[int] = None
     fill_rate_feedback_enabled: Optional[bool] = None
-    fill_rate_window_ms: Optional[int] = None
+    fill_rate_window_min: Optional[Decimal] = Field(default=None, gt=Decimal("0"))
     fill_rate_low_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_high_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
+    fill_rate_log_windows_min: Optional[List[Decimal]] = None
     fill_rate_log_interval_ms: Optional[int] = None
 
 
@@ -319,9 +324,10 @@ class MergedSymbolConfig(BaseModel):
     aggr_fills_to_deescalate: int
     aggr_timeouts_to_deescalate: int
     fill_rate_feedback_enabled: bool
-    fill_rate_window_ms: int
+    fill_rate_window_min: Decimal
     fill_rate_low_threshold: Decimal
     fill_rate_high_threshold: Decimal
+    fill_rate_log_windows_min: List[Decimal]
     fill_rate_log_interval_ms: int
 
     # 加速
