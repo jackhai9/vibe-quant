@@ -555,7 +555,7 @@ class ExchangeAdapter:
             return result
 
         except Exception as e:
-            logger.warning(f"撤 algo 订单失败（可能已成交/取消）: {symbol} algo_id={algo_id} - {e}")
+            logger.debug(f"撤 algo 订单失败（可能已成交/取消）: {symbol} algo_id={algo_id} - {e}")
             return OrderResult(
                 success=False,
                 order_id=algo_id,
