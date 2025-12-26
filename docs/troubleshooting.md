@@ -319,6 +319,31 @@ grep "\\[RISK\\]" logs/vibe-quant_$(date +%Y-%m-%d).log | grep "external_stop_mu
            enabled: false
    ```<br>
 
+### 问题：撤单失败，错误码 `-2011`（Unknown order sent）
+
+**典型错误**：`Unknown order sent.`<br>
+
+**原因**（常见）：<br>
+1. 订单已成交/已撤销（撤单竞态时属于正常情况）<br>
+2. 条件单使用了普通撤单接口（或反之）<br>
+3. symbol 不匹配或 order_id 过期
+
+**系统行为（预期）**：<br>
+- ExecutionEngine 仅撤普通订单（`cancel_order`）<br>
+- ProtectiveStop 仅撤 algo 订单（`cancel_algo_order`）<br>
+- 启动/退出清理使用 `cancel_any_order` 覆盖混合场景
+
+**排查方法**：<br>
+```bash
+# 查看撤单失败日志
+grep "撤单请求失败\\|撤 .*订单失败" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -50
+```
+
+**解决方案**：<br>
+1. 确认该订单是否仍在挂单列表（openOrders / openAlgoOrders）<br>
+2. 若订单类型不确定，使用 `cancel_any_order` 进行混合撤单<br>
+3. 若频繁出现且影响执行，检查是否存在重复撤单或撤单超时逻辑过于激进
+
 ### 问题：订单被拒绝，错误码 `-5022`
 
 **典型错误**：`Post Only order will be rejected` / `Due to the order could not be executed as maker ...`<br>

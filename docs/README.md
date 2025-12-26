@@ -7,11 +7,10 @@
 
 部署/运维文档与项目运行方式保持一致。<br>
 配置参数说明用于指导修改 YAML 与环境变量。<br>
-排障指南用于定位常见问题与恢复流程。
+排障指南用于定位常见问题与恢复流程（含撤单失败与混合撤单场景）。
 
 ## 文件清单
 
 - `deployment.md`：部署与运维指南（systemd/Docker/日志/监控/备份）
 - `configuration.md`：配置参数手册（global/symbol 覆盖）
 - `troubleshooting.md`：故障排查指南
-
