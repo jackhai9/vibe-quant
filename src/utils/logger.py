@@ -53,6 +53,7 @@ EVENT_TYPE_CN = {
     "risk": "风控",
     "rate_limit": "限速",
     "reject": "拒单",
+    "order_retry": "重试",
     "error": "错误",
 }
 
