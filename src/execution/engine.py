@@ -1183,6 +1183,7 @@ class ExecutionEngine:
             mode=new_mode.value,
             reason=reason,
             from_mode=from_mode.value,
+            level="debug",
         )
 
     def compute_qty(
