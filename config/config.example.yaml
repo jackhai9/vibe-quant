@@ -48,11 +48,11 @@ global:
     aggr_fills_to_deescalate: 1
     aggr_timeouts_to_deescalate: 2
 
-    # 成交率反馈（可选）
+    # maker挂单成交率反馈
     fill_rate_feedback_enabled: false
     fill_rate_window_min: 5                # 成交率反馈窗口（分钟）
     fill_rate_low_threshold: 0.25          # <25% 视为低成交率（本轮信号直接切 AGGRESSIVE_LIMIT）
-    fill_rate_high_threshold: 0.75         # >75% 视为高成交率（maker TTL +25%）
+    fill_rate_high_threshold: 0.75         # >75% 视为高成交率（execution.order_ttl_ms +25%）
     fill_rate_log_windows_min: [1, 5, 15]  # 成交率日志窗口（分钟），为空表示关闭日志
 
   # 加速倍数
@@ -89,8 +89,11 @@ global:
     # 平仓时先尝试限价，如果超时未成交则使用 AGGRESSIVE_LIMIT
     panic_close:
       enabled: true
+      # 超时未成交时间是常规order_ttl_ms的固定比例  TTL = execution.order_ttl_ms × ttl_percent
       ttl_percent: 0.5
       tiers:
+        # 梯度，dist_to_liq 越小越危险，按最危险档位执行。
+        # dist_to_liq 是距离强平价的比例。slice_ratio 是每次平仓的比例。maker_timeouts_to_escalate 是先尝试限价的次数，超时未成交则使用 AGGRESSIVE_LIMIT
         - { dist_to_liq: 0.04, slice_ratio: 0.02, maker_timeouts_to_escalate: 2 }
         - { dist_to_liq: 0.03, slice_ratio: 0.05, maker_timeouts_to_escalate: 2 }
         - { dist_to_liq: 0.02, slice_ratio: 0.10, maker_timeouts_to_escalate: 2 }
@@ -100,6 +103,7 @@ global:
     # - workingType=MARK_PRICE（按标记价格触发）
     protective_stop:
       enabled: true
+      # dist_to_liq = abs(mark_price - liquidation_price) / mark_price
       dist_to_liq: 0.01
       # 外部止损接管：当检测到外部 stop/tp（cp=True 或 reduceOnly=True）时，本程序停止维护自己的保护止损；并定期用 REST 校验释放锁存（REST 以 raw openOrders 为主）
       external_takeover:
@@ -107,7 +111,7 @@ global:
         rest_verify_interval_s: 30
         max_hold_s: 300
 
-# Symbol 配置（可覆盖 global 中的 execution/accel/roi/risk）
+# Symbol 配置（可覆盖 global 中的：execution.*、accel.*、roi.*、risk.*，只要在 symbol 配置中指定了，就会覆盖 global；没指定就用 global 默认值）
 symbols:
   # 示例：BTC 永续
   # BTC/USDT:USDT:
