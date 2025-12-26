@@ -55,6 +55,7 @@
 - `src/config/models.py` / `src/config/loader.py`：新增执行反馈参数并支持覆盖
 - `config/config.example.yaml` / `docs/configuration.md`：补充配置说明
 - `tests/test_execution.py`：新增成交率反馈测试
+- `config/config.yaml`：移除 `fill_rate_min_samples`，仅使用窗口
 
 ## Milestone/附加改进：日志系统重构
 

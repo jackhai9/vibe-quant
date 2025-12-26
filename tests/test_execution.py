@@ -152,7 +152,6 @@ async def test_fill_rate_feedback_low_sets_override():
         cancel_order=AsyncMock(),
         fill_rate_feedback_enabled=True,
         fill_rate_window_ms=1000,
-        fill_rate_min_samples=2,
         fill_rate_low_threshold=Decimal("0.5"),
         fill_rate_high_threshold=Decimal("0.9"),
         fill_rate_low_maker_timeouts_to_escalate=1,

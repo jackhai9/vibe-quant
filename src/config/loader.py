@@ -179,7 +179,6 @@ class ConfigLoader:
             g_exec.fill_rate_feedback_enabled,
         )
         fill_rate_window_ms = _get_override(s_exec, "fill_rate_window_ms", g_exec.fill_rate_window_ms)
-        fill_rate_min_samples = _get_override(s_exec, "fill_rate_min_samples", g_exec.fill_rate_min_samples)
         fill_rate_low_threshold = _get_override(s_exec, "fill_rate_low_threshold", g_exec.fill_rate_low_threshold)
         fill_rate_high_threshold = _get_override(s_exec, "fill_rate_high_threshold", g_exec.fill_rate_high_threshold)
         fill_rate_low_maker_timeouts_to_escalate = _get_override(
@@ -248,7 +247,6 @@ class ConfigLoader:
             aggr_timeouts_to_deescalate=aggr_timeouts_to_deescalate,
             fill_rate_feedback_enabled=fill_rate_feedback_enabled,
             fill_rate_window_ms=fill_rate_window_ms,
-            fill_rate_min_samples=fill_rate_min_samples,
             fill_rate_low_threshold=fill_rate_low_threshold,
             fill_rate_high_threshold=fill_rate_high_threshold,
             fill_rate_low_maker_timeouts_to_escalate=fill_rate_low_maker_timeouts_to_escalate,

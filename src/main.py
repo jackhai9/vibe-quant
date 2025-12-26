@@ -864,7 +864,6 @@ class Application:
                 aggr_timeouts_to_deescalate=config.aggr_timeouts_to_deescalate,
                 fill_rate_feedback_enabled=config.fill_rate_feedback_enabled,
                 fill_rate_window_ms=config.fill_rate_window_ms,
-                fill_rate_min_samples=config.fill_rate_min_samples,
                 fill_rate_low_threshold=config.fill_rate_low_threshold,
                 fill_rate_high_threshold=config.fill_rate_high_threshold,
                 fill_rate_low_maker_timeouts_to_escalate=config.fill_rate_low_maker_timeouts_to_escalate,

@@ -295,11 +295,6 @@ symbols:
 - **单位**: 毫秒
 - **说明**: 成交率统计窗口
 
-##### fill_rate_min_samples
-- **类型**: `int`
-- **默认值**: `10`
-- **说明**: 统计成交率的最小样本数（maker 下单数）
-
 ##### fill_rate_low_threshold
 - **类型**: `decimal`
 - **默认值**: `0.25`

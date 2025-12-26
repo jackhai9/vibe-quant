@@ -98,7 +98,6 @@ class ExecutionEngine:
         ws_fill_grace_ms: int = 5000,
         fill_rate_feedback_enabled: bool = False,
         fill_rate_window_ms: int = 300000,
-        fill_rate_min_samples: int = 10,
         fill_rate_low_threshold: Decimal = Decimal("0.25"),
         fill_rate_high_threshold: Decimal = Decimal("0.75"),
         fill_rate_low_maker_timeouts_to_escalate: int = 1,
@@ -126,7 +125,6 @@ class ExecutionEngine:
             ws_fill_grace_ms: 已完成订单等待 WS 成交回执的最大时间
             fill_rate_feedback_enabled: 是否启用成交率反馈
             fill_rate_window_ms: 成交率统计窗口(ms)
-            fill_rate_min_samples: 成交率最小样本数（下单数）
             fill_rate_low_threshold: 低成交率阈值
             fill_rate_high_threshold: 高成交率阈值
             fill_rate_low_maker_timeouts_to_escalate: 低成交率时的 maker 超时升级阈值
@@ -152,7 +150,6 @@ class ExecutionEngine:
         self.ws_fill_grace_ms = ws_fill_grace_ms
         self.fill_rate_feedback_enabled = fill_rate_feedback_enabled
         self.fill_rate_window_ms = fill_rate_window_ms
-        self.fill_rate_min_samples = fill_rate_min_samples
         self.fill_rate_low_threshold = fill_rate_low_threshold
         self.fill_rate_high_threshold = fill_rate_high_threshold
         self.fill_rate_low_maker_timeouts_to_escalate = fill_rate_low_maker_timeouts_to_escalate
@@ -163,8 +160,6 @@ class ExecutionEngine:
                 raise ValueError("fill_rate_low_threshold must be <= fill_rate_high_threshold")
             if self.fill_rate_window_ms <= 0:
                 raise ValueError("fill_rate_window_ms must be > 0")
-            if self.fill_rate_min_samples <= 0:
-                raise ValueError("fill_rate_min_samples must be > 0")
 
         self._states: Dict[str, SideExecutionState] = {}  # key: symbol:position_side
 
@@ -215,7 +210,7 @@ class ExecutionEngine:
             state.recent_maker_fills.popleft()
 
         submits = len(state.recent_maker_submits)
-        if submits < self.fill_rate_min_samples:
+        if submits == 0:
             state.fill_rate = None
             state.fill_rate_bucket = None
             state.fill_rate_maker_timeouts_override = None

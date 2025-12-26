@@ -168,7 +168,6 @@ class ExecutionConfig(BaseModel):
     # 成交率反馈（可选）
     fill_rate_feedback_enabled: bool = Field(default=False, description="是否启用成交率反馈")
     fill_rate_window_ms: int = Field(default=300000, description="成交率统计窗口(ms)")
-    fill_rate_min_samples: int = Field(default=10, description="成交率最小样本数（下单数）")
     fill_rate_low_threshold: Decimal = Field(default=Decimal("0.25"), ge=Decimal("0"), le=Decimal("1"))
     fill_rate_high_threshold: Decimal = Field(default=Decimal("0.75"), ge=Decimal("0"), le=Decimal("1"))
     fill_rate_low_maker_timeouts_to_escalate: int = Field(default=1, ge=1, description="成交率低时的 maker 超时升级阈值")
@@ -199,7 +198,6 @@ class SymbolExecutionConfig(BaseModel):
     aggr_timeouts_to_deescalate: Optional[int] = None
     fill_rate_feedback_enabled: Optional[bool] = None
     fill_rate_window_ms: Optional[int] = None
-    fill_rate_min_samples: Optional[int] = None
     fill_rate_low_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_high_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_low_maker_timeouts_to_escalate: Optional[int] = Field(default=None, ge=1)
@@ -315,7 +313,6 @@ class MergedSymbolConfig(BaseModel):
     aggr_timeouts_to_deescalate: int
     fill_rate_feedback_enabled: bool
     fill_rate_window_ms: int
-    fill_rate_min_samples: int
     fill_rate_low_threshold: Decimal
     fill_rate_high_threshold: Decimal
     fill_rate_low_maker_timeouts_to_escalate: int
