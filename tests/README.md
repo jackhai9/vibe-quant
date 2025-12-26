@@ -18,6 +18,7 @@ pytest 测试集（含撤单分层与保护止损回归）。<br>
 - `test_main_shutdown.py`：优雅退出测试
 - `test_notify_telegram.py`：Telegram 通知测试（含 429 冷却等待）
 - `test_order_cleanup.py`：退出撤单隔离测试
+- `test_post_only_retry.py`：post-only 拒单重试测试
 - `test_protective_stop.py`：保护性止损测试
 - `test_risk_manager.py`：风控与限速测试
 - `test_signal.py`：信号引擎测试

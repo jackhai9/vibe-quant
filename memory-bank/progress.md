@@ -34,6 +34,16 @@
 - `tests/test_exchange.py`：补充 `cancel_any_order` 回退测试
 - `tests/test_protective_stop.py`：撤单 mock 更新为 algo 撤单
 
+## Milestone/附加改进：Post-only 拒单立即重试
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-26<br>
+**动机**：`-5022` 表示当前价格会立即成交，等待下一次信号可能错失最佳窗口。<br>
+**产出**：
+- `src/main.py`：Post-only 被拒后，同一轮信号内切到 `AGGRESSIVE_LIMIT` 重试一次
+- `tests/test_post_only_retry.py`：新增重试行为测试
+- `docs/troubleshooting.md` / `memory-bank/design-document.md`：补充行为说明
+
 ## Milestone/附加改进：日志系统重构
 
 **状态**：✅ 已完成<br>

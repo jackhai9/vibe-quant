@@ -47,6 +47,7 @@ from src.models import (
     OrderIntent,
     OrderResult,
     OrderStatus,
+    MarketState,
     Position,
     PositionUpdate,
     LeverageUpdate,
@@ -55,6 +56,7 @@ from src.models import (
     ExecutionState,
     ExecutionMode,
     SignalReason,
+    TimeInForce,
 )
 from src.utils.logger import (
     setup_logger,
@@ -915,6 +917,60 @@ class Application:
 
         return await self.exchange.place_order(intent)
 
+    async def _maybe_retry_post_only_reject(
+        self,
+        *,
+        engine: ExecutionEngine,
+        intent: OrderIntent,
+        result: OrderResult,
+        rules: SymbolRules,
+        market_state: MarketState,
+    ) -> tuple[OrderIntent, OrderResult, bool]:
+        """Post-only 被拒后，立即切换为 AGGRESSIVE_LIMIT 并重试一次。"""
+        if result.error_code != "-5022":
+            return intent, result, False
+        if intent.time_in_force != TimeInForce.GTX:
+            return intent, result, False
+
+        state = engine.get_state(intent.symbol, intent.position_side)
+        if state.mode != ExecutionMode.MAKER_ONLY:
+            return intent, result, False
+        if state.state not in (ExecutionState.PLACING, ExecutionState.IDLE, ExecutionState.COOLDOWN):
+            return intent, result, False
+
+        engine.set_mode(intent.symbol, intent.position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="post_only_reject_retry")
+        state.current_order_mode = ExecutionMode.AGGRESSIVE_LIMIT
+
+        price = engine.build_aggressive_limit_price(
+            position_side=intent.position_side,
+            best_bid=market_state.best_bid,
+            best_ask=market_state.best_ask,
+            tick_size=rules.tick_size,
+        )
+        retry_intent = OrderIntent(
+            symbol=intent.symbol,
+            side=intent.side,
+            position_side=intent.position_side,
+            qty=intent.qty,
+            price=price,
+            time_in_force=TimeInForce.GTC,
+            reduce_only=intent.reduce_only,
+            close_position=intent.close_position,
+            order_type=intent.order_type,
+            is_risk=intent.is_risk,
+        )
+        log_event(
+            "order_retry",
+            symbol=intent.symbol,
+            side=intent.position_side.value,
+            reason="post_only_reject_retry",
+            from_mode="MAKER_ONLY",
+            to_mode="AGGRESSIVE_LIMIT",
+        )
+
+        retry_result = await self._place_order(retry_intent)
+        return retry_intent, retry_result, True
+
     async def _cancel_order(self, symbol: str, order_id: str) -> OrderResult:
         """撤单回调"""
         if not self.exchange:
@@ -1570,6 +1626,13 @@ class Application:
 
             if intent:
                 result = await self._place_order(intent)
+                intent, result, _ = await self._maybe_retry_post_only_reject(
+                    engine=engine,
+                    intent=intent,
+                    result=result,
+                    rules=rules,
+                    market_state=market_state,
+                )
                 await engine.on_order_placed(
                     intent=intent,
                     result=result,
@@ -1676,6 +1739,13 @@ class Application:
             if intent:
                 # 下单
                 result = await self._place_order(intent)
+                intent, result, _ = await self._maybe_retry_post_only_reject(
+                    engine=engine,
+                    intent=intent,
+                    result=result,
+                    rules=rules,
+                    market_state=market_state,
+                )
                 await engine.on_order_placed(
                     intent=intent,
                     result=result,

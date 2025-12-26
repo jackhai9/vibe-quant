@@ -351,6 +351,7 @@ grep "撤单请求失败\\|撤 .*订单失败" logs/vibe-quant_$(date +%Y-%m-%d)
 **原因**：`MAKER_ONLY` 模式使用 Post-only（`timeInForce=GTX`）。当你挂出的价格会立即以 taker 方式成交时，交易所会直接拒绝该订单（不会进入订单历史）。<br>
 
 **系统行为（预期）**：该类拒单会打印为 `[ORDER_REJECT] 下单被拒 | reason=post_only_reject`（WARNING），用于减少噪音与避免重复报错刷屏。<br>
+**补充**：系统会在同一轮信号内立即切换到 `AGGRESSIVE_LIMIT` 再尝试一次下单（仍为 LIMIT）。<br>
 
 **解决方案**：
 

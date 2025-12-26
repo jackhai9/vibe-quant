@@ -157,7 +157,7 @@ maker 订单要求：
 - 价格按 `tickSize` 规整
 - post-only 安全距离（减少 `-5022 Post Only rejected` 概率）：SELL ≥ `best_bid + maker_safety_ticks*tickSize`，BUY ≤ `best_ask - maker_safety_ticks*tickSize`（默认 `maker_safety_ticks=1`）
 - 若被交易所拒单（`code=-5022`，Post-only 被拒）：系统会记录为 `[ORDER_REJECT] 下单被拒 | reason=post_only_reject`（WARNING）用于降噪，且执行引擎不会重复打印"下单失败"。
-- 若因 post-only 被拒/自动取消：记一次“无效尝试”，进入冷却后重试或降级为更保守定价（可选策略）
+- Post-only 被拒后：同一轮信号内立即切换到 `AGGRESSIVE_LIMIT` 重试一次（防止错过最佳窗口）。
 
 ### 5.3 激进限价（AGGRESSIVE_LIMIT）
 - 仍为 LIMIT，但更贴近成交方向：
