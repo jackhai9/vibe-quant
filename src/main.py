@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and order events (including fill meta and feedback)
+# Output: application lifecycle, async tasks, and order events (including fill-rate feedback)
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -868,8 +868,6 @@ class Application:
                 fill_rate_window_ms=config.fill_rate_window_ms,
                 fill_rate_low_threshold=config.fill_rate_low_threshold,
                 fill_rate_high_threshold=config.fill_rate_high_threshold,
-                fill_rate_low_maker_timeouts_to_escalate=config.fill_rate_low_maker_timeouts_to_escalate,
-                fill_rate_high_maker_timeouts_to_escalate=config.fill_rate_high_maker_timeouts_to_escalate,
                 max_mult=config.max_mult,
                 max_order_notional=config.max_order_notional,
             )
@@ -1729,6 +1727,13 @@ class Application:
                                     ),
                                     name=f"risk_trigger:{symbol}:{position_side.value}",
                                 )
+
+            # 成交率反馈：低成交率直接切到激进限价，影响当前信号下单
+            if engine.fill_rate_feedback_enabled:
+                engine.refresh_fill_rate(symbol, position_side, current_ms)
+                state = engine.get_state(symbol, position_side)
+                if state.fill_rate_bucket == "low" and state.mode == ExecutionMode.MAKER_ONLY:
+                    engine.set_mode(symbol, position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="fill_rate_low")
 
             # improve 信号直接吃单：价格正在朝有利方向移动，跳过 MAKER_ONLY 直接使用 AGGRESSIVE_LIMIT
             if signal.reason in (SignalReason.LONG_BID_IMPROVE, SignalReason.SHORT_ASK_IMPROVE):

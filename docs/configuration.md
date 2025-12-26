@@ -1,5 +1,5 @@
 <!-- Input: 配置项与环境变量 -->
-<!-- Output: 配置说明与调优建议（含执行反馈） -->
+<!-- Output: 配置说明与调优建议（含成交率反馈） -->
 <!-- Pos: 文档/配置参数手册 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 配置参数手册
@@ -287,7 +287,7 @@ symbols:
 ##### fill_rate_feedback_enabled
 - **类型**: `boolean`
 - **默认值**: `false`
-- **说明**: 是否启用成交率反馈（基于 maker 提交/成交的滚动比例动态调整升级阈值）
+- **说明**: 是否启用成交率反馈（低成交率时本轮信号直接切换为 AGGRESSIVE_LIMIT，高成交率时 maker TTL 延长 25%）
 
 ##### fill_rate_window_ms
 - **类型**: `int`
@@ -299,23 +299,13 @@ symbols:
 - **类型**: `decimal`
 - **默认值**: `0.25`
 - **范围**: `[0, 1]`
-- **说明**: 成交率低阈值（低于该值触发更激进升级）
+- **说明**: 成交率低阈值（低于该值时本轮信号直接切换为 AGGRESSIVE_LIMIT）
 
 ##### fill_rate_high_threshold
 - **类型**: `decimal`
 - **默认值**: `0.75`
 - **范围**: `[0, 1]`
-- **说明**: 成交率高阈值（高于该值可更耐心）
-
-##### fill_rate_low_maker_timeouts_to_escalate
-- **类型**: `int`
-- **默认值**: `1`
-- **说明**: 成交率低时使用的 maker 超时升级阈值
-
-##### fill_rate_high_maker_timeouts_to_escalate
-- **类型**: `int | null`
-- **默认值**: `null`
-- **说明**: 成交率高时使用的 maker 超时升级阈值（`null` 表示不覆盖）
+- **说明**: 成交率高阈值（高于该值时 maker TTL 延长 25%）
 
 ##### fill_rate_log_interval_ms
 - **类型**: `int`

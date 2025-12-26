@@ -1,5 +1,5 @@
 # Input: YAML config path and env vars
-# Output: AppConfig and merged symbol config (including execution feedback overrides)
+# Output: AppConfig and merged symbol config (including fill-rate feedback overrides)
 # Pos: config loader/merger
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -181,16 +181,6 @@ class ConfigLoader:
         fill_rate_window_ms = _get_override(s_exec, "fill_rate_window_ms", g_exec.fill_rate_window_ms)
         fill_rate_low_threshold = _get_override(s_exec, "fill_rate_low_threshold", g_exec.fill_rate_low_threshold)
         fill_rate_high_threshold = _get_override(s_exec, "fill_rate_high_threshold", g_exec.fill_rate_high_threshold)
-        fill_rate_low_maker_timeouts_to_escalate = _get_override(
-            s_exec,
-            "fill_rate_low_maker_timeouts_to_escalate",
-            g_exec.fill_rate_low_maker_timeouts_to_escalate,
-        )
-        fill_rate_high_maker_timeouts_to_escalate = _get_override(
-            s_exec,
-            "fill_rate_high_maker_timeouts_to_escalate",
-            g_exec.fill_rate_high_maker_timeouts_to_escalate,
-        )
         fill_rate_log_interval_ms = _get_override(
             s_exec,
             "fill_rate_log_interval_ms",
@@ -254,8 +244,6 @@ class ConfigLoader:
             fill_rate_window_ms=fill_rate_window_ms,
             fill_rate_low_threshold=fill_rate_low_threshold,
             fill_rate_high_threshold=fill_rate_high_threshold,
-            fill_rate_low_maker_timeouts_to_escalate=fill_rate_low_maker_timeouts_to_escalate,
-            fill_rate_high_maker_timeouts_to_escalate=fill_rate_high_maker_timeouts_to_escalate,
             fill_rate_log_interval_ms=fill_rate_log_interval_ms,
             # 加速
             accel_window_ms=accel_window_ms,

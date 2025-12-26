@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含执行反馈） -->
+<!-- Output: 可追溯的变更与状态（含执行反馈/成交率策略） -->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -48,14 +48,14 @@
 
 **状态**：✅ 已完成<br>
 **日期**：2025-12-26<br>
-**动机**：根据 maker 成交率动态调整升级阈值，减少无效等待。<br>
+**动机**：根据 maker 成交率动态调整执行策略，减少无效等待。<br>
 **产出**：
-- `src/execution/engine.py`：记录 maker 提交/成交并根据成交率动态覆盖 `maker_timeouts_to_escalate`
+- `src/execution/engine.py`：记录 maker 提交/成交，低成交率直接切 AGGRESSIVE_LIMIT，高成交率 maker TTL 延长 25%
 - `src/models.py`：补充成交率统计字段
-- `src/config/models.py` / `src/config/loader.py`：新增执行反馈参数并支持覆盖
-- `config/config.example.yaml` / `docs/configuration.md`：补充配置说明
+- `src/config/models.py` / `src/config/loader.py`：成交率反馈参数收敛为窗口/阈值/日志输出
+- `config/config.example.yaml` / `docs/configuration.md`：补充配置说明与阈值行为
 - `tests/test_execution.py`：新增成交率反馈测试
-- `config/config.yaml`：移除 `fill_rate_min_samples`，仅使用窗口
+- `config/config.yaml`：移除 `fill_rate_min_samples` 与 `fill_rate_low/high_maker_timeouts_to_escalate`
 - `src/main.py`：新增成交率定时输出任务（可扩展更多指标）
 
 ## Milestone/附加改进：日志系统重构

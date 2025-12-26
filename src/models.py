@@ -1,6 +1,6 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts and execution metrics
-# Pos: core data contracts, events, and execution state
+# Output: shared enums and dataclasses for module contracts and execution feedback
+# Pos: core data contracts, events, and per-side execution state
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -345,7 +345,7 @@ class SideExecutionState:
     recent_maker_fills: Deque[int] = field(default_factory=deque)
     fill_rate: Optional[Decimal] = None
     fill_rate_bucket: Optional[str] = None
-    fill_rate_maker_timeouts_override: Optional[int] = None
+    fill_rate_ttl_override: Optional[int] = None
 
 
 # ============================================================

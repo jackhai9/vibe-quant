@@ -1,5 +1,5 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback)
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override)
 # Pos: per-side execution state machine with WS/REST fill meta handling
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -100,8 +100,6 @@ class ExecutionEngine:
         fill_rate_window_ms: int = 300000,
         fill_rate_low_threshold: Decimal = Decimal("0.25"),
         fill_rate_high_threshold: Decimal = Decimal("0.75"),
-        fill_rate_low_maker_timeouts_to_escalate: int = 1,
-        fill_rate_high_maker_timeouts_to_escalate: Optional[int] = None,
     ):
         """
         初始化执行引擎
@@ -127,8 +125,6 @@ class ExecutionEngine:
             fill_rate_window_ms: 成交率统计窗口(ms)
             fill_rate_low_threshold: 低成交率阈值
             fill_rate_high_threshold: 高成交率阈值
-            fill_rate_low_maker_timeouts_to_escalate: 低成交率时的 maker 超时升级阈值
-            fill_rate_high_maker_timeouts_to_escalate: 高成交率时的 maker 超时升级阈值
         """
         self.place_order = place_order
         self.cancel_order = cancel_order
@@ -152,8 +148,6 @@ class ExecutionEngine:
         self.fill_rate_window_ms = fill_rate_window_ms
         self.fill_rate_low_threshold = fill_rate_low_threshold
         self.fill_rate_high_threshold = fill_rate_high_threshold
-        self.fill_rate_low_maker_timeouts_to_escalate = fill_rate_low_maker_timeouts_to_escalate
-        self.fill_rate_high_maker_timeouts_to_escalate = fill_rate_high_maker_timeouts_to_escalate
 
         if self.fill_rate_feedback_enabled:
             if self.fill_rate_low_threshold > self.fill_rate_high_threshold:
@@ -214,22 +208,22 @@ class ExecutionEngine:
         if submits == 0:
             state.fill_rate = None
             state.fill_rate_bucket = None
-            state.fill_rate_maker_timeouts_override = None
+            state.fill_rate_ttl_override = None
             return
 
         fills = len(state.recent_maker_fills)
         fill_rate = Decimal(fills) / Decimal(submits)
         bucket: str
-        override: Optional[int]
+        ttl_override: Optional[int]
         if fill_rate < self.fill_rate_low_threshold:
             bucket = "low"
-            override = self.fill_rate_low_maker_timeouts_to_escalate
+            ttl_override = None
         elif fill_rate > self.fill_rate_high_threshold:
             bucket = "high"
-            override = self.fill_rate_high_maker_timeouts_to_escalate
+            ttl_override = int((Decimal(self.order_ttl_ms) * Decimal("1.25")).to_integral_value())
         else:
             bucket = "mid"
-            override = None
+            ttl_override = None
 
         if fill_rate is not None and (force_log or bucket != state.fill_rate_bucket):
             log_event(
@@ -240,17 +234,22 @@ class ExecutionEngine:
                 bucket=bucket,
                 submits=submits,
                 fills=fills,
-                maker_timeouts_to_escalate=override,
+                ttl_ms_override=ttl_override,
             )
 
         state.fill_rate = fill_rate
         state.fill_rate_bucket = bucket
-        state.fill_rate_maker_timeouts_override = override
+        state.fill_rate_ttl_override = ttl_override
 
     def log_fill_rate_snapshot(self, symbol: str, position_side: PositionSide, current_ms: int) -> None:
         """按当前窗口输出成交率快照（若无数据则跳过）。"""
         state = self.get_state(symbol, position_side)
         self._update_fill_rate(state, current_ms, force_log=True)
+
+    def refresh_fill_rate(self, symbol: str, position_side: PositionSide, current_ms: int) -> None:
+        """刷新成交率窗口（不强制输出日志）。"""
+        state = self.get_state(symbol, position_side)
+        self._update_fill_rate(state, current_ms)
 
     async def on_signal(
         self,
@@ -905,7 +904,12 @@ class ExecutionEngine:
             return False
 
         order_mode = state.current_order_mode or state.mode
-        ttl_ms = state.ttl_ms_override if state.ttl_ms_override is not None else self.order_ttl_ms
+        if state.ttl_ms_override is not None:
+            ttl_ms = state.ttl_ms_override
+        elif order_mode == ExecutionMode.MAKER_ONLY and state.fill_rate_ttl_override is not None:
+            ttl_ms = state.fill_rate_ttl_override
+        else:
+            ttl_ms = self.order_ttl_ms
         elapsed = current_ms - state.current_order_placed_ms
         if elapsed < ttl_ms:
             return False
@@ -939,8 +943,6 @@ class ExecutionEngine:
         if order_mode == ExecutionMode.MAKER_ONLY:
             if state.maker_timeouts_to_escalate_override is not None:
                 maker_escalate = state.maker_timeouts_to_escalate_override
-            elif state.fill_rate_maker_timeouts_override is not None:
-                maker_escalate = state.fill_rate_maker_timeouts_override
             else:
                 maker_escalate = self.maker_timeouts_to_escalate
             if maker_escalate > 0 and state.maker_timeout_count >= maker_escalate:

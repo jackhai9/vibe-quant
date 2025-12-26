@@ -1,5 +1,5 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言与执行反馈校验
+# Output: 状态机行为断言与执行反馈校验（含成交率）
 # Pos: ExecutionEngine 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -145,8 +145,8 @@ class TestExecutionEngineInit:
 
 
 @pytest.mark.asyncio
-async def test_fill_rate_feedback_low_sets_override():
-    """成交率低时应覆盖 maker_timeouts_to_escalate。"""
+async def test_fill_rate_feedback_low_sets_bucket():
+    """成交率低时应标记为 low，但不覆盖 TTL。"""
     engine = ExecutionEngine(
         place_order=AsyncMock(),
         cancel_order=AsyncMock(),
@@ -154,8 +154,7 @@ async def test_fill_rate_feedback_low_sets_override():
         fill_rate_window_ms=1000,
         fill_rate_low_threshold=Decimal("0.5"),
         fill_rate_high_threshold=Decimal("0.9"),
-        fill_rate_low_maker_timeouts_to_escalate=1,
-        fill_rate_high_maker_timeouts_to_escalate=3,
+        order_ttl_ms=800,
     )
     state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
     state.mode = ExecutionMode.MAKER_ONLY
@@ -176,7 +175,55 @@ async def test_fill_rate_feedback_low_sets_override():
     await engine.on_order_placed(intent, result2, current_ms=10)
 
     assert state.fill_rate_bucket == "low"
-    assert state.fill_rate_maker_timeouts_override == 1
+    assert state.fill_rate_ttl_override is None
+
+
+@pytest.mark.asyncio
+async def test_fill_rate_feedback_high_sets_ttl_override():
+    """成交率高时应覆盖 TTL。"""
+    engine = ExecutionEngine(
+        place_order=AsyncMock(),
+        cancel_order=AsyncMock(),
+        fill_rate_feedback_enabled=True,
+        fill_rate_window_ms=1000,
+        fill_rate_low_threshold=Decimal("0.1"),
+        fill_rate_high_threshold=Decimal("0.8"),
+        order_ttl_ms=800,
+    )
+    state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+    state.mode = ExecutionMode.MAKER_ONLY
+    state.current_order_mode = ExecutionMode.MAKER_ONLY
+
+    intent = OrderIntent(
+        symbol="BTC/USDT:USDT",
+        side=OrderSide.SELL,
+        position_side=PositionSide.LONG,
+        qty=Decimal("0.01"),
+        price=Decimal("100"),
+        time_in_force=TimeInForce.GTX,
+        reduce_only=True,
+    )
+
+    for idx in range(3):
+        order_id = str(idx + 1)
+        result = OrderResult(success=True, order_id=order_id, status=OrderStatus.NEW)
+        await engine.on_order_placed(intent, result, current_ms=idx * 10)
+        update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id=order_id,
+            client_order_id="test",
+            side=OrderSide.SELL,
+            position_side=PositionSide.LONG,
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("0.01"),
+            avg_price=Decimal("100"),
+            timestamp_ms=idx * 10 + 1,
+            is_maker=True,
+        )
+        await engine.on_order_update(update, current_ms=idx * 10 + 1)
+
+    assert state.fill_rate_bucket == "high"
+    assert state.fill_rate_ttl_override == 1000
 
 
 class TestStateManagement:

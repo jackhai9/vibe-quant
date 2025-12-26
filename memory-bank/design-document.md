@@ -1,5 +1,5 @@
 <!-- Input: 需求与设计目标 -->
-<!-- Output: 设计方案与约束（含执行反馈） -->
+<!-- Output: 设计方案与约束（含执行反馈/成交率策略） -->
 <!-- Pos: memory-bank/design-document -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -113,7 +113,7 @@ short_exit_condition_met = short_primary or short_ask_improve
 - 轮转触发（示例，均可配置）：
   - `MAKER_ONLY` 连续超时 `>= maker_timeouts_to_escalate` → 切到 `AGGRESSIVE_LIMIT`
   - `AGGRESSIVE_LIMIT` 成交（或连续超时达到阈值） → 可切回 `MAKER_ONLY`（让执行回到低冲击）
-- 成交率反馈（可选）：基于 maker 提交/成交的滚动比例，动态调整 `maker_timeouts_to_escalate`，成交率低时更快升级，成交率高时更耐心。
+- 成交率反馈（可选）：基于 maker 提交/成交的滚动比例，低成交率时本轮信号直接切换为 `AGGRESSIVE_LIMIT`，高成交率时将 maker 订单 TTL 延长 25%。
 - 直接吃单（跳过模式轮转）：
   - **improve 信号**：信号类型为 `long_bid_improve` 或 `short_ask_improve` 时，直接使用 `AGGRESSIVE_LIMIT`（价格正在朝有利方向移动）
   - 风险兜底触发（接近强平）：强制切到 `AGGRESSIVE_LIMIT`

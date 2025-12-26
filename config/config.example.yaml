@@ -51,10 +51,8 @@ global:
     # 成交率反馈（可选）
     fill_rate_feedback_enabled: false
     fill_rate_window_ms: 300000          # 5分钟窗口
-    fill_rate_low_threshold: 0.25        # <25% 视为低成交率
-    fill_rate_high_threshold: 0.75       # >75% 视为高成交率
-    fill_rate_low_maker_timeouts_to_escalate: 1     # 低成交率时1次超时即升级
-    fill_rate_high_maker_timeouts_to_escalate: 3    # 高成交率时3次超时才升级
+    fill_rate_low_threshold: 0.25        # <25% 视为低成交率（本轮信号直接切 AGGRESSIVE_LIMIT）
+    fill_rate_high_threshold: 0.75       # >75% 视为高成交率（maker TTL +25%）
     fill_rate_log_interval_ms: 30000     # 成交率日志输出间隔，<=0 关闭
 
   # 加速倍数
