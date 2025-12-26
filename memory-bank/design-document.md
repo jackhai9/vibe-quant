@@ -113,8 +113,9 @@ short_exit_condition_met = short_primary or short_ask_improve
 - 轮转触发（示例，均可配置）：
   - `MAKER_ONLY` 连续超时 `>= maker_timeouts_to_escalate` → 切到 `AGGRESSIVE_LIMIT`
   - `AGGRESSIVE_LIMIT` 成交（或连续超时达到阈值） → 可切回 `MAKER_ONLY`（让执行回到低冲击）
-  - 风险兜底触发（接近强平）：
-    - 强制切到 `AGGRESSIVE_LIMIT`
+- 直接吃单（跳过模式轮转）：
+  - **improve 信号**：信号类型为 `long_bid_improve` 或 `short_ask_improve` 时，直接使用 `AGGRESSIVE_LIMIT`（价格正在朝有利方向移动）
+  - 风险兜底触发（接近强平）：强制切到 `AGGRESSIVE_LIMIT`
 
 ### 4.3 状态机（每侧）
 - `IDLE` → `PLACE` → `WAIT` → (`FILLED` | `TIMEOUT`) → `CANCEL` → `COOLDOWN` → `IDLE`

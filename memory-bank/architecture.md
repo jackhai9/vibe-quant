@@ -152,6 +152,11 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - `AGGRESSIVE_LIMIT` 成交次数 `>= aggr_fills_to_deescalate` → 切回 `MAKER_ONLY`
 - `AGGRESSIVE_LIMIT` 连续超时 `>= aggr_timeouts_to_deescalate` → 切回 `MAKER_ONLY`
 
+直接吃单规则（跳过模式轮转）：
+
+- **improve 信号**：当信号类型为 `long_bid_improve` 或 `short_ask_improve` 时，直接切换到 `AGGRESSIVE_LIMIT` 吃单（价格正在朝有利方向移动，无需等待 maker 成交）
+- **风险触发**：当 `dist_to_liq` 低于风险阈值时，强制切换到 `AGGRESSIVE_LIMIT`
+
 ### 挂单清理（已实现）
 
 - 下单时设置 `newClientOrderId`（前缀 `<client_order_prefix>-{run_id}-`，其中 `client_order_prefix` 为固定前缀，`run_id` 每次启动自动生成）。退出时只撤销本次运行前缀挂单（优先按 symbol 拉取 openOrders，降低交易所权重），避免误撤手动订单；注意：若进程崩溃/强杀，遗留挂单不会自动清理。

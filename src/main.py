@@ -54,6 +54,7 @@ from src.models import (
     SymbolRules,
     ExecutionState,
     ExecutionMode,
+    SignalReason,
 )
 from src.utils.logger import (
     setup_logger,
@@ -1656,6 +1657,12 @@ class Application:
                                     ),
                                     name=f"risk_trigger:{symbol}:{position_side.value}",
                                 )
+
+            # improve 信号直接吃单：价格正在朝有利方向移动，跳过 MAKER_ONLY 直接使用 AGGRESSIVE_LIMIT
+            if signal.reason in (SignalReason.LONG_BID_IMPROVE, SignalReason.SHORT_ASK_IMPROVE):
+                state = engine.get_state(symbol, position_side)
+                if state.mode != ExecutionMode.AGGRESSIVE_LIMIT:
+                    engine.set_mode(symbol, position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="improve_signal")
 
             # 处理信号
             intent = await engine.on_signal(
