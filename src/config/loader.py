@@ -186,11 +186,6 @@ class ConfigLoader:
             "fill_rate_log_windows_min",
             g_exec.fill_rate_log_windows_min,
         )
-        fill_rate_log_interval_ms = _get_override(
-            s_exec,
-            "fill_rate_log_interval_ms",
-            g_exec.fill_rate_log_interval_ms,
-        )
 
         # 合并加速配置
         accel_window_ms = _get_override(s_accel, "window_ms", g_accel.window_ms)
@@ -250,7 +245,6 @@ class ConfigLoader:
             fill_rate_low_threshold=fill_rate_low_threshold,
             fill_rate_high_threshold=fill_rate_high_threshold,
             fill_rate_log_windows_min=fill_rate_log_windows_min,
-            fill_rate_log_interval_ms=fill_rate_log_interval_ms,
             # 加速
             accel_window_ms=accel_window_ms,
             accel_tiers=accel_tiers,

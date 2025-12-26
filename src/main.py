@@ -22,7 +22,7 @@ import signal
 import sys
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, Optional, List, Sequence, Awaitable, Any, Coroutine
 
@@ -1832,16 +1832,21 @@ class Application:
             return
 
         intervals_ms: dict[tuple[str, PositionSide], int] = {}
-        windows_ms_map: dict[tuple[str, PositionSide], list[int]] = {}
+        windows_min_map: dict[tuple[str, PositionSide], list[Decimal]] = {}
         for symbol, cfg in self._symbol_configs.items():
-            interval_ms = int(cfg.fill_rate_log_interval_ms)
             if cfg.fill_rate_log_windows_min:
                 windows_min = [Decimal(str(v)) for v in cfg.fill_rate_log_windows_min if Decimal(str(v)) > 0]
             else:
-                windows_min = [cfg.fill_rate_window_min]
+                windows_min = []
+            if not windows_min:
+                continue
+            min_window_min = min(windows_min)
+            interval_ms = int(
+                (min_window_min * Decimal("60000") / Decimal("2")).to_integral_value(rounding=ROUND_HALF_UP)
+            )
             for side in (PositionSide.LONG, PositionSide.SHORT):
                 intervals_ms[(symbol, side)] = interval_ms
-                windows_ms_map[(symbol, side)] = windows_min
+                windows_min_map[(symbol, side)] = windows_min
 
         enabled_intervals = [v for v in intervals_ms.values() if v > 0]
         if not enabled_intervals:
@@ -1862,7 +1867,10 @@ class Application:
                     engine = self.execution_engines.get(symbol)
                     if not engine:
                         continue
-                    windows_min = windows_ms_map.get((symbol, side), [])
+                    position = self._positions.get(symbol, {}).get(side)
+                    if not position or abs(position.position_amt) == Decimal("0"):
+                        continue
+                    windows_min = windows_min_map.get((symbol, side), [])
                     metrics = engine.get_fill_rate_windows(symbol, side, now_ms, windows_min)
                     for metric in metrics:
                         log_event(

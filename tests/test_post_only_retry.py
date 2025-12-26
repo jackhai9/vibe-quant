@@ -8,6 +8,7 @@
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -99,4 +100,5 @@ async def test_post_only_reject_retries_with_aggressive_limit():
     assert retry_intent.time_in_force == TimeInForce.GTC
     assert retry_intent.price == Decimal("99.0")
     assert engine.get_state("BTC/USDT:USDT", PositionSide.LONG).mode == ExecutionMode.AGGRESSIVE_LIMIT
-    app.exchange.place_order.assert_called_once()
+    exchange = cast(DummyExchange, app.exchange)
+    exchange.place_order.assert_called_once()

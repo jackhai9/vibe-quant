@@ -147,6 +147,7 @@ class ExecutionEngine:
         self.max_order_notional = max_order_notional
         self.ws_fill_grace_ms = ws_fill_grace_ms
         self.fill_rate_feedback_enabled = fill_rate_feedback_enabled
+        self.fill_rate_window_min = fill_rate_window_min
         self.fill_rate_window_ms = self._minutes_to_ms(fill_rate_window_min)
         self.fill_rate_low_threshold = fill_rate_low_threshold
         self.fill_rate_high_threshold = fill_rate_high_threshold
@@ -196,6 +197,8 @@ class ExecutionEngine:
         *,
         is_submit: bool = False,
         is_fill: bool = False,
+        fill_ts_ms: Optional[int] = None,
+        log_changes: bool = True,
         force_log: bool = False,
     ) -> None:
         if not self.fill_rate_feedback_enabled:
@@ -204,7 +207,7 @@ class ExecutionEngine:
         if is_submit:
             state.recent_maker_submits.append(current_ms)
         if is_fill:
-            state.recent_maker_fills.append(current_ms)
+            state.recent_maker_fills.append(fill_ts_ms if fill_ts_ms is not None else current_ms)
 
         self._trim_fill_rate_buffers(state, current_ms)
         decision_cutoff = current_ms - self.fill_rate_window_ms
@@ -229,11 +232,12 @@ class ExecutionEngine:
             bucket = "mid"
             ttl_override = None
 
-        if fill_rate is not None and (force_log or bucket != state.fill_rate_bucket):
+        if log_changes and fill_rate is not None and (force_log or bucket != state.fill_rate_bucket):
             log_event(
                 "fill_rate",
                 symbol=state.symbol,
                 side=state.position_side.value,
+                window_min=self.fill_rate_window_min,
                 fill_rate=fill_rate,
                 bucket=bucket,
                 submits=submits,
@@ -274,8 +278,6 @@ class ExecutionEngine:
             window_ms = self._minutes_to_ms(window_min)
             cutoff = current_ms - window_ms
             submits = self._count_since(state.recent_maker_submits, cutoff)
-            if submits == 0:
-                continue
             fills = self._count_since(state.recent_maker_fills, cutoff)
             metrics.append(
                 {
@@ -283,7 +285,7 @@ class ExecutionEngine:
                     "window_ms": window_ms,
                     "submits": submits,
                     "fills": fills,
-                    "fill_rate": Decimal(fills) / Decimal(submits),
+                    "fill_rate": (Decimal(fills) / Decimal(submits)) if submits > 0 else Decimal("0"),
                 }
             )
         return metrics
@@ -560,7 +562,9 @@ class ExecutionEngine:
 
             order_mode = state.current_order_mode or state.mode
             if (not intent.is_risk) and order_mode == ExecutionMode.MAKER_ONLY:
-                self._update_fill_rate(state, current_ms, is_submit=True)
+                if result.order_id:
+                    state.maker_submit_ts_by_order_id[result.order_id] = current_ms
+                self._update_fill_rate(state, current_ms, is_submit=True, log_changes=False)
 
             # 如果已经完全成交，立即完成状态并等待 WS 成交回执补全 role
             if result.status == OrderStatus.FILLED:
@@ -829,7 +833,15 @@ class ExecutionEngine:
             )
 
         if (not state.current_order_is_risk) and executed_mode == ExecutionMode.MAKER_ONLY:
-            self._update_fill_rate(state, current_ms, is_fill=True)
+            submit_ts = None
+            if order_id:
+                submit_ts = state.maker_submit_ts_by_order_id.pop(order_id, None)
+            self._update_fill_rate(
+                state,
+                current_ms,
+                is_fill=True,
+                fill_ts_ms=submit_ts,
+            )
 
         # 成交通知（必须不阻塞主链路）
         if emit_on_fill and self._on_fill:
@@ -875,6 +887,8 @@ class ExecutionEngine:
     ) -> None:
         """处理订单取消"""
         state = self.get_state(symbol, position_side)
+        if state.current_order_id:
+            state.maker_submit_ts_by_order_id.pop(state.current_order_id, None)
 
         log_order_cancel(
             symbol=symbol,
@@ -898,6 +912,8 @@ class ExecutionEngine:
     ) -> None:
         """处理订单拒绝（例如 GTX 被拒）"""
         state = self.get_state(symbol, position_side)
+        if state.current_order_id:
+            state.maker_submit_ts_by_order_id.pop(state.current_order_id, None)
 
         get_logger().warning(f"订单被拒绝: {symbol} {position_side.value}")
 
@@ -918,6 +934,8 @@ class ExecutionEngine:
     ) -> None:
         """处理订单过期"""
         state = self.get_state(symbol, position_side)
+        if state.current_order_id:
+            state.maker_submit_ts_by_order_id.pop(state.current_order_id, None)
 
         get_logger().info(f"订单过期: {symbol} {position_side.value}")
 

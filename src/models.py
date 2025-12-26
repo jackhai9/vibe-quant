@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from collections import deque
 from decimal import Decimal
 from enum import Enum
-from typing import Literal, Optional, Deque
+from typing import Literal, Optional, Deque, Dict
 
 
 # ============================================================
@@ -343,6 +343,7 @@ class SideExecutionState:
     # 成交率反馈（maker 提交/成交）
     recent_maker_submits: Deque[int] = field(default_factory=deque)
     recent_maker_fills: Deque[int] = field(default_factory=deque)
+    maker_submit_ts_by_order_id: Dict[str, int] = field(default_factory=dict)
     fill_rate: Optional[Decimal] = None
     fill_rate_bucket: Optional[str] = None
     fill_rate_ttl_override: Optional[int] = None

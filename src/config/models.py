@@ -185,9 +185,8 @@ class ExecutionConfig(BaseModel):
     )
     fill_rate_log_windows_min: List[Decimal] = Field(
         default_factory=list,
-        description="成交率日志窗口列表(分钟)，为空则使用 fill_rate_window_min",
+        description="成交率日志窗口列表(分钟)，为空表示关闭",
     )
-    fill_rate_log_interval_ms: int = Field(default=30000, description="成交率日志输出间隔(ms)，<=0 表示关闭")
 
 
 # ============================================================
@@ -213,7 +212,6 @@ class SymbolExecutionConfig(BaseModel):
     fill_rate_low_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_high_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_log_windows_min: Optional[List[Decimal]] = None
-    fill_rate_log_interval_ms: Optional[int] = None
 
 
 class SymbolAccelConfig(BaseModel):
@@ -328,7 +326,6 @@ class MergedSymbolConfig(BaseModel):
     fill_rate_low_threshold: Decimal
     fill_rate_high_threshold: Decimal
     fill_rate_log_windows_min: List[Decimal]
-    fill_rate_log_interval_ms: int
 
     # 加速
     accel_window_ms: int

@@ -53,10 +53,11 @@
 - `src/execution/engine.py`：记录 maker 提交/成交，低成交率直接切 AGGRESSIVE_LIMIT，高成交率 maker TTL 延长 25%
 - `src/models.py`：补充成交率统计字段
 - `src/config/models.py` / `src/config/loader.py`：成交率反馈参数收敛为窗口/阈值/日志输出
-- `config/config.example.yaml` / `docs/configuration.md`：补充配置说明与阈值行为、日志多窗口输出（分钟单位）
+- `config/config.example.yaml` / `docs/configuration.md`：补充配置说明与阈值行为、日志多窗口输出（分钟单位，日志间隔取最小窗口一半；成交率以提交时间归因）
 - `tests/test_execution.py`：新增成交率反馈测试
 - `config/config.yaml`：移除 `fill_rate_min_samples` 与 `fill_rate_low/high_maker_timeouts_to_escalate`
 - `src/main.py`：新增成交率定时输出任务（可扩展更多指标）
+- `src/execution/engine.py`：提交时不再即时输出成交率日志，仅保留周期性窗口输出
 
 ## Milestone/附加改进：日志系统重构
 
