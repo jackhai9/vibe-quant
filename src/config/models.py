@@ -176,6 +176,7 @@ class ExecutionConfig(BaseModel):
         ge=1,
         description="成交率高时的 maker 超时升级阈值（None 表示不覆盖）",
     )
+    fill_rate_log_interval_ms: int = Field(default=30000, description="成交率日志输出间隔(ms)，<=0 表示关闭")
 
 
 # ============================================================
@@ -202,6 +203,7 @@ class SymbolExecutionConfig(BaseModel):
     fill_rate_high_threshold: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     fill_rate_low_maker_timeouts_to_escalate: Optional[int] = Field(default=None, ge=1)
     fill_rate_high_maker_timeouts_to_escalate: Optional[int] = Field(default=None, ge=1)
+    fill_rate_log_interval_ms: Optional[int] = None
 
 
 class SymbolAccelConfig(BaseModel):
@@ -317,6 +319,7 @@ class MergedSymbolConfig(BaseModel):
     fill_rate_high_threshold: Decimal
     fill_rate_low_maker_timeouts_to_escalate: int
     fill_rate_high_maker_timeouts_to_escalate: Optional[int]
+    fill_rate_log_interval_ms: int
 
     # 加速
     accel_window_ms: int

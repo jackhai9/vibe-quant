@@ -317,6 +317,12 @@ symbols:
 - **默认值**: `null`
 - **说明**: 成交率高时使用的 maker 超时升级阈值（`null` 表示不覆盖）
 
+##### fill_rate_log_interval_ms
+- **类型**: `int`
+- **默认值**: `30000`
+- **单位**: 毫秒
+- **说明**: 成交率日志输出间隔，`<=0` 表示关闭
+
 **轮转策略示例**:
 ```
 MAKER_ONLY → 超时2次 → AGGRESSIVE_LIMIT → 成交1次 → MAKER_ONLY

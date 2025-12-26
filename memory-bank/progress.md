@@ -56,6 +56,7 @@
 - `config/config.example.yaml` / `docs/configuration.md`：补充配置说明
 - `tests/test_execution.py`：新增成交率反馈测试
 - `config/config.yaml`：移除 `fill_rate_min_samples`，仅使用窗口
+- `src/main.py`：新增成交率定时输出任务（可扩展更多指标）
 
 ## Milestone/附加改进：日志系统重构
 

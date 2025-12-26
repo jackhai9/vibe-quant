@@ -194,6 +194,7 @@ class ExecutionEngine:
         *,
         is_submit: bool = False,
         is_fill: bool = False,
+        force_log: bool = False,
     ) -> None:
         if not self.fill_rate_feedback_enabled:
             return
@@ -230,7 +231,7 @@ class ExecutionEngine:
             bucket = "mid"
             override = None
 
-        if bucket != state.fill_rate_bucket:
+        if fill_rate is not None and (force_log or bucket != state.fill_rate_bucket):
             log_event(
                 "fill_rate",
                 symbol=state.symbol,
@@ -245,6 +246,11 @@ class ExecutionEngine:
         state.fill_rate = fill_rate
         state.fill_rate_bucket = bucket
         state.fill_rate_maker_timeouts_override = override
+
+    def log_fill_rate_snapshot(self, symbol: str, position_side: PositionSide, current_ms: int) -> None:
+        """按当前窗口输出成交率快照（若无数据则跳过）。"""
+        state = self.get_state(symbol, position_side)
+        self._update_fill_rate(state, current_ms, force_log=True)
 
     async def on_signal(
         self,

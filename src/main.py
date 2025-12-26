@@ -120,6 +120,7 @@ class Application:
         # 主循环任务
         self._main_loop_task: Optional[asyncio.Task[None]] = None
         self._timeout_check_task: Optional[asyncio.Task[None]] = None
+        self._fill_rate_log_task: Optional[asyncio.Task[None]] = None
         self._market_ws_task: Optional[asyncio.Task[None]] = None
         self._user_data_ws_task: Optional[asyncio.Task[None]] = None
         self._calibration_task: Optional[asyncio.Task[None]] = None
@@ -138,6 +139,7 @@ class Application:
         self._position_revision: dict[tuple[str, PositionSide], int] = {}
         self._position_last_change: dict[tuple[str, PositionSide], tuple[Decimal, Decimal]] = {}
         self._no_position_logged: set[tuple[str, PositionSide]] = set()
+        self._fill_rate_last_log_ms: dict[tuple[str, PositionSide], int] = {}
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
         self._external_takeover: dict[tuple[str, PositionSide], ExternalTakeoverState] = {}
 
@@ -1449,6 +1451,7 @@ class Application:
             # 启动主循环任务
             self._main_loop_task = asyncio.create_task(self._main_loop())
             self._timeout_check_task = asyncio.create_task(self._timeout_check_loop())
+            self._fill_rate_log_task = asyncio.create_task(self._fill_rate_log_loop())
 
             # 等待关闭信号
             await self._shutdown_event.wait()
@@ -1817,6 +1820,44 @@ class Application:
             ):
                 self._schedule_protective_stop_sync(symbol, reason="external_takeover_verify")
 
+    async def _fill_rate_log_loop(self) -> None:
+        """周期性输出成交率（便于观测与扩展）。"""
+        if not self.config_loader:
+            return
+
+        intervals_ms: dict[tuple[str, PositionSide], int] = {}
+        for symbol, cfg in self._symbol_configs.items():
+            interval_ms = int(cfg.fill_rate_log_interval_ms)
+            for side in (PositionSide.LONG, PositionSide.SHORT):
+                intervals_ms[(symbol, side)] = interval_ms
+
+        enabled_intervals = [v for v in intervals_ms.values() if v > 0]
+        if not enabled_intervals:
+            return
+
+        sleep_ms = min(enabled_intervals)
+
+        while self._running:
+            try:
+                await asyncio.sleep(sleep_ms / 1000)
+                now_ms = current_time_ms()
+                for (symbol, side), interval_ms in intervals_ms.items():
+                    if interval_ms <= 0:
+                        continue
+                    last_ms = self._fill_rate_last_log_ms.get((symbol, side), 0)
+                    if now_ms - last_ms < interval_ms:
+                        continue
+                    engine = self.execution_engines.get(symbol)
+                    if not engine:
+                        continue
+                    engine.log_fill_rate_snapshot(symbol, side, now_ms)
+                    self._fill_rate_last_log_ms[(symbol, side)] = now_ms
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_error(f"成交率日志循环错误: {e}")
+                await asyncio.sleep(1)
+
     async def shutdown(self) -> None:
         """优雅关闭"""
         if self._shutdown_started:
@@ -1830,7 +1871,16 @@ class Application:
         self._shutdown_event.set()
 
         # 取消主循环任务
-        tasks_to_cancel = [t for t in [self._main_loop_task, self._timeout_check_task, self._calibration_task] if t]
+        tasks_to_cancel = [
+            t
+            for t in [
+                self._main_loop_task,
+                self._timeout_check_task,
+                self._fill_rate_log_task,
+                self._calibration_task,
+            ]
+            if t
+        ]
         for task in tasks_to_cancel:
             if not task.done():
                 task.cancel()
