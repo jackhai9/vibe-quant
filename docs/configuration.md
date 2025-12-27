@@ -498,8 +498,8 @@ tiers:
 当检测到同侧存在“外部 stop/tp 条件单”时，本程序会停止维护自己的保护止损，避免与外部单冲突导致 `-4130` 或出现同侧多张条件单。<br>
 
 **外部接管判定（当前实现）**：
-- **WS 事件**：`ORDER_TRADE_UPDATE` 或 `ALGO_UPDATE` 中，若订单类型为 `STOP/TAKE_PROFIT*` 且（`closePosition=true` **或** `reduceOnly=true`），则视为外部接管。
-- **REST 校验**：以交易所原始接口 `GET /fapi/v1/openOrders`（raw openOrders）为主，必要时回退 `fetch_open_orders`，并合并 `fetch_open_algo_orders`，扫描同侧订单：若存在 `STOP/TAKE_PROFIT*` 且（`closePosition=true` **或** `reduceOnly=true`），则视为外部接管。
+- **WS 事件**：`ORDER_TRADE_UPDATE` 或 `ALGO_UPDATE` 中，若订单类型为 `STOP/TAKE_PROFIT*` 且（`closePosition=true` 字段 **或** `reduceOnly=true` 字段），则视为外部接管。
+- **REST 校验**：以交易所原始接口 `GET /fapi/v1/openOrders`（raw openOrders）为主，必要时回退 `fetch_open_orders`，并合并 `fetch_open_algo_orders`，扫描同侧订单：若存在 `STOP/TAKE_PROFIT*` 且（`closePosition=true` 字段 **或** `reduceOnly=true` 字段），则视为外部接管。
   - 说明：部分客户端下的条件单在 ccxt 的 openOrders 里可能不完整/缺字段（例如 `origQty=0` 的 closePosition 单），因此 raw openOrders 是可靠兜底。
 
 **释放策略（避免多外部单并存时误释放）**：<br>

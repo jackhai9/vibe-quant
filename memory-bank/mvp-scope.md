@@ -33,7 +33,7 @@ WS 行情 → 信号判断 → 下单/撤单 → 仓位收敛
 ### 2. 交易所适配（ccxt）
 - [x] 拉取 markets 规则：tickSize、stepSize、minQty、minNotional
 - [x] 读取 Hedge 模式 LONG/SHORT 仓位
-- [x] 下单：LIMIT post-only (GTX)，reduceOnly=true，positionSide=LONG/SHORT
+- [x] 下单：LIMIT post-only (GTX)，reduce-only 语义约束（`positionSide + side + qty<=position`），positionSide=LONG/SHORT
 - [x] 撤单
 
 ### 3. WebSocket 数据
@@ -123,7 +123,7 @@ WS 行情 → 信号判断 → 下单/撤单 → 仓位收敛
 1. **配置测试**：global + symbol 覆盖正确合并 ✅
 2. **WS 测试**：连续运行 10 分钟，行情持续更新 ✅
 3. **信号测试**：构造事件序列，验证触发条件正确 ✅
-4. **下单测试**：reduceOnly + positionSide 参数正确 ⏳ 待实盘验证
+4. **下单测试**：reduce-only 语义约束 + positionSide 正确 ⏳ 待实盘验证
 5. **收敛测试**：小仓位运行至仓位归零或 < minQty ⏳ 待实盘验证
 6. **重连测试**：断网后自动重连并恢复 ⏳ 待实盘验证
 7. **退出测试**：Ctrl+C 后挂单被撤销 ⏳ 待实盘验证

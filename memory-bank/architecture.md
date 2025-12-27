@@ -13,7 +13,7 @@
 
 Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 
-**核心目标**：通过多次小量 + 执行模式轮转 + 超时撤单，完成 Hedge 模式下 LONG/SHORT 仓位的 reduce-only 平仓，尽量降低滑点与市场冲击。
+**核心目标**：通过多次小量 + 执行模式轮转 + 超时撤单，完成 Hedge 模式下 LONG/SHORT 仓位的 reduce-only 平仓（reduce-only 语义约束：`positionSide + side + qty<=position`），尽量降低滑点与市场冲击。
 
 ---
 
@@ -172,9 +172,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 - markPrice 数据源：市场 WS 订阅 `@markPrice@1s`，解析为 `MarketEvent.mark_price`；该事件**不参与** stale 判定（stale 仅由 bookTicker/aggTrade 刷新），只用于风控计算
 - 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`，触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
-- 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduceOnly），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
+- 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduce-only 语义约束，不下发 `reduceOnly`），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
 - 仓位保护性止损（Step 9.3）：为每个“有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销
-- 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=True`；或 `closePosition=True` 兜底）时，视为外部接管：撤销我方保护止损并暂停维护。
+- 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=true` 字段；或 `closePosition=true` 字段 兜底）时，视为外部接管：撤销我方保护止损并暂停维护。
   - 外部止损有效性检查：若外部止损价接近/劣于爆仓价（0.01% 以内），视为无效并取消；仅当不存在有效外部止损时由程序接管并重新挂单。
   - REST 校验以 raw openOrders（`GET /fapi/v1/openOrders`）为主，必要时回退 ccxt openOrders，并合并 openAlgoOrders，避免 ccxt 漏掉部分 closePosition 条件单。
   - 多外部单并存时，WS 收到某一张终态不代表接管结束：先标记 pending，并触发一次 REST verify，只有 verify 确认“同侧外部 stop/tp 已不存在”才 release 并恢复自维护。

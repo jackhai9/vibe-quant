@@ -9,9 +9,11 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 
 通过小单分批 + 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
 
+术语约定：本文档中“reduce-only”指 **reduce-only 语义约束**（`positionSide + side + qty<=position`），不指必须下发的交易所参数 `reduceOnly`。
+
 ## 核心特性
 
-- **Hedge 模式专用**：所有订单 `reduceOnly=True`，支持 `positionSide=LONG/SHORT`
+- **Hedge 模式专用**：不强制下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证；支持 `positionSide=LONG/SHORT`
 - **执行模式轮转**：Maker 挂单优先，超时自动升级为 Aggressive Limit
 - **智能倍数系统**：ROI + 加速度双倍数叠加，动态调整单笔数量
 - **成交率反馈**：根据 maker 成交率动态调整升级阈值
@@ -204,7 +206,7 @@ ret_window = (price_now / price_window_ago) - 1
 | **软风控** | `dist_to_liq` < 阈值 | 强制升级为 Aggressive Limit |
 | **强制平仓** | `dist_to_liq` 进入 panic_close 档位 | 绕过信号，按 slice_ratio 强制分片平仓 |
 | **保护止损** | 交易所端 STOP_MARKET | 程序崩溃/断网时最后防线 |
-| **外部接管** | 同侧存在外部 stop/tp（`closePosition=true` 或 `reduceOnly=true`） | 撤销我方保护止损并暂停维护，直到外部单消失 |
+| **外部接管** | 同侧存在外部 stop/tp（`closePosition=true` 字段 或 `reduceOnly=true` 字段） | 撤销我方保护止损并暂停维护，直到外部单消失 |
 
 `dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
 

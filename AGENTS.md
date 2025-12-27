@@ -8,7 +8,7 @@ vibe-quant is a Binance USDT-Margined perpetual futures position executor design
 
 **Key constraints:**
 
-- All orders must be `reduceOnly=True`
+- Do not rely on sending `reduceOnly`; enforce reduce-only semantics via `positionSide + side + qty<=position`
 - Hedge mode requires `positionSide=LONG/SHORT`
 - Target latency: < 200ms end-to-end
 

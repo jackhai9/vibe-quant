@@ -289,7 +289,7 @@ grep "限速" logs/vibe-quant_$(date +%Y-%m-%d).log
 
 **原因**：同侧已经存在 stop/tp 条件单（可能来自 Binance 客户端、手机端或网页端手动设置），交易所会拒绝再创建一张同侧的条件单。<br>
 
-**系统行为（预期）**：检测到外部 stop/tp（`closePosition=true` 或 `reduceOnly=true`）时，会进入“外部接管”，撤销我方保护止损并暂停维护，直到外部单消失。<br>
+**系统行为（预期）**：检测到外部 stop/tp（`closePosition=true` 字段 或 `reduceOnly=true` 字段）时，会进入“外部接管”，撤销我方保护止损并暂停维护，直到外部单消失。<br>
 
 **补充说明**：外部接管的释放以 REST 校验为准，可能发生在任意一次保护止损同步的 REST 调用中，不一定是 `external_takeover_verify` 触发的那一次。<br>
 常见触发点：<br>

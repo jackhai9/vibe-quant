@@ -28,8 +28,8 @@
   - maker：post-only 限价挂单，超时撤单
   - 激进限价：更贴近成交方向的 LIMIT（不使用 post-only）
 - 订单安全：
-  - 全部订单 `reduceOnly=True`
-  - Hedge 模式必须指定 `positionSide=LONG/SHORT`
+  - 不依赖下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证
+  - Hedge 模式必须指定 `positionSide=LONG/SHORT`，并满足 LONG 平仓=SELL / SHORT 平仓=BUY
 - 收敛结束：仓位量小到不可交易余量（minQty/stepSize 规整后为 0）则认为完成，不留下尘埃仓位。
 - 日志：本地文件按天滚动
 - Telegram：成交、断线重连、风险兜底触发
@@ -135,7 +135,7 @@ MarketEvent -> SignalEngine 判定 improve
 ## 5. 下单细则
 
 ### 5.1 安全参数（必须）
-- `reduceOnly=True`
+- 不依赖下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证
 - `positionSide="LONG" | "SHORT"`
 - LONG 平仓：`side="sell"`
 - SHORT 平仓：`side="buy"`
@@ -416,6 +416,6 @@ def tick_side(side):
 ## 13. 测试计划
 - 单元测试：数量/价格规整、档位匹配、滑动窗口 ret、完成条件、模式轮转
 - 回放仿真：trade + best bid/ask
-- 小额实盘验证：reduceOnly/positionSide/post-only 行为、断线重连、模式轮转是否符合预期
+- 小额实盘验证：reduce-only 语义约束/positionSide/post-only 行为、断线重连、模式轮转是否符合预期
 
 ---

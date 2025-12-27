@@ -146,7 +146,7 @@
 - 保护性止损只允许“收紧”（LONG stopPrice 只上调；SHORT stopPrice 只下调），避免仓位变安全时把止损越推越远，并减少频繁撤旧建新带来的空窗风险
 - 保护性止损同步采用分级 debounce：`position_update` 1s；`startup/calibration` 0s；其余 0.2s（兼顾 REST 压力与关键场景恢复速度）
 - 启动同步时若发现外部 stop/tp，打印 `order_id/client_id/stop_price/workingType`；同侧出现多张外部 stop/tp 时打印摘要告警（`external_stop_multiple`）
-- 外部接管采用“锁存 + REST verify”：外部 stop/tp（`cp=True` 或 `reduceOnly=True`）一旦出现即锁存接管；WS 收到某一张终态不直接释放，需 REST verify 确认同侧外部单已清空才恢复自维护（REST 以 raw openOrders 为主；配置：`global.risk.protective_stop.external_takeover.*`）
+- 外部接管采用“锁存 + REST verify”：外部 stop/tp（`closePosition=true` 字段 或 `reduceOnly=true` 字段）一旦出现即锁存接管；WS 收到某一张终态不直接释放，需 REST verify 确认同侧外部单已清空才恢复自维护（REST 以 raw openOrders 为主；配置：`global.risk.protective_stop.external_takeover.*`）
 - 测试：补充 `tests/test_protective_stop.py`（只收紧语义/启动外部单日志等）与 `tests/test_main_shutdown.py`（debounce 分级逻辑）
 
 ## Milestone/附加改进：杠杆实时更新（WS）+ 启动时 REST 校准
@@ -243,7 +243,7 @@ src/
 | 需求 | 模块 |
 |------|------|
 | WS 重连 | `ws/market.py`, `ws/user_data.py` |
-| reduceOnly 参数 | `exchange/adapter.py` |
+| reduce-only 语义约束（`positionSide + side + qty<=position`） | `execution/engine.py`, `exchange/adapter.py` |
 | 信号判断 | `signal/engine.py` |
 | 状态机 | `execution/engine.py` |
 | 数据陈旧检测 | `risk/manager.py` |
@@ -1097,12 +1097,12 @@ pytest: 26 passed
 **产出**：`src/main.py`、`src/risk/protective_stop.py`、`src/ws/user_data.py`、`src/models.py`、`src/config/models.py`、`src/config/loader.py`
 
 ### 目标
-- 将“外部接管”判定扩展为：**只要是 reduceOnly 的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=True`）。
+- 将“外部接管”判定扩展为：**只要是 `reduceOnly=true` 字段的 stop/tp 条件单**，即视为外部接管（不要求 `closePosition=true` 字段）。
 - 明确外部接管释放策略：多外部单并存时，WS 收到某一张终态不代表外部单消失，释放以 REST verify 为准。
 - REST 校验以 raw openOrders 为主：避免 ccxt/openOrders 漏掉部分 closePosition 条件单。
 
 ### 关键改动
-- 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=True`（同时保留 `closePosition=True` 兜底）。
+- 外部接管识别：`STOP/TAKE_PROFIT*` 且 `reduceOnly=true` 字段（同时保留 `closePosition=true` 字段 兜底）。
 - 外部接管锁存：WS 看到外部 stop/tp `NEW` 后锁存；WS 终态先触发 verify，只有 REST verify 确认同侧外部 stop/tp 已消失才 release。
 - 日志策略调整：外部接管只在状态变化时打点（set/release/verify）；启动时若存在外部 stop/tp 仅打印一条摘要（order_id/client_id/stop_price/workingType）。
 
@@ -1139,7 +1139,7 @@ n/a (docs only)
 
 | 验证项 | 验证方法 | 状态 |
 |--------|----------|------|
-| reduceOnly/positionSide | 下单后检查订单参数、不会反向开仓 | ✅ |
+| reduce-only 语义约束/positionSide | 下单后检查关键约束、不会反向开仓 | ✅ |
 | post-only (GTX) | maker 订单被交易所接受、不会立即成交 | ✅ |
 | 断线重连 | 手动断网/杀进程后自动恢复 | ✅ |
 | 模式轮转 | maker 连续超时后切到 AGGRESSIVE_LIMIT | ✅ |

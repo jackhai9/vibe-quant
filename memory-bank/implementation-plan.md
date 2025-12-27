@@ -50,7 +50,7 @@ ws:
 
 ### Step 0.1：确认运行目标与最小闭环范围（MVP）
 **指令**
-- 将 MVP 定义为：单 symbol、单侧（先 LONG 或先 SHORT）执行 `MAKER_ONLY` 的 reduce-only 平仓；支持 WS 获取 best bid/ask + last trade；满足触发条件就挂单，TTL 到就撤单；仓位归零判定正确；全程日志可追踪。
+- 将 MVP 定义为：单 symbol、单侧（先 LONG 或先 SHORT）执行 `MAKER_ONLY` 的 reduce-only 平仓（reduce-only 语义约束：`positionSide + side + qty<=position`）；支持 WS 获取 best bid/ask + last trade；满足触发条件就挂单，TTL 到就撤单；仓位归零判定正确；全程日志可追踪。
 - 明确“不做”的内容（MVP 阶段暂缓）：模式轮转、加速倍数、ROI 倍数、强平距离兜底、Telegram、全局限速、多 symbol 并发。
 
 **测试（验收标准）**
@@ -68,7 +68,7 @@ ws:
 - 明确“模块间不互相直接访问内部状态”，只通过定义的数据结构传递。
 
 **测试**
-- 静态检查：打开目录结构，能在 1 分钟内指出每个需求落在哪个模块（比如“WS 重连在 ws 模块”，“reduceOnly 参数在 exchange 模块”）。
+- 静态检查：打开目录结构，能在 1 分钟内指出每个需求落在哪个模块（比如“WS 重连在 ws 模块”，“reduce-only 语义约束在执行/下单链路”）。
 - 评审测试：让另一个人只看目录与接口描述，复述一遍事件流（WS→Signal→Engine→Exchange），能复述正确即通过。
 
 ### Step 1.2：配置文件与配置覆盖规则（global + symbols）
@@ -186,17 +186,17 @@ ws:
 
 ---
 
-## 阶段 5：执行层（MVP）：MAKER_ONLY + reduce-only + TTL 撤单
+## 阶段 5：执行层（MVP）：MAKER_ONLY + reduce-only 语义约束 + TTL 撤单
 
 ### Step 5.1：订单意图（OrderIntent）与安全参数固定
 **指令**
 - 对 Hedge 模式强制绑定：
-  - LONG 平仓：side=SELL + positionSide=LONG + reduceOnly=true
-  - SHORT 平仓：side=BUY + positionSide=SHORT + reduceOnly=true
+  - LONG 平仓：side=SELL + positionSide=LONG + `qty<=position_amt(LONG)`
+  - SHORT 平仓：side=BUY + positionSide=SHORT + `qty<=abs(position_amt(SHORT))`
 - maker 订单固定使用 post-only（GTX 或等价方式），并记录当前 execution_mode=MAKER_ONLY。
 
 **测试**
-- 参数正确性测试：在日志中打印每笔下单的关键参数（不含密钥），人工核对 reduceOnly 与 positionSide 每次都正确。
+- 参数正确性测试：在日志中打印每笔下单的关键参数（不含密钥），人工核对 positionSide/side/qty<=position 每次都正确。
 - 反向开仓防护测试：在已有 LONG 仓位时触发平仓，不应导致 SHORT 仓位增加（通过下单后持仓读取验证）。
 
 ### Step 5.2：maker 定价策略（maker_price_mode）落地
@@ -282,7 +282,7 @@ ws:
 - 可运行的 WS 行情接入（best bid/ask + last trade）
 - User Data Stream 订单状态推送
 - 原始两类触发条件
-- maker-only reduce-only 拆单减仓（TTL 撤单 + 冷却）
+- maker-only reduce-only 语义约束 拆单减仓（TTL 撤单 + 冷却）
 - 正确的 Hedge 仓位识别与不留尘埃收敛
 - WS 断线重连（指数退避）+ 校准
 - 优雅退出（撤销挂单后退出）
@@ -310,11 +310,11 @@ ws:
 - AGGRESSIVE_LIMIT 使用 LIMIT 非 post-only：
   - LONG 平仓：price = best_bid
   - SHORT 平仓：price = best_ask
-- 仍然必须 reduceOnly + positionSide 正确。
+- 不依赖下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证，且 positionSide 必须正确。
 
 **测试**
 - 成交效率测试：与 maker-only 对比，AGGRESSIVE_LIMIT 下单应显著更易成交（在同等市场条件下）。
-- 安全参数测试：日志抽样核对 reduceOnly/positionSide 在 AGGRESSIVE_LIMIT 下仍无误。
+- 安全参数测试：日志抽样核对 positionSide/side/qty<=position 在 AGGRESSIVE_LIMIT 下仍无误。
 
 ### Step 7.3：MARKET（不实现）
 **指令**
@@ -450,7 +450,7 @@ ws:
   - WS 行情接入 OK（best bid/ask + last trade）
   - User Data Stream OK（订单状态推送、listenKey 续期）
   - 信号（原始两类）OK
-  - maker-only reduce-only 下单/TTL 撤单/冷却 OK（部分成交重置计数器）
+  - maker-only reduce-only 语义约束 下单/TTL 撤单/冷却 OK（部分成交重置计数器）
   - Hedge 仓位识别与收敛结束 OK（含 minNotional 检查）
   - WS 重连（指数退避）+ 校准 OK
   - 优雅退出 OK（撤销挂单后退出）

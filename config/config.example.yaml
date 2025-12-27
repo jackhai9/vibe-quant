@@ -105,7 +105,7 @@ global:
       enabled: true
       # dist_to_liq = abs(mark_price - liquidation_price) / mark_price
       dist_to_liq: 0.01
-      # 外部止损接管：当检测到外部 stop/tp（cp=True 或 reduceOnly=True）时，本程序停止维护自己的保护止损；并定期用 REST 校验释放锁存（REST 以 raw openOrders 为主）
+      # 外部止损接管：当检测到外部 stop/tp（closePosition=true 字段 或 reduceOnly=true 字段）时，本程序停止维护自己的保护止损；并定期用 REST 校验释放锁存（REST 以 raw openOrders 为主）
       external_takeover:
         enabled: true
         rest_verify_interval_s: 30
