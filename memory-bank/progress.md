@@ -59,6 +59,14 @@
 - `src/main.py`：新增成交率定时输出任务（可扩展更多指标）
 - `src/execution/engine.py`：提交时不再即时输出成交率日志，仅保留周期性窗口输出
 
+## Bug 修复：websockets 版本兼容导致 WS 断连异常
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-26<br>
+**动机**：运行时出现 `ClientConnection` 缺少 `recv_messages` 的异常，源于 websockets 15 与现有代码不兼容。<br>
+**产出**：
+- `requirements.txt`：固定 websockets 版本为 12.0，避免 API 变更导致断连异常
+
 ## Milestone/附加改进：日志系统重构
 
 **状态**：✅ 已完成<br>

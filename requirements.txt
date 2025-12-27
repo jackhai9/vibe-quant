@@ -10,7 +10,7 @@ ccxt>=4.0.0
 aiohttp>=3.9.0
 
 # WebSocket
-websockets>=12.0
+websockets==12.0
 
 # 配置
 PyYAML>=6.0
