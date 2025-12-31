@@ -1,5 +1,5 @@
 # Input: positions, rules, exchange adapter, external stop orders
-# Output: protective stop orders, takeover decisions, and state
+# Output: protective stop orders, takeover decisions, and stable clientOrderId state
 # Pos: protective stop manager
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -11,13 +11,14 @@
 - 使用 markPrice 触发，尽量在接近强平前自动平仓（防程序崩溃/休眠/断网）
 
 实现策略：
-- clientOrderId 使用前缀 + 时间戳（前缀跨 run 一致，便于识别；时间戳避免重复）
+- clientOrderId 使用稳定前缀 + 微秒时间戳 + 计数器（前缀跨 run 一致，便于识别；时间戳与计数器避免重复）
 - 仅在持仓存在时维护；仓位归零后自动撤销（避免误触发开仓）
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -50,6 +51,8 @@ class ProtectiveStopState:
 
 class ProtectiveStopManager:
     """保护性止损管理器（按 symbol + positionSide 维护 1 张条件单）。"""
+
+    _order_counter: int = 0  # 类级别计数器，确保运行时唯一
 
     def __init__(
         self,
@@ -84,15 +87,19 @@ class ProtectiveStopManager:
         side_code = "L" if position_side == PositionSide.LONG else "S"
         prefix = f"{self._client_order_id_prefix}{ws_symbol}-{side_code}"
         if len(prefix) >= 30:
-            # 极少数超长 symbol：退化为 hash
-            prefix = f"{self._client_order_id_prefix}{hash(ws_symbol) & 0xfffffff:07x}-{side_code}"
+            # 超长 symbol：使用 md5 稳定哈希（hash() 跨进程不稳定）
+            stable_hash = hashlib.md5(ws_symbol.encode()).hexdigest()[:7]
+            prefix = f"{self._client_order_id_prefix}{stable_hash}-{side_code}"
         return prefix
 
     def build_client_order_id(self, symbol: str, position_side: PositionSide) -> str:
-        """生成唯一的 clientOrderId（前缀 + 时间戳，Binance 要求 clientOrderId 7 天内唯一）。"""
+        """生成唯一的 clientOrderId（前缀 + 计数器，Binance 要求 clientOrderId 7 天内唯一）。"""
         prefix = self._build_client_order_id_prefix(symbol, position_side)
-        ts = int(time.time() * 1000) % 100000  # 5位时间戳后缀
-        cid = f"{prefix}-{ts}"
+        # 使用类级别计数器 + 时间戳微秒部分，确保运行时唯一
+        ProtectiveStopManager._order_counter += 1
+        ts_micro = int(time.time() * 1000000) % 1000000  # 6位微秒
+        counter = ProtectiveStopManager._order_counter % 10000  # 4位计数器
+        cid = f"{prefix}-{ts_micro:06d}{counter:04d}"
         if len(cid) > 36:
             # Binance clientOrderId 限制 36 字符
             cid = cid[:36]

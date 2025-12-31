@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含执行反馈/成交率策略） -->
+<!-- Output: 可追溯的变更与状态（含执行反馈/成交率策略与规则提取） -->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -68,6 +68,16 @@
 - `src/main.py`：reduce-only 低于 minNotional 仅记录日志并放行下单
 - `tests/test_min_notional_reduce_only.py`：更新为放行行为测试
 - `docs/troubleshooting.md`：补充放行与日志事件说明
+
+## 规则提取与风控/止损细化
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-31<br>
+**动机**：提高交易规则精度与风控阈值可控性，避免长 symbol 前缀不稳定带来的条件单归属误判。<br>
+**产出**：
+- `src/exchange/adapter.py`：优先使用 Binance filters 提取 tick/step/minQty/minNotional
+- `src/risk/manager.py`：支持 per-symbol 强平距离阈值覆盖
+- `src/risk/protective_stop.py`：clientOrderId 前缀稳定哈希 + 微秒时间戳 + 计数器
 
 ## Bug 修复：WS 代理支持（改用 aiohttp ws_connect）
 

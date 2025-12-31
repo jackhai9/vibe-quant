@@ -1,5 +1,5 @@
 # Input: Position, MarketEvent, config
-# Output: RiskFlag and risk triggers
+# Output: RiskFlag and risk triggers (per-symbol threshold)
 # Pos: risk manager
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -80,16 +80,22 @@ class RiskManager:
         last_update = self._last_update_ms.get(symbol, 0)
         return (current_ms - last_update) > self.stale_data_ms
 
-    def check_risk(self, position: Position) -> RiskFlag:
+    def check_risk(
+        self,
+        position: Position,
+        liq_distance_threshold: Optional[Decimal] = None,
+    ) -> RiskFlag:
         """
         检查仓位风险
 
         Args:
             position: 仓位信息
+            liq_distance_threshold: 强平距离阈值（可选，覆盖默认值）
 
         Returns:
             RiskFlag
         """
+        threshold = liq_distance_threshold if liq_distance_threshold is not None else self.liq_distance_threshold
         mark_price = position.mark_price
         liquidation_price = position.liquidation_price
 
@@ -112,7 +118,7 @@ class RiskManager:
             )
 
         dist_to_liq = abs(mark_price - liquidation_price) / mark_price
-        is_triggered = dist_to_liq <= self.liq_distance_threshold
+        is_triggered = dist_to_liq <= threshold
         reason = "liq_distance_breach" if is_triggered else None
 
         return RiskFlag(

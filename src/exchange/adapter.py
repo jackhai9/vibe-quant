@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data, order results, and trade meta
+# Output: market/position data, order results, and filter-based rules
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -198,34 +198,66 @@ class ExchangeAdapter:
         Returns:
             SymbolRules
         """
-        # 精度信息
         precision = market.get("precision", {})
         limits = market.get("limits", {})
+        info = market.get("info", {})
+        filters = info.get("filters", [])
 
-        # tick_size (价格精度)
-        tick_size = Decimal(str(precision.get("price", "0.01")))
+        # tick_size (价格精度) - 优先从 Binance filters 获取
+        tick_size = None
+        for f in filters:
+            if f.get("filterType") == "PRICE_FILTER":
+                tick_size_str = f.get("tickSize")
+                if tick_size_str:
+                    tick_size = Decimal(str(tick_size_str))
+                break
+        if tick_size is None:
+            # 回退: ccxt precision 可能是小数位数(int)或实际精度(Decimal)
+            price_precision = precision.get("price", 2)
+            if isinstance(price_precision, int):
+                tick_size = Decimal("1") / (Decimal("10") ** price_precision)
+            else:
+                tick_size = Decimal(str(price_precision))
 
-        # step_size (数量精度)
-        step_size = Decimal(str(precision.get("amount", "0.001")))
+        # step_size (数量精度) - 优先从 Binance filters 获取
+        step_size = None
+        for f in filters:
+            if f.get("filterType") == "LOT_SIZE":
+                step_size_str = f.get("stepSize")
+                if step_size_str:
+                    step_size = Decimal(str(step_size_str))
+                break
+        if step_size is None:
+            # 回退: ccxt precision 可能是小数位数(int)或实际精度(Decimal)
+            amount_precision = precision.get("amount", 3)
+            if isinstance(amount_precision, int):
+                step_size = Decimal("1") / (Decimal("10") ** amount_precision)
+            else:
+                step_size = Decimal(str(amount_precision))
 
-        # min_qty (最小数量)
-        amount_limits = limits.get("amount", {})
-        min_qty = Decimal(str(amount_limits.get("min", "0.001")))
+        # min_qty (最小数量) - 优先从 Binance filters 获取
+        min_qty = None
+        for f in filters:
+            if f.get("filterType") == "LOT_SIZE":
+                min_qty_str = f.get("minQty")
+                if min_qty_str:
+                    min_qty = Decimal(str(min_qty_str))
+                break
+        if min_qty is None:
+            amount_limits = limits.get("amount", {})
+            min_qty = Decimal(str(amount_limits.get("min", "0.001")))
 
         # min_notional (最小名义价值)
-        # ccxt 可能在 limits.cost.min 或 info 中
-        cost_limits = limits.get("cost", {})
-        min_notional = Decimal(str(cost_limits.get("min", "5")))
-
-        # 如果 ccxt 没有提供，尝试从 info 中获取
-        info = market.get("info", {})
-        if min_notional == Decimal("5"):
-            # Binance filters 中查找 MIN_NOTIONAL
-            filters = info.get("filters", [])
-            for f in filters:
-                if f.get("filterType") == "MIN_NOTIONAL":
-                    min_notional = Decimal(str(f.get("notional", "5")))
-                    break
+        min_notional = None
+        for f in filters:
+            if f.get("filterType") == "MIN_NOTIONAL":
+                notional_str = f.get("notional")
+                if notional_str:
+                    min_notional = Decimal(str(notional_str))
+                break
+        if min_notional is None:
+            cost_limits = limits.get("cost", {})
+            min_notional = Decimal(str(cost_limits.get("min", "5")))
 
         return SymbolRules(
             symbol=symbol,
