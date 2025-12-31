@@ -1,5 +1,5 @@
 # Input: WS URLs, symbols, callbacks, reconnect state
-# Output: MarketEvent stream + reconnect callbacks (aiohttp ws + proxy)
+# Output: MarketEvent stream + reconnect callbacks (aiohttp ws + proxy + explicit close timeout)
 # Pos: market WS client (market data)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -162,7 +162,6 @@ class MarketWSClient:
                 url,
                 heartbeat=WS_HEARTBEAT_S,
                 proxy=self.proxy,
-                timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT_S),
             )
 
             log_ws_connect("market_data")

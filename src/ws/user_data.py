@@ -1,5 +1,5 @@
 # Input: API keys, listenKey, callbacks, reconnect state
-# Output: order/position/leverage updates (maker role/pnl/fee + aiohttp ws + proxy)
+# Output: order/position/leverage updates (maker role/pnl/fee + aiohttp ws + proxy + explicit close timeout)
 # Pos: user data WS client (account stream)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -174,7 +174,6 @@ class UserDataWSClient:
                 ws_url,
                 heartbeat=WS_HEARTBEAT_S,
                 proxy=self.proxy,
-                timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT_S),
             )
 
             log_ws_connect("user_data")
