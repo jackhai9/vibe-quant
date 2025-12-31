@@ -238,7 +238,7 @@ pyright src/
 | 语言 | Python 3.11+ |
 | 异步 | asyncio |
 | 交易所 REST | ccxt |
-| WebSocket | websockets |
+| WebSocket | aiohttp |
 | HTTP | aiohttp |
 | 配置 | PyYAML + pydantic |
 | 日志 | loguru |

@@ -41,7 +41,6 @@
 参考 `requirements.txt`：
 - ccxt >= 4.0.0
 - aiohttp >= 3.9.0
-- websockets >= 12.0
 - PyYAML >= 6.0
 - pydantic >= 2.0.0
 - python-dotenv >= 1.0.0
@@ -813,4 +812,3 @@ sudo systemctl enable vibe-quant-btc
 - [README](../README.md)
 
 ---
-

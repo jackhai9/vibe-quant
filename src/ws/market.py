@@ -1,5 +1,5 @@
 # Input: WS URLs, symbols, callbacks, reconnect state
-# Output: MarketEvent stream + reconnect callbacks
+# Output: MarketEvent stream + reconnect callbacks (aiohttp ws + proxy)
 # Pos: market WS client (market data)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -26,8 +26,7 @@ import json
 from decimal import Decimal
 from typing import Callable, Dict, List, Optional, Any
 
-import websockets
-from websockets import ClientConnection
+import aiohttp
 
 from src.models import MarketEvent
 from src.utils.logger import (
@@ -43,6 +42,12 @@ from src.utils.helpers import current_time_ms, ws_stream_to_symbol
 # Binance Futures WebSocket 基础 URL
 WS_BASE_URL = "wss://fstream.binance.com"
 
+# WS 默认超时与心跳
+HTTP_TIMEOUT_S = 10.0
+WS_CLOSE_TIMEOUT_S = 1.0
+SESSION_CLOSE_TIMEOUT_S = 1.0
+WS_HEARTBEAT_S = 20.0
+
 
 class MarketWSClient:
     """市场数据 WebSocket 客户端"""
@@ -56,6 +61,7 @@ class MarketWSClient:
         max_delay_ms: int = 30000,
         multiplier: int = 2,
         stale_data_ms: int = 1500,
+        proxy: Optional[str] = None,
     ):
         """
         初始化市场数据 WS 客户端
@@ -68,6 +74,7 @@ class MarketWSClient:
             max_delay_ms: 重连最大延迟
             multiplier: 重连延迟倍数
             stale_data_ms: 数据陈旧阈值（ms）
+            proxy: HTTP 代理地址，如 "http://127.0.0.1:7890"
         """
         self.symbols = symbols
         self.on_event = on_event
@@ -76,9 +83,11 @@ class MarketWSClient:
         self.max_delay_ms = max_delay_ms
         self.multiplier = multiplier
         self.stale_data_ms = stale_data_ms
+        self.proxy = proxy
 
         # WebSocket 连接
-        self._ws: Optional[ClientConnection] = None
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._session: Optional[aiohttp.ClientSession] = None
         self._running = False
         self._reconnect_task: Optional[asyncio.Task[None]] = None
 
@@ -145,11 +154,15 @@ class MarketWSClient:
 
         try:
             was_reconnect = self._reconnect_count > 0
-            self._ws = await websockets.connect(
+            if not self._session or self._session.closed:
+                timeout = aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)
+                self._session = aiohttp.ClientSession(timeout=timeout)
+
+            self._ws = await self._session.ws_connect(
                 url,
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
+                heartbeat=WS_HEARTBEAT_S,
+                proxy=self.proxy,
+                timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT_S),
             )
 
             log_ws_connect("market_data")
@@ -172,7 +185,7 @@ class MarketWSClient:
             await self._receive_loop()
 
         except Exception as e:
-            log_error(f"WS 连接失败: {e}")
+            log_error(f"WS 连接失败: {type(e).__name__} {e}")
             if self._running:
                 await self._reconnect()
 
@@ -193,10 +206,17 @@ class MarketWSClient:
 
         if self._ws:
             try:
-                await asyncio.wait_for(self._ws.close(), timeout=1.0)
+                await asyncio.wait_for(self._ws.close(), timeout=WS_CLOSE_TIMEOUT_S)
             except Exception:
                 pass
             self._ws = None
+
+        if self._session:
+            try:
+                await asyncio.wait_for(self._session.close(), timeout=SESSION_CLOSE_TIMEOUT_S)
+            except Exception:
+                pass
+            self._session = None
 
         log_ws_disconnect("market_data")
 
@@ -212,22 +232,37 @@ class MarketWSClient:
                 if not self._running:
                     break
 
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    log_error(f"JSON 解析错误: {e}")
-                except Exception as e:
-                    log_error(f"消息处理错误: {e}")
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(message.data)
+                        await self._handle_message(data)
+                    except json.JSONDecodeError as e:
+                        log_error(f"JSON 解析错误: {e}")
+                    except Exception as e:
+                        log_error(f"消息处理错误: {e}")
+                elif message.type == aiohttp.WSMsgType.ERROR:
+                    err = self._ws.exception() if self._ws else None
+                    log_error(f"WS 接收错误: {err}")
+                elif message.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
 
-        except websockets.ConnectionClosed as e:
-            log_ws_disconnect("market_data", f"code={e.code}")
-            if self._running:
-                await self._reconnect()
+        except asyncio.CancelledError:
+            self._running = False
+            raise
         except Exception as e:
-            log_error(f"WS 接收错误: {e}")
-            if self._running:
-                await self._reconnect()
+            log_error(f"WS 接收错误: {type(e).__name__} {e}")
+
+        if self._running:
+            close_code = self._ws.close_code if self._ws else None
+            if close_code is not None:
+                log_ws_disconnect("market_data", f"code={close_code}")
+            else:
+                log_ws_disconnect("market_data")
+            await self._reconnect()
 
     async def _handle_message(self, data: Dict[str, Any]) -> None:
         """
@@ -293,9 +328,9 @@ class MarketWSClient:
             best_ask = Decimal(str(data.get("a", "0")))
             timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
 
-            # 验证 bid < ask
-            if best_bid >= best_ask:
-                get_logger().warning(f"异常报价: {symbol} bid={best_bid} >= ask={best_ask}")
+            # 验证 bid <= ask（bid > ask 为异常数据，bid == ask 在低流动性市场可能出现）
+            if best_bid > best_ask:
+                get_logger().warning(f"异常报价: {symbol} bid={best_bid} > ask={best_ask}")
                 return None
 
             return MarketEvent(
@@ -469,7 +504,7 @@ class MarketWSClient:
         if self._ws is None:
             return False
         try:
-            return self._ws.state.name == "OPEN"
+            return not self._ws.closed
         except Exception:
             return False
 

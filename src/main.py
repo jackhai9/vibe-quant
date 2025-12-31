@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and order events (including fill-rate feedback)
+# Output: application lifecycle, async tasks, and order events (including fill-rate feedback and reduce-only min-notional handling)
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -885,6 +885,7 @@ class Application:
             max_delay_ms=ws_config.reconnect.max_delay_ms,
             multiplier=ws_config.reconnect.multiplier,
             stale_data_ms=ws_config.stale_data_ms,
+            proxy=global_config.proxy,
         )
 
         self.user_data_ws = UserDataWSClient(
@@ -921,6 +922,35 @@ class Application:
 
         if not intent.client_order_id:
             intent.client_order_id = self._next_client_order_id()
+
+        # 确保满足 min_notional（补量）；reduce-only 不增量，仅记录并放行
+        if intent.price and intent.price > Decimal("0"):
+            if intent.reduce_only:
+                rules = self._rules.get(intent.symbol)
+                if rules:
+                    notional = intent.qty * intent.price
+                    if notional < rules.min_notional:
+                        log_event(
+                            "min_notional_allow_reduce_only",
+                            level="debug",
+                            symbol=intent.symbol,
+                            qty=intent.qty,
+                            price=intent.price,
+                            notional=notional,
+                            min_notional=rules.min_notional,
+                        )
+            else:
+                adjusted_qty = self.exchange.ensure_min_notional(intent.symbol, intent.qty, intent.price)
+                if adjusted_qty != intent.qty:
+                    log_event(
+                        "min_notional_adjust",
+                        level="debug",
+                        symbol=intent.symbol,
+                        original_qty=intent.qty,
+                        adjusted_qty=adjusted_qty,
+                        price=intent.price,
+                    )
+                    intent.qty = adjusted_qty
 
         return await self.exchange.place_order(intent)
 
@@ -1697,7 +1727,10 @@ class Application:
         if signal:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
             if self.risk_manager:
-                risk_flag = self.risk_manager.check_risk(position)
+                # 使用 per-symbol 风控阈值
+                symbol_cfg = self._symbol_configs.get(symbol)
+                symbol_threshold = symbol_cfg.liq_distance_threshold if symbol_cfg else None
+                risk_flag = self.risk_manager.check_risk(position, liq_distance_threshold=symbol_threshold)
                 if risk_flag.is_triggered and risk_flag.dist_to_liq is not None:
                     target_mode = ExecutionMode.AGGRESSIVE_LIMIT
 

@@ -26,8 +26,7 @@
 | 库 | 版本 | 用途 | 理由 |
 |----|------|------|------|
 | **ccxt** | >=4.0.0 | REST API（markets/positions/下单/撤单） | 统一接口，支持 100+ 交易所，Binance Futures 支持完善 |
-| **websockets** | >=12.0 | 市场数据 WS（bookTicker/aggTrade/markPrice） | 纯 Python 实现，asyncio 原生支持，API 简洁 |
-| **aiohttp** | >=3.9.0 | User Data Stream listenKey 管理、Telegram 通知 | 异步 HTTP 客户端，与 asyncio 无缝集成 |
+| **aiohttp** | >=3.9.0 | WS（行情+用户数据）+ listenKey 管理 + Telegram 通知 | 统一 HTTP/WS，asyncio 原生支持，代理配置简单 |
 
 ### 配置管理
 
@@ -65,22 +64,22 @@
 
 ## 架构决策
 
-### 为什么用 ccxt + websockets 而不是 binance-futures-connector？
+### 为什么用 ccxt + aiohttp WS 而不是 binance-futures-connector？
 
 1. **ccxt 优势**：
    - REST API 封装完善，统一接口
    - 市场规则（tickSize/stepSize/minQty）自动解析
    - 社区活跃，文档丰富
 
-2. **websockets 优势**：
-   - 纯 asyncio，无回调地狱
-   - 连接管理简单，支持自定义重连逻辑
-   - binance-futures-connector 的 WS 是同步回调模式，与 asyncio 集成不够优雅
+2. **aiohttp WS 优势**：
+   - asyncio 原生接口，和主流程无缝集成
+   - HTTP 与 WS 统一（listenKey 管理 + WS 订阅共用一套依赖）
+   - 代理支持更直接（HTTP/HTTPS 代理参数可复用）
 
 ### 为什么用 aiohttp 而不是 python-telegram-bot？
 
 - Telegram Bot API 本质是 HTTP 调用
-- aiohttp 已用于 listenKey 管理，复用即可
+- aiohttp 已用于 WS + listenKey 管理，复用即可
 - python-telegram-bot 功能过重（支持 Webhook、Handler 等），我们只需要发消息
 
 ### 为什么用 pydantic 而不是 dataclasses？
@@ -116,6 +115,6 @@ pip install -r requirements.txt
 - Python 3.11+ 必需（使用了 `asyncio.TaskGroup`、`typing` 新特性）
 - ccxt 4.x 与 3.x API 有差异，锁定 4.x
 - pydantic 2.x 与 1.x 不兼容，锁定 2.x
-- websockets 12.x 与旧版 API 有变化（`WebSocketClientProtocol` → `ClientConnection`）
+- aiohttp 3.9+ 提供稳定的 ws_connect/heartbeat/timeout 支持
 
 ---

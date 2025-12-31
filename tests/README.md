@@ -1,5 +1,5 @@
 <!-- Input: pytest 测试用例 -->
-<!-- Output: 模块行为与回归验证（含成交率反馈） -->
+<!-- Output: 模块行为与回归验证（含成交率反馈与 min_notional 边界） -->
 <!-- Pos: tests 文件夹级说明与索引 -->
 <!-- 一旦我所属的文件夹有所变化，请更新我。 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
@@ -16,6 +16,7 @@ pytest 测试集（含撤单分层、成交率反馈与保护止损回归）。<
 - `test_execution.py`：执行引擎测试
 - `test_logger.py`：日志系统测试
 - `test_main_shutdown.py`：优雅退出测试
+- `test_min_notional_reduce_only.py`：reduce-only minNotional 放行下单测试
 - `test_notify_telegram.py`：Telegram 通知测试（含 429 冷却等待）
 - `test_order_cleanup.py`：退出撤单隔离测试
 - `test_post_only_retry.py`：post-only 拒单重试测试

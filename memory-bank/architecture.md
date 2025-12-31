@@ -22,8 +22,8 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 - **语言**：Python 3.11+
 - **异步**：asyncio
 - **交易所**：ccxt (REST)
-- **WebSocket**：websockets (WS)
-- **HTTP**：aiohttp（User Data Stream listenKey 管理）
+- **WebSocket**：aiohttp (WS)
+- **HTTP**：aiohttp（REST + Telegram）
 - **配置**：PyYAML + pydantic
 - **日志**：loguru
 - **通知**：aiohttp（Telegram Bot API）

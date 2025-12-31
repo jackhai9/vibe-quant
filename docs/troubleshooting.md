@@ -1,5 +1,5 @@
 <!-- Input: 常见故障场景、日志/配置/运行环境 -->
-<!-- Output: 排查步骤与解决方案 -->
+<!-- Output: 排查步骤与解决方案（含 reduce-only 边界与 min_notional 放行说明） -->
 <!-- Pos: 文档/故障排查指南 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 故障排查指南
@@ -191,8 +191,8 @@ global:
    ```
 
 2. **检查代理**：
-   - WebSocket 需要 HTTP/HTTPS 代理支持 CONNECT 方法
-   - socks5 代理需要使用 `proxychains` 或类似工具
+   - WebSocket 通过 `global.proxy` 走 HTTP/HTTPS 代理（需支持 CONNECT 方法）
+   - SOCKS5 代理需使用 `proxychains` 或切换为 HTTP/HTTPS 代理
 
 3. **调整重连参数**：
    ```yaml
@@ -418,6 +418,8 @@ symbols:
 
 **解决方案**：
 1. **系统会自动处理规整**，如果出现此错误，说明仓位已接近完结
+   - reduce-only 订单为避免超仓反向开仓，不会为满足 `minNotional` 增量补量
+   - 若名义价值过小，仍会尝试下单，交易所可能拒单，可关注日志事件 `min_notional_allow_reduce_only`
 2. 检查配置：
    ```yaml
    global:
@@ -458,14 +460,14 @@ symbols:
 
 - 检查代理稳定性（如果使用代理）
 
-- 调整数据陈旧阈值：
+#### 3. 调整数据陈旧阈值：
   ```yaml
   global:
     ws:
       stale_data_ms: 3000  # 增加容忍度（默认1500）
   ```
 
-#### 3. 监控重连状态
+#### 4. 监控重连状态
 ```bash
 # 查看最近重连记录
 grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -20

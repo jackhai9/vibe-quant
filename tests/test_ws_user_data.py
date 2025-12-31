@@ -144,13 +144,19 @@ class TestReconnectCallback:
 
         client._reconnect_count = 1
 
-        dummy_ws = AsyncMock()
+        dummy_ws = MagicMock()
+        dummy_ws.close = AsyncMock()
+        dummy_ws.closed = False
+        dummy_session = MagicMock()
+        dummy_session.closed = False
+        dummy_session.ws_connect = AsyncMock(return_value=dummy_ws)
+        dummy_session.close = AsyncMock()
 
         with patch.object(client, "_get_listen_key", new=AsyncMock(return_value="listen_key")):
             with patch.object(client, "_close_listen_key", new=AsyncMock()):
                 with patch.object(client, "_keepalive_loop", new=AsyncMock()):
                     with patch.object(client, "_receive_loop", new=AsyncMock()):
-                        with patch("src.ws.user_data.websockets.connect", new=AsyncMock(return_value=dummy_ws)):
+                        with patch("src.ws.user_data.aiohttp.ClientSession", return_value=dummy_session):
                             await client.connect()
                             await asyncio.wait_for(client.disconnect(), timeout=3.0)
 

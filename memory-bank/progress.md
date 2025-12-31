@@ -59,13 +59,27 @@
 - `src/main.py`：新增成交率定时输出任务（可扩展更多指标）
 - `src/execution/engine.py`：提交时不再即时输出成交率日志，仅保留周期性窗口输出
 
-## Bug 修复：websockets 版本兼容导致 WS 断连异常
+## 行为调整：reduce-only minNotional 放行下单
 
 **状态**：✅ 已完成<br>
-**日期**：2025-12-26<br>
-**动机**：运行时出现 `ClientConnection` 缺少 `recv_messages` 的异常，源于 websockets 15 与现有代码不兼容。<br>
+**日期**：2025-12-31<br>
+**动机**：交易所客户端允许小额收尾，为避免过早阻断 reduce-only 平仓，保留下单尝试并交由交易所判定。<br>
 **产出**：
-- `requirements.txt`：固定 websockets 版本为 12.0，避免 API 变更导致断连异常
+- `src/main.py`：reduce-only 低于 minNotional 仅记录日志并放行下单
+- `tests/test_min_notional_reduce_only.py`：更新为放行行为测试
+- `docs/troubleshooting.md`：补充放行与日志事件说明
+
+## Bug 修复：WS 代理支持（改用 aiohttp ws_connect）
+
+**状态**：✅ 已完成<br>
+**日期**：2025-12-31<br>
+**动机**：websockets 不支持 HTTP/HTTPS 代理，WS 连接在代理环境下超时失败。<br>
+**产出**：
+- `src/ws/market.py` / `src/ws/user_data.py`：改用 aiohttp ws_connect，支持 proxy/heartbeat
+- `src/main.py`：market WS 注入 `global.proxy`
+- `tests/test_ws_market.py` / `tests/test_ws_user_data.py`：更新为 aiohttp session mock
+- `requirements.txt`：移除 websockets 依赖
+- 文档同步：部署/故障排查/技术栈/架构等
 
 ## Milestone/附加改进：日志系统重构
 
@@ -398,11 +412,11 @@ global 默认值 + symbol 覆盖 = MergedSymbolConfig
    - 数据陈旧检测（stale_data_ms 阈值）
 
 2. 依赖更新（`requirements.txt`）
-   - `websocket-client` 替换为 `websockets>=12.0`
+   - WS 改用 aiohttp ws_connect（复用 aiohttp 依赖）
 
-3. 类型检查适配
-   - `WebSocketClientProtocol` → `ClientConnection`（websockets 12+ API）
-   - `is_connected` 属性使用 `state.name == "OPEN"` 检查
+3. 连接状态与代理
+   - `is_connected` 基于 `ws.closed`
+   - WS 支持 `global.proxy`（HTTP/HTTPS）
 
 4. 单元测试（`tests/test_ws_market.py`, 23 个测试用例）
    - 初始化测试

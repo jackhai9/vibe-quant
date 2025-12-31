@@ -396,8 +396,15 @@ class TestReconnectCallback:
         # 模拟已发生过重连尝试
         client._reconnect_count = 1
 
-        dummy_ws = AsyncMock()
-        with patch("src.ws.market.websockets.connect", new=AsyncMock(return_value=dummy_ws)):
+        dummy_ws = MagicMock()
+        dummy_ws.close = AsyncMock()
+        dummy_ws.closed = False
+        dummy_session = MagicMock()
+        dummy_session.closed = False
+        dummy_session.ws_connect = AsyncMock(return_value=dummy_ws)
+        dummy_session.close = AsyncMock()
+
+        with patch("src.ws.market.aiohttp.ClientSession", return_value=dummy_session):
             with patch.object(client, "_receive_loop", new=AsyncMock()):
                 await client.connect()
                 await client.disconnect()

@@ -1,5 +1,5 @@
 # Input: API keys, listenKey, callbacks, reconnect state
-# Output: order/position/leverage updates (including maker role, pnl, fee)
+# Output: order/position/leverage updates (maker role/pnl/fee + aiohttp ws + proxy)
 # Pos: user data WS client (account stream)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -28,8 +28,6 @@ from decimal import Decimal
 from typing import Callable, Dict, Optional, Any, List
 
 import aiohttp
-import websockets
-from websockets import ClientConnection
 
 from src.models import (
     AlgoOrderUpdate,
@@ -67,6 +65,7 @@ WS_CLOSE_TIMEOUT_S = 1.0
 SESSION_CLOSE_TIMEOUT_S = 1.0
 LISTEN_KEY_CLOSE_TIMEOUT_S = 1.5
 TASK_CANCEL_TIMEOUT_S = 1.0
+WS_HEARTBEAT_S = 20.0
 
 
 class UserDataWSClient:
@@ -121,7 +120,7 @@ class UserDataWSClient:
         self._listen_key: Optional[str] = None
 
         # WebSocket 连接
-        self._ws: Optional[ClientConnection] = None
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._running = False
 
         # 续期任务
@@ -171,11 +170,11 @@ class UserDataWSClient:
             logger.debug(f"User Data Stream URL: {ws_url[:50]}...")
 
             # 建立 WS 连接
-            self._ws = await websockets.connect(
+            self._ws = await self._session.ws_connect(
                 ws_url,
-                ping_interval=20,
-                ping_timeout=10,
-                close_timeout=5,
+                heartbeat=WS_HEARTBEAT_S,
+                proxy=self.proxy,
+                timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT_S),
             )
 
             log_ws_connect("user_data")
@@ -199,7 +198,7 @@ class UserDataWSClient:
             self._running = False
             raise
         except Exception as e:
-            log_error(f"User Data Stream 连接失败: {e}")
+            log_error(f"User Data Stream 连接失败: {type(e).__name__} {e}")
             if self._running:
                 await self._reconnect()
         finally:
@@ -341,22 +340,37 @@ class UserDataWSClient:
                 if not self._running:
                     break
 
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    log_error(f"JSON 解析错误: {e}")
-                except Exception as e:
-                    log_error(f"消息处理错误: {e}")
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(message.data)
+                        await self._handle_message(data)
+                    except json.JSONDecodeError as e:
+                        log_error(f"JSON 解析错误: {e}")
+                    except Exception as e:
+                        log_error(f"消息处理错误: {e}")
+                elif message.type == aiohttp.WSMsgType.ERROR:
+                    err = self._ws.exception() if self._ws else None
+                    log_error(f"User Data Stream 接收错误: {err}")
+                elif message.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    break
 
-        except websockets.ConnectionClosed as e:
-            if self._running:
-                log_ws_disconnect("user_data", f"code={e.code}")
-                await self._reconnect()
+        except asyncio.CancelledError:
+            self._running = False
+            raise
         except Exception as e:
-            log_error(f"User Data Stream 接收错误: {e}")
-            if self._running:
-                await self._reconnect()
+            log_error(f"User Data Stream 接收错误: {type(e).__name__} {e}")
+
+        if self._running:
+            close_code = self._ws.close_code if self._ws else None
+            if close_code is not None:
+                log_ws_disconnect("user_data", f"code={close_code}")
+            else:
+                log_ws_disconnect("user_data")
+            await self._reconnect()
 
     async def _handle_message(self, data: Dict[str, Any]) -> None:
         """
@@ -751,7 +765,7 @@ class UserDataWSClient:
         if self._ws is None:
             return False
         try:
-            return self._ws.state.name == "OPEN"
+            return not self._ws.closed
         except Exception:
             return False
 
