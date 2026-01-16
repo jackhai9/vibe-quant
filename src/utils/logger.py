@@ -91,7 +91,7 @@ def setup_logger(
     # 日志格式
     log_format = (
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level: <8}</level> | "
+        "<level>{level: <7}</level> | "
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
         "<level>{message}</level>"
     )
@@ -99,7 +99,7 @@ def setup_logger(
     # 文件日志格式（不带颜色）
     file_format = (
         "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-        "{level: <8} | "
+        "{level: <7} | "
         "{name}:{function}:{line} | "
         "{message}"
     )
