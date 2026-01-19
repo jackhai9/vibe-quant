@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态-->
+<!-- Output: 可追溯的变更与状态（含运行时持仓自动发现）-->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -21,6 +21,16 @@
 | 阶段 10：Telegram 通知 | ✅ |
 | 阶段 11：systemd 部署 | ✅ |
 | **小额实盘验证** | ✅ |
+
+## Milestone/附加改进：运行时持仓自动发现
+
+**状态**：✅ 已完成<br>
+**日期**：2026-01-18<br>
+**动机**：减少配置维护成本，确保新开仓位可自动纳入执行与风控。<br>
+**产出**：
+- `src/main.py`：引入 `active_symbols` 作为运行时唯一来源，启动/校准/动态发现统一收敛，并重建市场 WS
+- `README.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：更新配置语义与运行时流程说明
+- `src/README.md`：更新模块级说明（自动发现 symbols）
 
 ## Milestone/附加改进：撤单接口分层（普通/条件单/混合）
 

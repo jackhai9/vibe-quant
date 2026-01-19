@@ -1,5 +1,5 @@
-# Input: config path, env vars, OS signals
-# Output: application lifecycle, async tasks, and order events (including fill-rate feedback and reduce-only min-notional handling)
+# Input: config path, env vars, OS signals, account positions
+# Output: application lifecycle, async tasks, and runtime symbol orchestration (including fill-rate feedback and reduce-only min-notional handling)
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -116,6 +116,7 @@ class Application:
         self._symbol_leverage: Dict[str, int] = {}  # symbol -> leverage
         self._rules: Dict[str, SymbolRules] = {}  # symbol -> rules
         self._symbol_configs: Dict[str, MergedSymbolConfig] = {}  # symbol -> config
+        self._active_symbols: set[str] = set()  # 运行时管理的 symbols
 
         # 主循环任务
         self._main_loop_task: Optional[asyncio.Task[None]] = None
@@ -142,6 +143,7 @@ class Application:
         self._fill_rate_last_log_ms: dict[tuple[str, PositionSide], int] = {}
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
         self._external_takeover: dict[tuple[str, PositionSide], ExternalTakeoverState] = {}
+        self._symbol_init_lock = asyncio.Lock()
 
     def _get_external_takeover_cfg_ms(self, symbol: str) -> tuple[bool, int, int]:
         cfg = self._symbol_configs.get(symbol)
@@ -506,9 +508,7 @@ class Application:
             await self._sync_protective_stop(symbol=symbol, reason="external_takeover_release")
 
     async def _sync_protective_stops_all(self, *, reason: str) -> None:
-        if not self.config_loader:
-            return
-        for symbol in self.config_loader.get_symbols():
+        for symbol in list(self._active_symbols):
             await self._sync_protective_stop(symbol=symbol, reason=reason)
 
     def _on_engine_fill(
@@ -748,22 +748,15 @@ class Application:
         logger.info("加载配置...")
         self.config_loader = ConfigLoader(self.config_path)
         self.config_loader.load()  # 加载配置文件
-        symbols = self.config_loader.get_symbols()
-
-        if not symbols:
-            raise ValueError("配置中没有定义任何 symbol")
+        configured_symbols = self.config_loader.get_symbols()
 
         # 设置日志
         # 支持通过环境变量指定日志目录（便于 systemd/Docker 持久化日志）
         log_dir = Path(os.environ.get("VQ_LOG_DIR", "logs"))
         setup_logger(log_dir, level="INFO", file_level="DEBUG", console=True)
-        log_startup(symbols)
+        log_startup(configured_symbols)
 
-        logger.info(f"配置加载完成，symbols: {symbols}")
-
-        # 预加载每个 symbol 的合并配置
-        for symbol in symbols:
-            self._symbol_configs[symbol] = self.config_loader.get_symbol_config(symbol)
+        logger.info(f"配置加载完成，symbols(覆盖): {configured_symbols}")
 
         # 2. 初始化交易所适配器
         logger.info("初始化交易所适配器...")
@@ -820,73 +813,18 @@ class Application:
             risk_levels=global_config.risk.levels,
         )
 
-        # 加载交易规则
+        # 加载交易规则（全量，symbol 运行时按需初始化）
         await self.exchange.load_markets()
 
-        for symbol in symbols:
-            rules = self.exchange.get_rules(symbol)
-            if rules:
-                self._rules[symbol] = rules
-                logger.info(f"{symbol} 规则: tick={rules.tick_size}, step={rules.step_size}, min_qty={rules.min_qty}")
-            else:
-                logger.warning(f"{symbol} 未找到交易规则")
-
-        # 3. 初始化信号引擎
+        # 3. 初始化信号引擎（symbol 运行时按需配置）
         logger.info("初始化信号引擎...")
         self.signal_engine = SignalEngine(
             min_signal_interval_ms=global_config.execution.min_signal_interval_ms,
         )
-        for symbol in symbols:
-            cfg = self._symbol_configs[symbol]
-            self.signal_engine.configure_symbol(
-                symbol,
-                min_signal_interval_ms=cfg.min_signal_interval_ms,
-                accel_window_ms=cfg.accel_window_ms,
-                accel_tiers=[(t.ret, t.mult) for t in cfg.accel_tiers],
-                roi_tiers=[(t.roi, t.mult) for t in cfg.roi_tiers],
-            )
 
-        # 4. 初始化执行引擎（每个 symbol 一个）
-        logger.info("初始化执行引擎...")
-        for symbol in symbols:
-            config = self._symbol_configs[symbol]
-            self.execution_engines[symbol] = ExecutionEngine(
-                place_order=self._place_order,
-                cancel_order=self._cancel_order,
-                on_fill=self._on_engine_fill,
-                fetch_order_trade_meta=self.exchange.fetch_order_trade_meta,
-                order_ttl_ms=config.order_ttl_ms,
-                repost_cooldown_ms=config.repost_cooldown_ms,
-                base_lot_mult=config.base_lot_mult,
-                maker_price_mode=config.maker_price_mode,
-                maker_n_ticks=config.maker_n_ticks,
-                maker_safety_ticks=config.maker_safety_ticks,
-                maker_timeouts_to_escalate=config.maker_timeouts_to_escalate,
-                aggr_fills_to_deescalate=config.aggr_fills_to_deescalate,
-                aggr_timeouts_to_deescalate=config.aggr_timeouts_to_deescalate,
-                fill_rate_feedback_enabled=config.fill_rate_feedback_enabled,
-                fill_rate_window_min=config.fill_rate_window_min,
-                fill_rate_low_threshold=config.fill_rate_low_threshold,
-                fill_rate_high_threshold=config.fill_rate_high_threshold,
-                fill_rate_log_windows_min=config.fill_rate_log_windows_min,
-                max_mult=config.max_mult,
-                max_order_notional=config.max_order_notional,
-            )
-
-        # 5. 初始化 WebSocket 客户端
+        # 4. 初始化 WebSocket 客户端（User Data 始终连接，Market WS 运行时按需创建）
         logger.info("初始化 WebSocket 客户端...")
         ws_config = global_config.ws
-
-        self.market_ws = MarketWSClient(
-            symbols=symbols,
-            on_event=self._on_market_event,
-            on_reconnect=self._on_ws_reconnect,
-            initial_delay_ms=ws_config.reconnect.initial_delay_ms,
-            max_delay_ms=ws_config.reconnect.max_delay_ms,
-            multiplier=ws_config.reconnect.multiplier,
-            stale_data_ms=ws_config.stale_data_ms,
-            proxy=global_config.proxy,
-        )
 
         self.user_data_ws = UserDataWSClient(
             api_key=self.config_loader.api_key,
@@ -1097,13 +1035,14 @@ class Application:
             try:
                 await self.exchange.load_markets()
 
-                symbols = self.config_loader.get_symbols()
+                symbols = list(self._active_symbols)
                 for symbol in symbols:
                     rules = self.exchange.get_rules(symbol)
                     if rules:
                         self._rules[symbol] = rules
 
-                await self._fetch_positions()
+                await self._fetch_all_positions()
+                await self._rebuild_market_ws(reason=f"calibration:{stream_type}")
                 await self._sync_protective_stops_all(reason=f"calibration:{stream_type}")
             except Exception as e:
                 log_error(f"校准失败: {e}")
@@ -1220,16 +1159,19 @@ class Application:
         if not self._running:
             return
 
-        # 只跟踪配置中已启用的 symbols
-        if update.symbol not in self.execution_engines:
+        symbol = update.symbol
+        if symbol not in self._active_symbols:
+            if abs(update.position_amt) > Decimal("0"):
+                task = asyncio.create_task(self._handle_new_symbol(symbol, update))
+                task.add_done_callback(lambda t, n=f"new_symbol:{symbol}": self._on_background_task_done(t, n))
             return
 
-        symbol_positions = self._positions.setdefault(update.symbol, {})
+        symbol_positions = self._positions.setdefault(symbol, {})
         prev = symbol_positions.get(update.position_side)
         prev_amt = prev.position_amt if prev else Decimal("0")
 
         if prev_amt != update.position_amt:
-            key = (update.symbol, update.position_side)
+            key = (symbol, update.position_side)
             self._position_revision[key] = self._position_revision.get(key, 0) + 1
             self._position_last_change[key] = (prev_amt, update.position_amt)
             self._position_update_events.setdefault(key, asyncio.Event()).set()
@@ -1239,23 +1181,23 @@ class Application:
             symbol_positions.pop(update.position_side, None)
             if abs(prev_amt) > Decimal("0"):
                 log_position_update(
-                    symbol=update.symbol,
+                    symbol=symbol,
                     side=update.position_side.value,
                     position_amt=Decimal("0"),
                 )
-                self._log_no_position(update.symbol, update.position_side, cleared=True)
+                self._log_no_position(symbol, update.position_side, cleared=True)
                 # 仓位归零：尽快撤销该侧遗留挂单，避免后续触发导致反向开仓
                 asyncio.create_task(
                     self._cancel_run_prefix_orders_for_side(
-                        symbol=update.symbol,
+                        symbol=symbol,
                         position_side=update.position_side,
                         reason="position_zero",
                     )
                 )
-            self._schedule_protective_stop_sync(update.symbol, reason=f"position_update:{update.position_side.value}")
+            self._schedule_protective_stop_sync(symbol, reason=f"position_update:{update.position_side.value}")
             return
 
-        self._clear_no_position_log(update.symbol, update.position_side)
+        self._clear_no_position_log(symbol, update.position_side)
 
         # 开仓/加仓告警（本程序主目标是 reduce-only 平仓，任何加仓都值得提示）
         if (
@@ -1269,12 +1211,12 @@ class Application:
                 if abs(update.position_amt) > abs(prev_amt):
                     self._schedule_telegram(
                         self.telegram_notifier.notify_open_alert(
-                            symbol=update.symbol,
+                            symbol=symbol,
                             side=update.position_side.value,
                             position_before=str(abs(prev_amt)),
                             position_after=str(abs(update.position_amt)),
                         ),
-                        name=f"open_alert:{update.symbol}:{update.position_side.value}",
+                        name=f"open_alert:{symbol}:{update.position_side.value}",
                     )
 
         entry_price = (
@@ -1289,12 +1231,12 @@ class Application:
         )
 
         merged = Position(
-            symbol=update.symbol,
+            symbol=symbol,
             position_side=update.position_side,
             position_amt=update.position_amt,
             entry_price=entry_price,
             unrealized_pnl=unrealized_pnl,
-            leverage=prev.leverage if prev else self._symbol_leverage.get(update.symbol, 1),
+            leverage=prev.leverage if prev else self._symbol_leverage.get(symbol, 1),
             mark_price=prev.mark_price if prev else None,
             liquidation_price=prev.liquidation_price if prev else None,
         )
@@ -1302,19 +1244,20 @@ class Application:
         symbol_positions[update.position_side] = merged
         if prev_amt != update.position_amt:
             log_position_update(
-                symbol=update.symbol,
+                symbol=symbol,
                 side=update.position_side.value,
                 position_amt=update.position_amt,
             )
-            self._schedule_protective_stop_sync(update.symbol, reason=f"position_update:{update.position_side.value}")
+            self._schedule_protective_stop_sync(symbol, reason=f"position_update:{update.position_side.value}")
 
     def _on_leverage_update(self, update: LeverageUpdate) -> None:
         """处理杠杆更新回调（ACCOUNT_CONFIG_UPDATE）。"""
         if not self._running:
             return
 
-        # 只跟踪配置中已启用的 symbols
-        if update.symbol not in self.execution_engines:
+        if update.symbol not in self._active_symbols:
+            if update.leverage > 0:
+                self._symbol_leverage[update.symbol] = update.leverage
             return
 
         if update.leverage <= 0:
@@ -1388,12 +1331,14 @@ class Application:
                     reason=f"external_stop:{update.status.value}:{update.order_type}:{update.close_position}:{update.reduce_only}",
                 )
 
-    async def _fetch_positions(self) -> None:
-        """获取所有仓位"""
-        if not self.exchange or not self.config_loader:
+    async def _fetch_all_positions(self) -> None:
+        """获取账户所有仓位（不依赖配置 symbols）。"""
+        if not self.exchange:
             return
 
-        symbols = self.config_loader.get_symbols()
+        positions = await self.exchange.fetch_positions(symbol=None)
+        symbols = sorted({pos.symbol for pos in positions})
+
         leverage_map: Dict[str, int] = {}
         try:
             leverage_map = await self.exchange.fetch_leverage_map(symbols)
@@ -1406,36 +1351,166 @@ class Application:
                 count=len(leverage_map),
             )
 
-        for symbol in symbols:
-            leverage_override = leverage_map.get(symbol)
-            if leverage_override and leverage_override > 0:
-                self._symbol_leverage[symbol] = leverage_override
-            positions = await self.exchange.fetch_positions(symbol)
-            # 先清空，再回填：避免 fetch_positions 不返回 0 仓位导致“幽灵仓位”
-            self._positions[symbol] = {}
+        self._positions = {}
 
-            for pos in positions:
-                leverage_override = self._symbol_leverage.get(symbol)
-                if leverage_override and leverage_override > 0 and pos.leverage != leverage_override:
-                    pos.leverage = leverage_override
-                self._positions[symbol][pos.position_side] = pos
-                if pos.leverage > 0:
-                    self._symbol_leverage[symbol] = pos.leverage
-                if abs(pos.position_amt) > Decimal("0"):
-                    self._clear_no_position_log(symbol, pos.position_side)
-                    log_position_update(
-                        symbol=symbol,
-                        side=pos.position_side.value,
-                        position_amt=pos.position_amt,
-                    )
+        for pos in positions:
+            symbol = pos.symbol
+            if symbol not in self._active_symbols:
+                await self._ensure_symbol_initialized(symbol)
 
-    def _log_startup_pos(self) -> None:
-        """启动时打印所有 symbol+side 的持仓状态。"""
+            leverage_override = leverage_map.get(symbol) or self._symbol_leverage.get(symbol)
+            if leverage_override and leverage_override > 0 and pos.leverage != leverage_override:
+                pos.leverage = leverage_override
+            if pos.leverage > 0:
+                self._symbol_leverage[symbol] = pos.leverage
+
+            self._positions.setdefault(symbol, {})[pos.position_side] = pos
+            if abs(pos.position_amt) > Decimal("0"):
+                self._clear_no_position_log(symbol, pos.position_side)
+                log_position_update(
+                    symbol=symbol,
+                    side=pos.position_side.value,
+                    position_amt=pos.position_amt,
+                )
+
+    async def _ensure_symbol_initialized(self, symbol: str) -> bool:
+        """确保 symbol 已初始化（幂等）。"""
+        if not self.config_loader or not self.exchange or not self.signal_engine:
+            return False
+
+        async with self._symbol_init_lock:
+            if symbol in self._active_symbols:
+                return False
+
+            rules = self.exchange.get_rules(symbol)
+            if not rules:
+                await self.exchange.load_markets()
+                rules = self.exchange.get_rules(symbol)
+            if not rules:
+                log_error("未找到交易规则", symbol=symbol)
+                return False
+
+            cfg = self.config_loader.get_symbol_config(symbol)
+            self._rules[symbol] = rules
+            self._symbol_configs[symbol] = cfg
+
+            self.signal_engine.configure_symbol(
+                symbol,
+                min_signal_interval_ms=cfg.min_signal_interval_ms,
+                accel_window_ms=cfg.accel_window_ms,
+                accel_tiers=[(t.ret, t.mult) for t in cfg.accel_tiers],
+                roi_tiers=[(t.roi, t.mult) for t in cfg.roi_tiers],
+            )
+
+            self.execution_engines[symbol] = ExecutionEngine(
+                place_order=self._place_order,
+                cancel_order=self._cancel_order,
+                on_fill=self._on_engine_fill,
+                fetch_order_trade_meta=self.exchange.fetch_order_trade_meta,
+                order_ttl_ms=cfg.order_ttl_ms,
+                repost_cooldown_ms=cfg.repost_cooldown_ms,
+                base_lot_mult=cfg.base_lot_mult,
+                maker_price_mode=cfg.maker_price_mode,
+                maker_n_ticks=cfg.maker_n_ticks,
+                maker_safety_ticks=cfg.maker_safety_ticks,
+                maker_timeouts_to_escalate=cfg.maker_timeouts_to_escalate,
+                aggr_fills_to_deescalate=cfg.aggr_fills_to_deescalate,
+                aggr_timeouts_to_deescalate=cfg.aggr_timeouts_to_deescalate,
+                fill_rate_feedback_enabled=cfg.fill_rate_feedback_enabled,
+                fill_rate_window_min=cfg.fill_rate_window_min,
+                fill_rate_low_threshold=cfg.fill_rate_low_threshold,
+                fill_rate_high_threshold=cfg.fill_rate_high_threshold,
+                fill_rate_log_windows_min=cfg.fill_rate_log_windows_min,
+                max_mult=cfg.max_mult,
+                max_order_notional=cfg.max_order_notional,
+            )
+
+            self._active_symbols.add(symbol)
+            get_logger().info(
+                f"{symbol} 规则: tick={rules.tick_size}, step={rules.step_size}, min_qty={rules.min_qty}"
+            )
+            log_event("symbol_added", symbol=symbol, reason="position_detected")
+            return True
+
+    async def _rebuild_market_ws(self, *, reason: str) -> None:
+        """按 active_symbols 重建市场 WS 连接（由 Application 管理任务）。"""
         if not self.config_loader:
             return
 
+        symbols = sorted(self._active_symbols)
+        if not symbols:
+            return
+
+        existing_symbols = set(self.market_ws.symbols) if self.market_ws else set()
+        if self.market_ws and set(symbols) == existing_symbols and self.market_ws.is_connected:
+            return
+
+        if self._market_ws_task and not self._market_ws_task.done():
+            self._market_ws_task.cancel()
+            await self._gather_with_timeout([self._market_ws_task], timeout_s=1.0, name="market_ws 任务取消")
+
+        if self.market_ws:
+            await self.market_ws.disconnect()
+
+        ws_config = self.config_loader.config.global_.ws
+        proxy = self.config_loader.config.global_.proxy
+
+        self.market_ws = MarketWSClient(
+            symbols=symbols,
+            on_event=self._on_market_event,
+            on_reconnect=self._on_ws_reconnect,
+            initial_delay_ms=ws_config.reconnect.initial_delay_ms,
+            max_delay_ms=ws_config.reconnect.max_delay_ms,
+            multiplier=ws_config.reconnect.multiplier,
+            stale_data_ms=ws_config.stale_data_ms,
+            proxy=proxy,
+        )
+
+        self._market_ws_task = asyncio.create_task(self.market_ws.connect())
+        self._market_ws_task.add_done_callback(
+            lambda t, n=f"market_ws.connect:{reason}": self._on_background_task_done(t, n)
+        )
+
+    async def _handle_new_symbol(self, symbol: str, update: PositionUpdate) -> None:
+        """运行时发现新 symbol，初始化并接管。"""
+        is_new = await self._ensure_symbol_initialized(symbol)
+        if symbol not in self._active_symbols:
+            return
+
+        self._positions.setdefault(symbol, {})[update.position_side] = Position(
+            symbol=symbol,
+            position_side=update.position_side,
+            position_amt=update.position_amt,
+            entry_price=update.entry_price or Decimal("0"),
+            unrealized_pnl=update.unrealized_pnl or Decimal("0"),
+            leverage=self._symbol_leverage.get(symbol, 1),
+            mark_price=None,
+            liquidation_price=None,
+        )
+        log_position_update(
+            symbol=symbol,
+            side=update.position_side.value,
+            position_amt=update.position_amt,
+        )
+
+        await self._refresh_position(symbol)
+
+        if is_new:
+            for position_side in (PositionSide.LONG, PositionSide.SHORT):
+                task = asyncio.create_task(self._side_loop(symbol, position_side))
+                self._side_tasks.add(task)
+                task.add_done_callback(
+                    lambda t, n=f"side_loop:{symbol}:{position_side.value}": self._on_background_task_done(t, n)
+                )
+
+            await self._rebuild_market_ws(reason="new_symbol")
+            self._schedule_protective_stop_sync(symbol, reason="new_symbol")
+            log_event("symbol_runtime_added", symbol=symbol, reason="position_detected")
+
+    def _log_startup_pos(self) -> None:
+        """启动时打印所有 symbol+side 的持仓状态。"""
         logger = get_logger()
-        for symbol in self.config_loader.get_symbols():
+        for symbol in sorted(self._active_symbols):
             for position_side in (PositionSide.LONG, PositionSide.SHORT):
                 position = self._positions.get(symbol, {}).get(position_side)
                 side = position_side.value
@@ -1452,23 +1527,23 @@ class Application:
         try:
             # 获取初始仓位
             logger.info("获取初始仓位...")
-            await self._fetch_positions()
+            await self._fetch_all_positions()
             self._log_startup_pos()
             self._positions_ready = True
-            await self._sync_protective_stops_all(reason="startup")
 
             # 连接 WebSocket
             logger.info("连接 WebSocket...")
-            if self.market_ws:
-                self._market_ws_task = asyncio.create_task(self.market_ws.connect())
-                self._market_ws_task.add_done_callback(
-                    lambda t, n="market_ws.connect": self._on_background_task_done(t, n)
-                )
             if self.user_data_ws:
                 self._user_data_ws_task = asyncio.create_task(self.user_data_ws.connect())
                 self._user_data_ws_task.add_done_callback(
                     lambda t, n="user_data_ws.connect": self._on_background_task_done(t, n)
                 )
+            if self._active_symbols:
+                await self._rebuild_market_ws(reason="startup")
+            else:
+                logger.info("当前账户无持仓，等待新仓位...")
+
+            await self._sync_protective_stops_all(reason="startup")
 
             if self._shutdown_event.is_set():
                 return
@@ -1493,10 +1568,7 @@ class Application:
 
     async def _main_loop(self) -> None:
         """主事件循环（多 symbol 并发）：为每个 symbol+side 启动独立任务。"""
-        if not self.config_loader:
-            return
-
-        symbols = self.config_loader.get_symbols()
+        symbols = list(self._active_symbols)
         for symbol in symbols:
             for position_side in (PositionSide.LONG, PositionSide.SHORT):
                 task = asyncio.create_task(self._side_loop(symbol, position_side))
@@ -1516,7 +1588,7 @@ class Application:
             return
 
         current_ms = current_time_ms()
-        symbols = self.config_loader.get_symbols()
+        symbols = list(self._active_symbols)
 
         for symbol in symbols:
             # 检查数据是否就绪
@@ -1841,7 +1913,7 @@ class Application:
             return
 
         current_ms = current_time_ms()
-        symbols = self.config_loader.get_symbols()
+        symbols = list(self._active_symbols)
 
         for symbol in symbols:
             engine = self.execution_engines.get(symbol)
@@ -2014,14 +2086,14 @@ class Application:
         if not prefix:
             return
 
-        symbols: List[str] = []
-        if self.config_loader:
+        symbols: List[str] = list(self._active_symbols)
+        if not symbols and self._symbol_configs:
+            symbols = list(self._symbol_configs.keys())
+        if not symbols and self.config_loader:
             try:
                 symbols = list(self.config_loader.get_symbols())
             except Exception:
                 symbols = []
-        if not symbols and self._symbol_configs:
-            symbols = list(self._symbol_configs.keys())
 
         cancelled = 0
         total_open = 0

@@ -1,5 +1,5 @@
 <!-- Input: 项目概述与使用方式 -->
-<!-- Output: 使用说明与快速上手（含执行反馈） -->
+<!-- Output: 使用说明与快速上手（含执行反馈与自动发现持仓说明） -->
 <!-- Pos: 项目根 README -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -21,6 +21,7 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 - **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
 - **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
+- **自动发现持仓**：运行时按账户持仓自动接管，`symbols` 仅用于参数覆盖
 
 ## 架构概览
 
@@ -88,7 +89,7 @@ export TELEGRAM_CHAT_ID="your_chat_id"
 # 复制示例配置
 cp config/config.example.yaml config/config.yaml
 
-# 编辑配置，添加交易对和参数
+# 编辑配置，按需设置参数；symbols 可选，仅用于覆盖
 vim config/config.yaml
 ```
 

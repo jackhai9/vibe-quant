@@ -1,5 +1,5 @@
 <!-- Input: 需求与设计目标 -->
-<!-- Output: 设计方案与约束（含执行反馈/成交率策略） -->
+<!-- Output: 设计方案与约束（含执行反馈/成交率策略与自动发现持仓） -->
 <!-- Pos: memory-bank/design-document -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -13,7 +13,7 @@
 ## 1. 需求摘要
 
 ### 1.1 功能需求
-- **合约不写死**：支持运行时指定或配置热加载 symbol。
+- **合约不写死**：基于账户持仓自动发现 symbol，配置中的 symbols 仅作为参数覆盖。
 - Binance U 本位永续，**双向持仓（Hedge Mode）**。
 - **自动识别仓位**：LONG/SHORT 两侧都可能存在，分别独立执行 reduce-only 平仓。
 - 数据源（WebSocket）：
@@ -340,6 +340,7 @@ symbols:
       protective_stop_dist_to_liq: 0.008
 ```
 
+说明：运行时基于账户持仓自动发现并管理 symbols，配置中的 `symbols` 仅作为参数覆盖。  
 > Telegram 凭证（敏感信息）通过环境变量提供：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`。
 
 ---
