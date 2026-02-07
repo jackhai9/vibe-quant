@@ -123,6 +123,10 @@ class ExchangeAdapter:
             "options": {
                 "defaultType": "future",
                 "hedgeMode": True,  # Hedge 模式
+                # ccxt binanceusdm 的 load_markets() 默认会触发 fetch_currencies()
+                # (SAPI /sapi/v1/capital/config/getall)。对“永续平仓执行器”非必需，
+                # 且会引入额外网络依赖/初始化失败点，故默认禁用。
+                "fetchCurrencies": False,
             },
         }
 
@@ -139,7 +143,18 @@ class ExchangeAdapter:
             logger.info("使用 Binance 测试网")
 
         # 加载 markets
-        await self._exchange.load_markets()
+        try:
+            await self._exchange.load_markets()
+        except Exception as e:
+            # 失败时务必显式 close()，避免 aiohttp session 泄漏导致进程退出报警
+            try:
+                await self._exchange.close()
+            except Exception:
+                pass
+            self._exchange = None
+            self._initialized = False
+            logger.error(f"加载 markets 失败（已关闭 ccxt session）: {e!r}")
+            raise
         markets = self._exchange.markets
         logger.info(f"加载 markets 完成，共 {len(markets) if markets else 0} 个交易对")
 

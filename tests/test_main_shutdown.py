@@ -45,6 +45,8 @@ async def test_run_should_exit_on_shutdown_without_blocking_ws_connect(monkeypat
     app = Application(Path("config/config.yaml"))
     app.market_ws = DummyWS()  # type: ignore[assignment]
     app.user_data_ws = DummyWS()  # type: ignore[assignment]
+    # run() 只有在存在 active_symbols 时才会触发 market ws rebuild/连接
+    app._active_symbols = {"BTC/USDT:USDT"}
 
     async def noop() -> None:
         return
@@ -53,6 +55,12 @@ async def test_run_should_exit_on_shutdown_without_blocking_ws_connect(monkeypat
         await app._shutdown_event.wait()
 
     app._fetch_positions = noop  # type: ignore[method-assign]
+
+    async def fake_rebuild_market_ws(*args, **kwargs) -> None:
+        # 模拟真实 _rebuild_market_ws：启动 connect 任务但不阻塞 run()
+        app._market_ws_task = asyncio.create_task(app.market_ws.connect())  # type: ignore[union-attr]
+
+    app._rebuild_market_ws = fake_rebuild_market_ws  # type: ignore[method-assign]
 
     async def noop_cancel(reason: str) -> None:
         return
@@ -88,6 +96,7 @@ async def test_run_should_exit_on_shutdown_without_blocking_ws_connect(monkeypat
 async def test_main_loop_spawns_side_tasks_and_shutdown_cancels_them():
     app = Application(Path("config/config.yaml"))
     app._running = True
+    app._active_symbols = {"BTC/USDT:USDT", "ETH/USDT:USDT"}
 
     class DummyConfigLoader:
         def get_symbols(self):

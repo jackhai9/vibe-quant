@@ -124,6 +124,14 @@
 
 **原因**：网络无法访问币安 API（`api.binance.com` / `fapi.binance.com`）
 
+**补充症状（ccxt 初始化阶段）**：
+- 日志/异常包含 `GET https://api.binance.com/sapi/v1/capital/config/getall`
+- 报错多为 `ExchangeNotAvailable` / TLS reset / `Cannot connect to host api.binance.com:443`
+
+**解释**：
+- ccxt `binanceusdm.load_markets()` 在部分版本/默认配置下会触发 `fetch_currencies()`，进而访问 Spot 的 SAPI
+- 对本项目（USDT 永续平仓执行器）通常不需要这一步，但它会引入额外的网络依赖与失败点
+
 **解决方案**：
 
 #### 1. 检查网络连通性

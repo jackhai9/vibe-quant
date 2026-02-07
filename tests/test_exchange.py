@@ -52,6 +52,42 @@ class TestExchangeAdapterInit:
         assert adapter.testnet is True
         assert adapter._initialized is False
 
+    @pytest.mark.asyncio
+    async def test_initialize_disables_fetch_currencies_and_sets_proxy(self):
+        """initialize() 默认禁用 fetchCurrencies，并透传 aiohttp_proxy。"""
+        dummy_exchange = MagicMock()
+        dummy_exchange.load_markets = AsyncMock(return_value=None)
+        dummy_exchange.markets = {}
+
+        with patch("src.exchange.adapter.ccxt.binanceusdm", return_value=dummy_exchange) as mock_ctor:
+            adapter = ExchangeAdapter(
+                api_key="test_key",
+                api_secret="test_secret",
+                testnet=False,
+                proxy="http://127.0.0.1:7890",
+            )
+            await adapter.initialize()
+
+            cfg = mock_ctor.call_args.args[0]
+            assert cfg["aiohttp_proxy"] == "http://127.0.0.1:7890"
+            assert cfg["options"]["fetchCurrencies"] is False
+
+    @pytest.mark.asyncio
+    async def test_initialize_failure_closes_exchange(self):
+        """initialize() 失败时显式 close，避免 Unclosed client session。"""
+        dummy_exchange = MagicMock()
+        dummy_exchange.load_markets = AsyncMock(side_effect=RuntimeError("boom"))
+        dummy_exchange.close = AsyncMock(return_value=None)
+
+        with patch("src.exchange.adapter.ccxt.binanceusdm", return_value=dummy_exchange):
+            adapter = ExchangeAdapter(api_key="k", api_secret="s", testnet=False)
+            with pytest.raises(RuntimeError):
+                await adapter.initialize()
+
+            dummy_exchange.close.assert_awaited()
+            assert adapter._initialized is False
+            assert adapter._exchange is None
+
 
 class TestRoundingFunctions:
     """规整函数测试"""

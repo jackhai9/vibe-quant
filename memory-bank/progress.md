@@ -1187,3 +1187,22 @@ n/a (docs only)
 - **环境**：主网
 - **交易对**：BTC、ZEN
 - **备注**：无
+
+---
+
+## Bug 修复：ccxt 初始化偶发启动失败（fetchCurrencies + 未显式 close）
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-07<br>
+**动机**：`ccxt binanceusdm.load_markets()` 可能触发 Spot SAPI（`/sapi/v1/capital/config/getall`），在代理/网络抖动时导致启动失败；异常路径未显式 `close()` 会产生 `Unclosed client session` 警告。<br>
+**产出**：
+- `src/exchange/adapter.py`：默认设置 `options.fetchCurrencies=false`，并在初始化失败时显式 `await exchange.close()` 清理资源
+- `docs/troubleshooting.md`：补充该类报错的识别与解释
+- `tests/test_exchange.py`：增加初始化行为单测（禁用 fetchCurrencies、失败 close）
+- `tests/test_main_shutdown.py`：修正测试用例假设，使用 `active_symbols` 触发 market ws rebuild（与当前架构一致）
+
+### 测试结果
+```bash
+pytest -q
+```
+256 passed
