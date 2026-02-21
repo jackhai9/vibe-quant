@@ -70,6 +70,7 @@ class ProtectiveStopManager:
         self._startup_existing_logged: set[tuple[str, PositionSide]] = set()
         self._startup_existing_external_logged: set[tuple[str, PositionSide]] = set()
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
+        self._no_liq_price_logged: set[tuple[str, PositionSide]] = set()
 
     def _get_risk_level(self) -> Optional[int]:
         return self._risk_levels.get(self._risk_stage)
@@ -669,15 +670,22 @@ class ProtectiveStopManager:
 
         liquidation_price = position.liquidation_price
         if liquidation_price is None or liquidation_price <= Decimal("0"):
-            log_event(
-                "risk",
-                symbol=symbol,
-                side=side.value,
-                risk_stage=self._risk_stage,
-                risk_level=self._get_risk_level(),
-                reason="skip_missing_liquidation_price",
-            )
+            key = (symbol, side)
+            if key not in self._no_liq_price_logged:
+                self._no_liq_price_logged.add(key)
+                log_event(
+                    "risk",
+                    symbol=symbol,
+                    side=side.value,
+                    risk_stage=self._risk_stage,
+                    risk_level=self._get_risk_level(),
+                    reason="skip_no_liquidation_price",
+                    event_cn="无爆仓价，跳过保护止损（仓位可能过小）",
+                )
             return
+
+        # 爆仓价恢复正常，清除"无爆仓价"日志去重标记
+        self._no_liq_price_logged.discard((symbol, side))
 
         try:
             desired_stop_price = self.compute_stop_price(
