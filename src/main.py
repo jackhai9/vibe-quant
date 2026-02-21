@@ -2433,7 +2433,7 @@ class Application:
                 h, m = divmod(m, 60)
                 remain_str = f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
                 lines.append(f"暂停: 全局 (自 {ts}, 剩余 {remain_str})")
-                if remaining > 3600:
+                if remaining > 60:
                     lines.append("⚠️ 暂停期间不执行强平兜底，保护性止损仍在交易所端生效")
             else:
                 lines.append(f"暂停: 全局 (自 {ts})")
