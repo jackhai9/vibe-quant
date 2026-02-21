@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含运行时持仓自动发现）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复）-->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -21,6 +21,31 @@
 | 阶段 10：Telegram 通知 | ✅ |
 | 阶段 11：systemd 部署 | ✅ |
 | **小额实盘验证** | ✅ |
+| Telegram Bot 命令控制（暂停/恢复） | ✅ |
+
+## Milestone/附加改进：Telegram Bot 命令控制（暂停/恢复执行）
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-21<br>
+**动机**：无需重启程序即可暂停/恢复平仓执行，通过 Telegram Bot 命令远程控制。<br>
+**产出**：
+
+- `src/notify/pause_manager.py`：PauseManager 类，全局 + per-symbol 暂停状态管理，暂停时触发撤单回调
+- `src/notify/bot.py`：TelegramBot 类，getUpdates long polling 接收 `/pause`/`/resume`/`/status`/`/help` 命令
+- `src/config/models.py`：新增 `TelegramBotConfig`（`telegram.bot.enabled`/`polling_timeout_s`/`allowed_chat_ids`）
+- `src/main.py`：集成 PauseManager + TelegramBot（`_evaluate_symbol_side` 暂停检查、`_cancel_own_orders_for_symbol`、命令处理器、Bot 生命周期管理）
+- `tests/test_pause_manager.py`（16 用例）、`tests/test_telegram_bot.py`（14 用例）
+- 全量回归通过（286 用例），pyright 0 错误
+
+**关键设计**：
+- `is_paused()` 纯内存读，50ms 循环零开销
+- 暂停标志先设置后撤单，`_evaluate_symbol_side` 头部检查，时序保证无新单
+- 保护性止损（STOP_MARKET）不受暂停影响，始终保留在交易所端
+- Bot polling 独立 aiohttp session，与通知发送互不干扰
+- 仅响应 `allowed_chat_ids`，安全隔离
+- 启动时 flush 积压消息（`offset=-1`），避免历史命令回放
+- `bot.enabled=true` 强制要求 `telegram.enabled=true`（initialize 阶段校验）
+- 暂停回调失败时返回消息明确指出"失败"，不误导用户
 
 ## Milestone/附加改进：运行时持仓自动发现
 
@@ -1206,3 +1231,35 @@ n/a (docs only)
 pytest -q
 ```
 256 passed
+
+---
+
+## Telegram Bot 命令控制（暂停/恢复执行）
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-21<br>
+**动机**：用户需要在不重启程序的情况下暂停/恢复平仓执行，且需要通过 Telegram Bot 远程控制。<br>
+**产出**：
+
+### 新增文件
+- `src/notify/pause_manager.py`：PauseManager 类，管理全局/per-symbol 暂停状态，is_paused() 纯内存读无锁
+- `src/notify/bot.py`：TelegramBot 类，getUpdates long polling 接收命令，仅响应 allowed_chat_ids
+- `tests/test_pause_manager.py`：PauseManager 单元测试
+- `tests/test_telegram_bot.py`：TelegramBot 单元测试
+
+### 修改文件
+- `src/config/models.py`：新增 TelegramBotConfig 子配置（enabled, polling_timeout_s, allowed_chat_ids）
+- `src/main.py`：集成 PauseManager + TelegramBot 生命周期；_evaluate_symbol_side 插入 is_paused() 检查；新增 _cancel_own_orders_for_symbol、命令处理器、_resolve_symbol
+- `config/config.example.yaml`：新增 bot 配置示例
+- `src/notify/__init__.py`：导出 TelegramBot、PauseManager
+- `src/notify/README.md`：更新文件清单
+
+### 支持的命令
+| 命令 | 功能 |
+|------|------|
+| `/pause` | 全局暂停，撤掉所有本程序挂单 |
+| `/pause BTCUSDT` | 暂停指定 symbol |
+| `/resume` | 全局恢复（同时清除所有 per-symbol 暂停） |
+| `/resume BTCUSDT` | 恢复指定 symbol |
+| `/status` | 查看运行状态、暂停状态、持仓 |
+| `/help` | 显示命令列表 |

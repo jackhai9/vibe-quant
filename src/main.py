@@ -1,5 +1,5 @@
-# Input: config path, env vars, OS signals, account positions
-# Output: application lifecycle, async tasks, and runtime symbol orchestration (including fill-rate feedback and reduce-only min-notional handling)
+# Input: config path, env vars, OS signals, account positions, Telegram Bot commands
+# Output: application lifecycle, async tasks, runtime symbol orchestration, and pause/resume control
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -40,6 +40,8 @@ from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
 from src.notify.telegram import TelegramNotifier
+from src.notify.pause_manager import PauseManager
+from src.notify.bot import TelegramBot
 from src.models import (
     MarketEvent,
     OrderUpdate,
@@ -107,6 +109,11 @@ class Application:
         self.telegram_notifier: Optional[TelegramNotifier] = None
         self._telegram_tasks: set[asyncio.Task[Any]] = set()
         self._side_tasks: set[asyncio.Task[Any]] = set()
+
+        # Telegram Bot 命令控制
+        self.pause_manager: PauseManager = PauseManager()
+        self.telegram_bot: Optional[TelegramBot] = None
+        self._telegram_bot_task: Optional[asyncio.Task[None]] = None
         self._protective_stop_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._protective_stop_task_reasons: Dict[str, str] = {}
 
@@ -764,6 +771,10 @@ class Application:
 
         # Telegram 通知（可选）
         telegram_cfg = global_config.telegram
+        if telegram_cfg.bot.enabled and not telegram_cfg.enabled:
+            raise ValueError(
+                "telegram.bot.enabled=true 需要 telegram.enabled=true"
+            )
         if telegram_cfg.enabled:
             token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
             chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -786,6 +797,28 @@ class Application:
                 f"on_reconnect={telegram_cfg.events.on_reconnect} "
                 f"on_risk_trigger={telegram_cfg.events.on_risk_trigger}"
             )
+
+            # Telegram Bot 命令接收（可选）
+            bot_cfg = telegram_cfg.bot
+            if bot_cfg.enabled:
+                allowed_ids: set[str] = set(bot_cfg.allowed_chat_ids)
+                if not allowed_ids:
+                    allowed_ids = {chat_id}
+                self.telegram_bot = TelegramBot(
+                    token=token,
+                    allowed_chat_ids=allowed_ids,
+                    polling_timeout_s=bot_cfg.polling_timeout_s,
+                    proxy=global_config.proxy,
+                )
+                self._register_bot_commands()
+                logger.info(
+                    f"Telegram Bot 命令配置: enabled=true "
+                    f"polling_timeout={bot_cfg.polling_timeout_s}s "
+                    f"allowed_chat_ids={sorted(allowed_ids)}"
+                )
+
+        # 初始化 PauseManager（撤单回调）
+        self.pause_manager = PauseManager(on_pause_callback=self._on_pause_triggered)
 
         # 风控与全局限速（账户级）
         self.risk_manager = RiskManager(
@@ -1557,6 +1590,13 @@ class Application:
             self._timeout_check_task = asyncio.create_task(self._timeout_check_loop())
             self._fill_rate_log_task = asyncio.create_task(self._fill_rate_log_loop())
 
+            # 启动 Telegram Bot（如已配置）
+            if self.telegram_bot:
+                self._telegram_bot_task = asyncio.create_task(self.telegram_bot.start())
+                self._telegram_bot_task.add_done_callback(
+                    lambda t: self._on_background_task_done(t, "telegram_bot")
+                )
+
             # 等待关闭信号
             await self._shutdown_event.wait()
 
@@ -1642,6 +1682,8 @@ class Application:
         if not self.signal_engine or not self.config_loader:
             return
         if self._calibrating:
+            return
+        if self.pause_manager.is_paused(symbol):
             return
 
         position = self._positions.get(symbol, {}).get(position_side)
@@ -2060,6 +2102,16 @@ class Application:
         if self.exchange:
             await self._gather_with_timeout([self.exchange.close()], timeout_s=5.0, name="交易所连接关闭")
 
+        # 关闭 Telegram Bot
+        if self.telegram_bot:
+            self.telegram_bot.stop()
+        if self._telegram_bot_task and not self._telegram_bot_task.done():
+            self._telegram_bot_task.cancel()
+            await self._gather_with_timeout([self._telegram_bot_task], timeout_s=3.0, name="Telegram Bot 任务取消")
+        if self.telegram_bot:
+            await self._gather_with_timeout([self.telegram_bot.close()], timeout_s=3.0, name="Telegram Bot 关闭")
+            self.telegram_bot = None
+
         # 关闭 Telegram 通知
         telegram_tasks = list(self._telegram_tasks)
         for task in telegram_tasks:
@@ -2167,6 +2219,190 @@ class Application:
 
         logger.info(
             f"本程序挂单清理完成: cancelled={cancelled} total_open={total_open} prefix={prefix} reason={reason}"
+        )
+
+    # ================================================================
+    # Telegram Bot 命令控制
+    # ================================================================
+
+    def _register_bot_commands(self) -> None:
+        """向 TelegramBot 注册所有命令处理器。"""
+        bot = self.telegram_bot
+        if not bot:
+            return
+        bot.register_handler("pause", self._handle_cmd_pause)
+        bot.register_handler("resume", self._handle_cmd_resume)
+        bot.register_handler("status", self._handle_cmd_status)
+        bot.register_handler("help", self._handle_cmd_help)
+
+    def _resolve_symbol(self, user_input: str) -> Optional[str]:
+        """
+        将用户输入的 symbol 解析为内部 ccxt 格式。
+
+        支持：BTCUSDT, BTC/USDT:USDT, btcusdt（大小写不敏感）。
+        仅匹配 _active_symbols 中已有的交易对。
+
+        Returns:
+            ccxt 格式的 symbol，或 None（无法解析）
+        """
+        raw = user_input.strip().upper()
+        if not raw:
+            return None
+
+        # 精确匹配（大小写不敏感）
+        for sym in self._active_symbols:
+            if sym.upper() == raw:
+                return sym
+
+        # 简写匹配：BTCUSDT -> BTC/USDT:USDT
+        for sym in self._active_symbols:
+            simple = sym.split(":")[0].replace("/", "").upper()
+            if simple == raw:
+                return sym
+
+        return None
+
+    async def _on_pause_triggered(self, symbol: Optional[str]) -> None:
+        """暂停时的撤单回调。"""
+        if symbol is None:
+            await self._cancel_own_orders(reason="pause:global")
+        else:
+            await self._cancel_own_orders_for_symbol(symbol, reason=f"pause:{symbol}")
+
+    async def _cancel_own_orders_for_symbol(self, symbol: str, reason: str) -> None:
+        """撤销指定 symbol 的本程序挂单（按 clientOrderId 前缀过滤）。"""
+        exchange = self.exchange
+        prefix = self._client_order_id_prefix
+        if not exchange or not prefix:
+            return
+
+        logger = get_logger()
+        try:
+            orders = await exchange.fetch_open_orders(symbol)
+        except Exception as e:
+            log_error(f"获取挂单失败: {e}", symbol=symbol)
+            return
+
+        cancelled = 0
+        for order in orders:
+            client_order_id = order.get("clientOrderId")
+            if not client_order_id:
+                info = order.get("info")
+                if isinstance(info, dict):
+                    client_order_id = info.get("clientOrderId")
+            if not client_order_id or not str(client_order_id).startswith(prefix):
+                continue
+
+            order_id = order.get("id")
+            if not order_id:
+                continue
+
+            logger.info(
+                f"撤销本程序挂单: {symbol} {order_id} client_order_id={client_order_id} reason={reason}"
+            )
+            try:
+                await exchange.cancel_any_order(str(symbol), str(order_id))
+                cancelled += 1
+            except Exception as e:
+                log_error(
+                    f"撤销挂单失败: {symbol} {order_id} - {e}",
+                    symbol=str(symbol),
+                    order_id=str(order_id),
+                )
+
+        if cancelled > 0:
+            log_event(
+                "order_cleanup",
+                event_cn="暂停撤单",
+                symbol=symbol,
+                reason=reason,
+                cancelled=cancelled,
+            )
+
+    async def _handle_cmd_pause(self, args: str) -> str:
+        """处理 /pause 命令。"""
+        if args:
+            symbol = self._resolve_symbol(args)
+            if not symbol:
+                active_list = ", ".join(
+                    s.split(":")[0].replace("/", "") for s in sorted(self._active_symbols)
+                )
+                return f"未知交易对: {args}\n当前交易对: {active_list or '无'}"
+            return await self.pause_manager.pause(symbol)
+        return await self.pause_manager.pause()
+
+    async def _handle_cmd_resume(self, args: str) -> str:
+        """处理 /resume 命令。"""
+        if args:
+            symbol = self._resolve_symbol(args)
+            if not symbol:
+                active_list = ", ".join(
+                    s.split(":")[0].replace("/", "") for s in sorted(self._active_symbols)
+                )
+                return f"未知交易对: {args}\n当前交易对: {active_list or '无'}"
+            return await self.pause_manager.resume(symbol)
+        return await self.pause_manager.resume()
+
+    async def _handle_cmd_status(self, args: str) -> str:
+        """处理 /status 命令。"""
+        _ = args
+        lines: list[str] = ["【状态】"]
+
+        # 运行状态
+        lines.append(f"运行中: {'是' if self._running else '否'}")
+        lines.append(f"校准中: {'是' if self._calibrating else '否'}")
+
+        # 暂停状态
+        pause_status = self.pause_manager.get_status()
+        if pause_status["global_paused"]:
+            at = pause_status["global_paused_at"]
+            ts = at.strftime("%H:%M:%S") if at else "?"
+            lines.append(f"暂停: 全局 (自 {ts})")
+        elif pause_status["paused_symbols"]:
+            for sym, at in pause_status["paused_symbols"].items():
+                short = sym.split(":")[0]
+                ts = at.strftime("%H:%M:%S") if at else "?"
+                lines.append(f"暂停: {short} (自 {ts})")
+        else:
+            lines.append("暂停: 无")
+
+        # 活跃 symbols + 持仓
+        if self._active_symbols:
+            lines.append(f"\n活跃交易对: {len(self._active_symbols)}")
+            for sym in sorted(self._active_symbols):
+                short = sym.split(":")[0]
+                positions = self._positions.get(sym, {})
+                parts: list[str] = []
+                for ps in (PositionSide.LONG, PositionSide.SHORT):
+                    pos = positions.get(ps)
+                    if pos and abs(pos.position_amt) > Decimal("0"):
+                        engine = self.execution_engines.get(sym)
+                        state = engine.get_state(sym, ps) if engine else None
+                        mode = state.mode.value if state else "?"
+                        st = state.state.value if state else "?"
+                        parts.append(f"{ps.value}={format_decimal(pos.position_amt)} [{mode}/{st}]")
+                if parts:
+                    lines.append(f"  {short}: {', '.join(parts)}")
+                else:
+                    lines.append(f"  {short}: 无仓位")
+        else:
+            lines.append("\n活跃交易对: 0")
+
+        return "\n".join(lines)
+
+    async def _handle_cmd_help(self, args: str) -> str:
+        """处理 /help 命令。"""
+        _ = args
+        return (
+            "【命令列表】\n"
+            "/pause - 全局暂停（撤所有挂单）\n"
+            "/pause <SYMBOL> - 暂停指定交易对\n"
+            "/resume - 全局恢复\n"
+            "/resume <SYMBOL> - 恢复指定交易对\n"
+            "/status - 查看运行状态\n"
+            "/help - 显示此帮助\n"
+            "\n"
+            "SYMBOL 支持简写（如 BTCUSDT）或全称（如 BTC/USDT:USDT）"
         )
 
     def request_shutdown(self) -> None:

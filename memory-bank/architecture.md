@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含关键行为、执行反馈/成交率、运行时 symbol 自动发现与日志规则） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复） -->
 <!-- Pos: memory-bank/architecture 总览 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -93,7 +93,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **ExecutionEngine** | 状态机管理，下单/撤单/TTL 超时处理（含成交率反馈与 TTL 覆盖） | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
-| **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待） | 关键事件 | 消息推送 |
+| **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
 
 ---
 
@@ -257,7 +257,9 @@ vibe-quant/
 │   ├── notify/
 │   │   ├── README.md         # src/notify 目录说明
 │   │   ├── __init__.py
-│   │   └── telegram.py       # Telegram 通知（成交/重连/风险/开仓告警）
+│   │   ├── telegram.py       # Telegram 通知（成交/重连/风险/开仓告警）
+│   │   ├── bot.py            # Telegram Bot 命令接收器（getUpdates long polling）
+│   │   └── pause_manager.py  # 暂停状态管理器（全局/per-symbol）
 │   └── utils/
 │       ├── README.md         # src/utils 目录说明
 │       ├── __init__.py
@@ -276,6 +278,8 @@ vibe-quant/
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
     ├── test_signal.py        # 信号引擎测试（18 用例）
+    ├── test_pause_manager.py # PauseManager 测试（16 用例）
+    ├── test_telegram_bot.py  # TelegramBot 测试（14 用例）
     └── test_execution.py     # 执行引擎测试（41 用例）
 ```
 
@@ -298,6 +302,8 @@ vibe-quant/
 | `src/risk/protective_stop.py` | 694 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |
 | `src/notify/telegram.py` | 241 | Telegram 通知（成交/重连/风险触发/开仓告警；token/chat_id 走 env） |
+| `src/notify/bot.py` | 200 | TelegramBot 类，getUpdates long polling 命令接收器 |
+| `src/notify/pause_manager.py` | 120 | PauseManager 类，全局/per-symbol 暂停状态管理 |
 
 ---
 
@@ -344,6 +350,7 @@ vibe-quant/
 | 2025-12-21 | Bug 修复：外部接管 release 后立即触发 resync（避免保护止损 52s 空档）；新增杠杆同步功能（LeverageUpdate + ACCOUNT_CONFIG_UPDATE 解析 + REST positionRisk 启动校准） |
 | 2025-12-23 | Bug 修复：WS 重连 guard 与撤单超时后的状态机恢复（COOLDOWN 保留订单上下文） |
 | 2025-12-23 | 新增外部止损有效性检查：无效外部止损取消并由程序接管 |
+| 2026-02-21 | 新增 Telegram Bot 命令控制：/pause、/resume、/status、/help（PauseManager + TelegramBot + main.py 集成） |
 
 ---
 
@@ -400,7 +407,7 @@ config.yaml
 ### pydantic 模型结构
 | 类别 | 模型 |
 |------|------|
-| 子配置 | ReconnectConfig, WSConfig, ExecutionConfig, AccelConfig, AccelTier, RoiConfig, RoiTier, RiskConfig, PanicCloseConfig, PanicCloseTier, ProtectiveStopConfig, RateLimitConfig, TelegramConfig, TelegramEventsConfig |
+| 子配置 | ReconnectConfig, WSConfig, ExecutionConfig, AccelConfig, AccelTier, RoiConfig, RoiTier, RiskConfig, PanicCloseConfig, PanicCloseTier, ProtectiveStopConfig, RateLimitConfig, TelegramConfig, TelegramEventsConfig, TelegramBotConfig |
 | Symbol 覆盖 | SymbolExecutionConfig, SymbolAccelConfig, SymbolRoiConfig, SymbolRiskConfig, SymbolConfig |
 | 顶层 | GlobalConfig, AppConfig |
 | 运行时 | MergedSymbolConfig |

@@ -1,5 +1,5 @@
 # Input: raw config values
-# Output: pydantic config models (including execution feedback settings)
+# Output: pydantic config models (including execution feedback settings, telegram bot config)
 # Pos: config schema definitions
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -126,11 +126,20 @@ class TelegramEventsConfig(BaseModel):
     on_open_alert: bool = Field(default=True, description="开仓/加仓告警")
 
 
+class TelegramBotConfig(BaseModel):
+    """Telegram Bot 命令控制配置"""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = Field(default=False, description="是否启用 Bot 命令控制")
+    polling_timeout_s: int = Field(default=30, ge=5, le=60, description="getUpdates long polling 超时(s)")
+    allowed_chat_ids: List[str] = Field(default_factory=list, description="允许发送命令的 chat_id 列表（为空时使用 TELEGRAM_CHAT_ID）")
+
+
 class TelegramConfig(BaseModel):
     """Telegram 配置（token/chat_id 从环境变量读取）"""
     model_config = ConfigDict(extra="forbid")
     enabled: bool = Field(default=False, description="是否启用")
     events: TelegramEventsConfig = Field(default_factory=TelegramEventsConfig)
+    bot: TelegramBotConfig = Field(default_factory=TelegramBotConfig, description="Bot 命令接收配置")
 
 
 class ExecutionConfig(BaseModel):

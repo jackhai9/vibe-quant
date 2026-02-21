@@ -23,6 +23,13 @@ global:
       on_reconnect: true
       on_risk_trigger: true
       on_open_alert: true
+    # Bot 命令接收（/pause、/resume、/status、/help）
+    # 要求 telegram.enabled=true 才能生效
+    bot:
+      enabled: false
+      polling_timeout_s: 30
+      # 允许的 chat_id 列表，为空时回退使用环境变量 TELEGRAM_CHAT_ID
+      allowed_chat_ids: []
 
   execution:
     order_ttl_ms: 4000
