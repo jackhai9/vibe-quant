@@ -226,6 +226,9 @@ class PauseManager:
         logger = get_logger()
         try:
             await asyncio.sleep(delay_s)
+            # 先从 _resume_tasks 中移除自身，避免 resume() 内部取消正在运行的自己
+            self._resume_tasks.pop(symbol, None)
+            self._auto_resume_at.pop(symbol, None)
             result = await self.resume(symbol)
             logger.info(f"定时恢复完成: {result}")
             if self._on_auto_resume:

@@ -365,3 +365,38 @@ async def test_update_timer_failure_degrades() -> None:
     assert pm.is_paused() is True
     assert "定时恢复设置失败" in result
     await pm.resume()
+
+
+@pytest.mark.asyncio
+async def test_auto_resume_callback_called() -> None:
+    """定时恢复到期后触发 on_auto_resume_callback"""
+    called_with: list[str] = []
+
+    async def on_resume(msg: str) -> None:
+        called_with.append(msg)
+
+    pm = PauseManager(on_auto_resume_callback=on_resume)
+    await pm.pause(duration_s=0.05)
+    assert pm.is_paused() is True
+
+    await asyncio.sleep(0.15)
+    assert pm.is_paused() is False
+    assert len(called_with) == 1
+    assert "已恢复" in called_with[0]
+
+
+@pytest.mark.asyncio
+async def test_auto_resume_callback_called_symbol() -> None:
+    """symbol 定时恢复到期后触发 on_auto_resume_callback"""
+    called_with: list[str] = []
+
+    async def on_resume(msg: str) -> None:
+        called_with.append(msg)
+
+    pm = PauseManager(on_auto_resume_callback=on_resume)
+    await pm.pause("BTC/USDT:USDT", duration_s=0.05)
+
+    await asyncio.sleep(0.15)
+    assert pm.is_paused("BTC/USDT:USDT") is False
+    assert len(called_with) == 1
+    assert "已恢复" in called_with[0]
