@@ -278,7 +278,7 @@ vibe-quant/
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
     ├── test_signal.py        # 信号引擎测试（18 用例）
-    ├── test_pause_manager.py # PauseManager 测试（27 用例）
+    ├── test_pause_manager.py # PauseManager 测试（29 用例）
     ├── test_telegram_bot.py  # TelegramBot 测试（14 用例）
     └── test_execution.py     # 执行引擎测试（41 用例）
 ```
