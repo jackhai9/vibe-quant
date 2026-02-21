@@ -2239,8 +2239,9 @@ class Application:
         """
         将用户输入的 symbol 解析为内部 ccxt 格式。
 
-        支持：BTCUSDT, BTC/USDT:USDT, btcusdt（大小写不敏感）。
+        支持：BTC, BTCUSDT, BTC/USDT:USDT, btcusdt（大小写不敏感）。
         仅匹配 _active_symbols 中已有的交易对。
+        base 币种匹配要求唯一命中，歧义时返回 None。
 
         Returns:
             ccxt 格式的 symbol，或 None（无法解析）
@@ -2259,6 +2260,15 @@ class Application:
             simple = sym.split(":")[0].replace("/", "").upper()
             if simple == raw:
                 return sym
+
+        # base 币种匹配：BTC -> BTC/USDT:USDT（要求唯一命中）
+        candidates: list[str] = []
+        for sym in self._active_symbols:
+            base = sym.split("/")[0].upper()
+            if base == raw:
+                candidates.append(sym)
+        if len(candidates) == 1:
+            return candidates[0]
 
         return None
 
@@ -2402,7 +2412,7 @@ class Application:
             "/status - 查看运行状态\n"
             "/help - 显示此帮助\n"
             "\n"
-            "SYMBOL 支持简写（如 BTCUSDT）或全称（如 BTC/USDT:USDT）"
+            "SYMBOL 支持: BTC / BTCUSDT / BTC/USDT:USDT（大小写不敏感）"
         )
 
     def request_shutdown(self) -> None:

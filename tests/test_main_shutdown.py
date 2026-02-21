@@ -120,3 +120,57 @@ def test_protective_stop_debounce_classification():
     assert Application._protective_stop_debounce_s("calibration:user_data") == 0.0
     assert Application._protective_stop_debounce_s("order_update:FILLED") == 0.2
     assert Application._protective_stop_debounce_s("our_algo:CANCELED") == 0.2
+
+
+# ================================================================
+# _resolve_symbol 测试
+# ================================================================
+
+def _make_app_with_symbols(symbols: set[str]) -> Application:
+    """构造一个带 _active_symbols 的 Application（不做真实初始化）。"""
+    app = Application.__new__(Application)
+    app._active_symbols = symbols
+    return app
+
+
+def test_resolve_symbol_exact_ccxt_format():
+    """精确匹配 ccxt 格式"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT", "ETH/USDT:USDT"})
+    assert app._resolve_symbol("BTC/USDT:USDT") == "BTC/USDT:USDT"
+
+
+def test_resolve_symbol_compact_format():
+    """简写匹配 BTCUSDT"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT", "ETH/USDT:USDT"})
+    assert app._resolve_symbol("BTCUSDT") == "BTC/USDT:USDT"
+
+
+def test_resolve_symbol_base_only():
+    """base 币种匹配 BTC（唯一命中）"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT", "ETH/USDT:USDT"})
+    assert app._resolve_symbol("BTC") == "BTC/USDT:USDT"
+
+
+def test_resolve_symbol_base_case_insensitive():
+    """base 币种匹配大小写不敏感"""
+    app = _make_app_with_symbols({"DASH/USDT:USDT"})
+    assert app._resolve_symbol("dash") == "DASH/USDT:USDT"
+
+
+def test_resolve_symbol_base_ambiguous():
+    """base 币种歧义时返回 None（假设存在 BTC/USDT:USDT 和 BTC/BUSD:BUSD）"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT", "BTC/BUSD:BUSD"})
+    assert app._resolve_symbol("BTC") is None
+
+
+def test_resolve_symbol_unknown():
+    """未知 symbol 返回 None"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT"})
+    assert app._resolve_symbol("XYZ") is None
+
+
+def test_resolve_symbol_empty():
+    """空字符串返回 None"""
+    app = _make_app_with_symbols({"BTC/USDT:USDT"})
+    assert app._resolve_symbol("") is None
+    assert app._resolve_symbol("  ") is None
