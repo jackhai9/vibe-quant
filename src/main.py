@@ -819,8 +819,11 @@ class Application:
                     f"allowed_chat_ids={sorted(allowed_ids)}"
                 )
 
-        # 初始化 PauseManager（撤单回调）
-        self.pause_manager = PauseManager(on_pause_callback=self._on_pause_triggered)
+        # 初始化 PauseManager（撤单回调 + 定时恢复通知回调）
+        self.pause_manager = PauseManager(
+            on_pause_callback=self._on_pause_triggered,
+            on_auto_resume_callback=self._on_auto_resume,
+        )
 
         # 风控与全局限速（账户级）
         self.risk_manager = RiskManager(
@@ -2312,6 +2315,14 @@ class Application:
             await self._cancel_own_orders(reason="pause:global")
         else:
             await self._cancel_own_orders_for_symbol(symbol, reason=f"pause:{symbol}")
+
+    async def _on_auto_resume(self, message: str) -> None:
+        """定时恢复完成后的 Telegram 通知回调。"""
+        if self.telegram_notifier and self.telegram_notifier.enabled:
+            try:
+                await self.telegram_notifier._send_message(message)
+            except Exception as e:
+                get_logger().warning(f"定时恢复 Telegram 通知失败: {e}")
 
     async def _cancel_own_orders_for_symbol(self, symbol: str, reason: str) -> None:
         """撤销指定 symbol 的本程序挂单（按 clientOrderId 前缀过滤）。"""

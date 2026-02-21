@@ -32,15 +32,18 @@ class PauseManager:
     def __init__(
         self,
         on_pause_callback: Optional[Callable[[Optional[str]], Awaitable[None]]] = None,
+        on_auto_resume_callback: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         """
         Args:
             on_pause_callback: 暂停时的回调（用于触发撤单），参数为 symbol（None 表示全局）
+            on_auto_resume_callback: 定时恢复完成后的回调（用于通知），参数为 resume 结果消息
         """
         self._global_paused: bool = False
         self._paused_symbols: Set[str] = set()
         self._lock = asyncio.Lock()
         self._on_pause = on_pause_callback
+        self._on_auto_resume = on_auto_resume_callback
         self._global_paused_at: Optional[datetime] = None
         self._symbol_paused_at: Dict[str, datetime] = {}
         # 定时恢复：key=symbol（None 表示全局）
@@ -225,6 +228,11 @@ class PauseManager:
             await asyncio.sleep(delay_s)
             result = await self.resume(symbol)
             logger.info(f"定时恢复完成: {result}")
+            if self._on_auto_resume:
+                try:
+                    await self._on_auto_resume(result)
+                except Exception as e:
+                    logger.error(f"定时恢复通知回调失败: {e}")
         except asyncio.CancelledError:
             pass
 
