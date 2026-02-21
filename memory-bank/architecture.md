@@ -259,7 +259,7 @@ vibe-quant/
 │   │   ├── __init__.py
 │   │   ├── telegram.py       # Telegram 通知（成交/重连/风险/开仓告警）
 │   │   ├── bot.py            # Telegram Bot 命令接收器（getUpdates long polling）
-│   │   └── pause_manager.py  # 暂停状态管理器（全局/per-symbol）
+│   │   └── pause_manager.py  # 暂停状态管理器（全局/per-symbol，支持定时暂停）
 │   └── utils/
 │       ├── README.md         # src/utils 目录说明
 │       ├── __init__.py
@@ -278,7 +278,7 @@ vibe-quant/
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
     ├── test_signal.py        # 信号引擎测试（18 用例）
-    ├── test_pause_manager.py # PauseManager 测试（16 用例）
+    ├── test_pause_manager.py # PauseManager 测试（27 用例）
     ├── test_telegram_bot.py  # TelegramBot 测试（14 用例）
     └── test_execution.py     # 执行引擎测试（41 用例）
 ```
@@ -303,7 +303,7 @@ vibe-quant/
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |
 | `src/notify/telegram.py` | 241 | Telegram 通知（成交/重连/风险触发/开仓告警；token/chat_id 走 env） |
 | `src/notify/bot.py` | 200 | TelegramBot 类，getUpdates long polling 命令接收器 |
-| `src/notify/pause_manager.py` | 120 | PauseManager 类，全局/per-symbol 暂停状态管理 |
+| `src/notify/pause_manager.py` | 227 | PauseManager 类，全局/per-symbol 暂停状态管理，支持定时暂停自动恢复 |
 
 ---
 

@@ -17,11 +17,13 @@ vibe-quant: Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行�
 """
 
 import asyncio
+import math
 import os
 import signal
 import sys
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, Optional, List, Sequence, Awaitable, Any, Coroutine
@@ -2048,6 +2050,9 @@ class Application:
         self._running = False
         self._shutdown_event.set()
 
+        # 清理暂停管理器的定时任务
+        self.pause_manager.cancel_all_timers()
+
         # 取消主循环任务
         tasks_to_cancel = [
             t
@@ -2235,6 +2240,35 @@ class Application:
         bot.register_handler("status", self._handle_cmd_status)
         bot.register_handler("help", self._handle_cmd_help)
 
+    @staticmethod
+    def _parse_duration(s: str) -> Optional[float]:
+        """
+        解析时长字符串为秒数。
+
+        支持格式: <数字><单位>，单位支持 s（秒）、m（分）、h（小时）。
+        示例: 10s → 10.0, 30m → 1800.0, 2h → 7200.0
+
+        Returns:
+            秒数，或 None（无法解析）
+        """
+        s = s.strip().lower()
+        if len(s) < 2:
+            return None
+        unit = s[-1]
+        multipliers = {"s": 1.0, "m": 60.0, "h": 3600.0}
+        if unit not in multipliers:
+            return None
+        try:
+            value = float(s[:-1])
+        except ValueError:
+            return None
+        if not math.isfinite(value) or value <= 0:
+            return None
+        result = value * multipliers[unit]
+        if result > 86400:  # 上限 24h
+            return None
+        return result
+
     def _resolve_symbol(self, user_input: str) -> Optional[str]:
         """
         将用户输入的 symbol 解析为内部 ccxt 格式。
@@ -2330,16 +2364,29 @@ class Application:
             )
 
     async def _handle_cmd_pause(self, args: str) -> str:
-        """处理 /pause 命令。"""
-        if args:
-            symbol = self._resolve_symbol(args)
-            if not symbol:
-                active_list = ", ".join(
-                    s.split(":")[0].replace("/", "") for s in sorted(self._active_symbols)
-                )
-                return f"未知交易对: {args}\n当前交易对: {active_list or '无'}"
-            return await self.pause_manager.pause(symbol)
-        return await self.pause_manager.pause()
+        """处理 /pause 命令。支持 /pause, /pause 10s, /pause BTC, /pause BTC 30m"""
+        tokens = args.split() if args else []
+        symbol: Optional[str] = None
+        duration_s: Optional[float] = None
+
+        if tokens:
+            # 尝试解析最后一个 token 为时长
+            last_dur = self._parse_duration(tokens[-1])
+            if last_dur is not None:
+                duration_s = last_dur
+                tokens = tokens[:-1]
+
+            # 剩余 tokens 拼接为 symbol
+            if tokens:
+                raw_symbol = " ".join(tokens)
+                symbol = self._resolve_symbol(raw_symbol)
+                if not symbol:
+                    active_list = ", ".join(
+                        s.split(":")[0].replace("/", "") for s in sorted(self._active_symbols)
+                    )
+                    return f"未知交易对: {raw_symbol}\n当前交易对: {active_list or '无'}"
+
+        return await self.pause_manager.pause(symbol, duration_s=duration_s)
 
     async def _handle_cmd_resume(self, args: str) -> str:
         """处理 /resume 命令。"""
@@ -2364,15 +2411,33 @@ class Application:
 
         # 暂停状态
         pause_status = self.pause_manager.get_status()
+        now = datetime.now()
         if pause_status["global_paused"]:
             at = pause_status["global_paused_at"]
             ts = at.strftime("%H:%M:%S") if at else "?"
-            lines.append(f"暂停: 全局 (自 {ts})")
+            resume_at = pause_status.get("global_resume_at")
+            if resume_at:
+                remaining = max(0, (resume_at - now).total_seconds())
+                m, s = divmod(int(remaining), 60)
+                h, m = divmod(m, 60)
+                remain_str = f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+                lines.append(f"暂停: 全局 (自 {ts}, 剩余 {remain_str})")
+            else:
+                lines.append(f"暂停: 全局 (自 {ts})")
         elif pause_status["paused_symbols"]:
+            symbol_resume = pause_status.get("symbol_resume_at", {})
             for sym, at in pause_status["paused_symbols"].items():
                 short = sym.split(":")[0]
                 ts = at.strftime("%H:%M:%S") if at else "?"
-                lines.append(f"暂停: {short} (自 {ts})")
+                resume_at = symbol_resume.get(sym)
+                if resume_at:
+                    remaining = max(0, (resume_at - now).total_seconds())
+                    m, s = divmod(int(remaining), 60)
+                    h, m = divmod(m, 60)
+                    remain_str = f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+                    lines.append(f"暂停: {short} (自 {ts}, 剩余 {remain_str})")
+                else:
+                    lines.append(f"暂停: {short} (自 {ts})")
         else:
             lines.append("暂停: 无")
 
@@ -2406,13 +2471,16 @@ class Application:
         return (
             "【命令列表】\n"
             "/pause - 全局暂停（撤所有挂单）\n"
+            "/pause <时长> - 全局定时暂停（如 10s, 30m, 2h）\n"
             "/pause <SYMBOL> - 暂停指定交易对\n"
+            "/pause <SYMBOL> <时长> - 定时暂停指定交易对\n"
             "/resume - 全局恢复\n"
             "/resume <SYMBOL> - 恢复指定交易对\n"
             "/status - 查看运行状态\n"
             "/help - 显示此帮助\n"
             "\n"
-            "SYMBOL 支持: BTC / BTCUSDT / BTC/USDT:USDT（大小写不敏感）"
+            "SYMBOL 支持: BTC / BTCUSDT / BTC/USDT:USDT（大小写不敏感）\n"
+            "时长格式: <数字><单位>，如 10s / 30m / 2h"
         )
 
     def request_shutdown(self) -> None:

@@ -1,5 +1,7 @@
 """PauseManager 单元测试"""
 
+import asyncio
+
 import pytest
 from src.notify.pause_manager import PauseManager
 
@@ -197,3 +199,169 @@ async def test_pause_callback_error_reports_failure_symbol() -> None:
     result = await pm.pause("BTC/USDT:USDT")
     assert "失败" in result
     assert pm.is_paused("BTC/USDT:USDT") is True
+
+
+# ================================================================
+# 定时暂停测试
+# ================================================================
+
+
+@pytest.mark.asyncio
+async def test_timed_global_pause_auto_resumes() -> None:
+    """定时全局暂停到期后自动恢复"""
+    pm = PauseManager()
+    result = await pm.pause(duration_s=0.05)
+    assert "已暂停全局" in result
+    assert "自动恢复" in result
+    assert pm.is_paused() is True
+
+    # 等待定时器触发
+    await asyncio.sleep(0.15)
+    assert pm.is_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_timed_symbol_pause_auto_resumes() -> None:
+    """定时 symbol 暂停到期后自动恢复"""
+    pm = PauseManager()
+    result = await pm.pause("BTC/USDT:USDT", duration_s=0.05)
+    assert "已暂停" in result
+    assert "自动恢复" in result
+    assert pm.is_paused("BTC/USDT:USDT") is True
+
+    await asyncio.sleep(0.15)
+    assert pm.is_paused("BTC/USDT:USDT") is False
+
+
+@pytest.mark.asyncio
+async def test_manual_resume_cancels_timer() -> None:
+    """手动 resume 取消定时器（不会再自动恢复）"""
+    pm = PauseManager()
+    await pm.pause(duration_s=1.0)
+    assert pm.is_paused() is True
+
+    # 手动 resume
+    result = await pm.resume()
+    assert "已恢复" in result
+    assert pm.is_paused() is False
+
+    # 定时器已被取消，不应有残留任务
+    assert len(pm._resume_tasks) == 0
+    assert len(pm._auto_resume_at) == 0
+
+
+@pytest.mark.asyncio
+async def test_global_resume_cancels_all_timers() -> None:
+    """全局 resume 取消所有定时器（含 per-symbol）"""
+    pm = PauseManager()
+    await pm.pause("BTC/USDT:USDT", duration_s=1.0)
+    await pm.pause("ETH/USDT:USDT", duration_s=1.0)
+    assert pm.is_paused("BTC/USDT:USDT") is True
+    assert pm.is_paused("ETH/USDT:USDT") is True
+
+    result = await pm.resume()
+    assert "已恢复" in result
+    assert len(pm._resume_tasks) == 0
+    assert len(pm._auto_resume_at) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_status_contains_resume_at() -> None:
+    """get_status 含 resume_at 字段"""
+    pm = PauseManager()
+
+    # 无定时暂停
+    status = pm.get_status()
+    assert status["global_resume_at"] is None
+    assert status["symbol_resume_at"] == {}
+
+    # 全局定时暂停
+    await pm.pause(duration_s=60.0)
+    status = pm.get_status()
+    assert status["global_resume_at"] is not None
+
+    await pm.resume()
+
+    # symbol 定时暂停
+    await pm.pause("BTC/USDT:USDT", duration_s=60.0)
+    status = pm.get_status()
+    assert "BTC/USDT:USDT" in status["symbol_resume_at"]
+
+    # 清理
+    await pm.resume()
+
+
+@pytest.mark.asyncio
+async def test_timed_pause_update_timer() -> None:
+    """已暂停状态下再次传入 duration 更新定时器"""
+    pm = PauseManager()
+    await pm.pause(duration_s=10.0)
+    result = await pm.pause(duration_s=0.05)
+    assert "已更新定时恢复" in result
+
+    await asyncio.sleep(0.15)
+    assert pm.is_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_timers() -> None:
+    """cancel_all_timers 清理定时任务"""
+    pm = PauseManager()
+    await pm.pause(duration_s=1.0)
+    await pm.pause("BTC/USDT:USDT", duration_s=1.0)
+
+    # cancel_all_timers 不改变暂停状态，只取消定时任务
+    # 但实际上全局暂停时不允许 per-symbol 暂停，所以先 resume 全局再 pause symbol
+    await pm.resume()
+    await pm.pause(duration_s=1.0)
+    pm.cancel_all_timers()
+    assert len(pm._resume_tasks) == 0
+    assert len(pm._auto_resume_at) == 0
+    # 暂停状态不变
+    assert pm.is_paused() is True
+    await pm.resume()
+
+
+@pytest.mark.asyncio
+async def test_format_duration() -> None:
+    """_format_duration 正确格式化"""
+    assert PauseManager._format_duration(10) == "10s"
+    assert PauseManager._format_duration(60) == "1m"
+    assert PauseManager._format_duration(1800) == "30m"
+    assert PauseManager._format_duration(3600) == "1h"
+    assert PauseManager._format_duration(7200) == "2h"
+
+
+@pytest.mark.asyncio
+async def test_schedule_resume_failure_degrades_gracefully() -> None:
+    """_try_schedule_resume 失败时降级：暂停生效但无定时恢复"""
+    pm = PauseManager()
+    # 直接调 pause() 传 inf → 入口通常由 _parse_duration 拦截，
+    # 但作为独立 API，PauseManager 内部应自行降级
+    result = await pm.pause(duration_s=float("inf"))
+    assert pm.is_paused() is True
+    assert "已暂停全局" in result
+    assert "定时恢复设置失败" in result
+    assert len(pm._resume_tasks) == 0
+    await pm.resume()
+
+
+@pytest.mark.asyncio
+async def test_schedule_resume_failure_symbol_degrades() -> None:
+    """symbol 级 _try_schedule_resume 失败降级"""
+    pm = PauseManager()
+    result = await pm.pause("BTC/USDT:USDT", duration_s=float("inf"))
+    assert pm.is_paused("BTC/USDT:USDT") is True
+    assert "定时恢复设置失败" in result
+    await pm.resume("BTC/USDT:USDT")
+
+
+@pytest.mark.asyncio
+async def test_update_timer_failure_degrades() -> None:
+    """已暂停时更新定时器失败降级"""
+    pm = PauseManager()
+    await pm.pause()
+    result = await pm.pause(duration_s=float("inf"))
+    assert pm.is_paused() is True
+    assert "定时恢复设置失败" in result
+    await pm.resume()

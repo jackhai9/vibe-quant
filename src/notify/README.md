@@ -13,5 +13,5 @@
 
 - `telegram.py`：Telegram 通知实现（单向发送）
 - `bot.py`：Telegram Bot 命令接收器（getUpdates long polling，双向交互）
-- `pause_manager.py`：暂停状态管理器（全局/per-symbol 暂停控制）
+- `pause_manager.py`：暂停状态管理器（全局/per-symbol 暂停控制，支持定时暂停自动恢复）
 - `__init__.py`：模块导出

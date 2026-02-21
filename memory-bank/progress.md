@@ -22,6 +22,19 @@
 | 阶段 11：systemd 部署 | ✅ |
 | **小额实盘验证** | ✅ |
 | Telegram Bot 命令控制（暂停/恢复） | ✅ |
+| 定时暂停（/pause 支持时长参数） | ✅ |
+
+## Milestone/附加改进：定时暂停（/pause 支持时长参数）
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-21<br>
+**动机**：支持 `/pause 10s`、`/pause BTC 2h` 等定时暂停，到期自动恢复，无需手动 `/resume`。<br>
+**产出**：
+
+- `src/notify/pause_manager.py`：新增 `_resume_tasks`/`_auto_resume_at` 字段、`duration_s` 参数、定时恢复任务、`cancel_all_timers()`、`_format_duration()`
+- `src/main.py`：新增 `_parse_duration()` 静态方法、`_handle_cmd_pause` 支持时长参数解析、`_handle_cmd_status` 展示剩余时间、`_handle_cmd_help` 更新文案、`shutdown()` 调用 `cancel_all_timers()`
+- `tests/test_pause_manager.py`：新增 11 个定时暂停相关测试用例（含定时器降级场景）
+- `tests/test_main_shutdown.py`：新增 `_parse_duration` 和 `_handle_cmd_pause` 参数解析测试用例
 
 ## Milestone/附加改进：Telegram Bot 命令控制（暂停/恢复执行）
 
