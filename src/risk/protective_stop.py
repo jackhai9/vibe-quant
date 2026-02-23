@@ -71,6 +71,7 @@ class ProtectiveStopManager:
         self._startup_existing_external_logged: set[tuple[str, PositionSide]] = set()
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
         self._no_liq_price_logged: set[tuple[str, PositionSide]] = set()
+        self._liq_wrong_side_logged: set[tuple[str, PositionSide]] = set()
 
     def _get_risk_level(self) -> Optional[int]:
         return self._risk_levels.get(self._risk_stage)
@@ -686,6 +687,35 @@ class ProtectiveStopManager:
 
         # 爆仓价恢复正常，清除"无爆仓价"日志去重标记
         self._no_liq_price_logged.discard((symbol, side))
+
+        # 交叉保证金下，对冲方向可能导致爆仓价不在预期侧：
+        # LONG 预期 liq < mark（价格下跌爆仓），SHORT 预期 liq > mark（价格上涨爆仓）
+        # 如方向不符（如 SHORT 的 liq < mark），跳过保护止损
+        mark_price = position.mark_price
+        if mark_price is not None and mark_price > Decimal("0"):
+            liq_on_wrong_side = False
+            if side == PositionSide.LONG and liquidation_price >= mark_price:
+                liq_on_wrong_side = True
+            elif side == PositionSide.SHORT and liquidation_price <= mark_price:
+                liq_on_wrong_side = True
+            if liq_on_wrong_side:
+                key = (symbol, side)
+                if key not in self._liq_wrong_side_logged:
+                    self._liq_wrong_side_logged.add(key)
+                    log_event(
+                        "risk",
+                        symbol=symbol,
+                        side=side.value,
+                        risk_stage=self._risk_stage,
+                        risk_level=self._get_risk_level(),
+                        reason="skip_liq_wrong_side",
+                        event_cn="爆仓价方向异常（交叉保证金对冲），跳过保护止损",
+                        liquidation_price=str(liquidation_price),
+                        mark_price=str(mark_price),
+                    )
+                return
+            # 方向恢复正常，清除"方向异常"日志去重标记
+            self._liq_wrong_side_logged.discard((symbol, side))
 
         try:
             desired_stop_price = self.compute_stop_price(

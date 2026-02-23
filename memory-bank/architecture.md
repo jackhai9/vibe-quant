@@ -179,7 +179,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - markPrice 数据源：市场 WS 订阅 `@markPrice@1s`，解析为 `MarketEvent.mark_price`；该事件**不参与** stale 判定（stale 仅由 bookTicker/aggTrade 刷新），只用于风控计算
 - 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`，触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
 - 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduce-only 语义约束，不下发 `reduceOnly`），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
-- 仓位保护性止损（Step 9.3）：为每个“有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销
+- 仓位保护性止损（Step 9.3）：为每个”有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销；交叉保证金下若爆仓价方向异常（如 SHORT 的 liq_price < mark_price，因对冲方向导致）则跳过该侧保护止损
 - 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=true` 字段；或 `closePosition=true` 字段 兜底）时，视为外部接管：撤销我方保护止损并暂停维护。
   - 外部止损有效性检查：若外部止损价接近/劣于爆仓价（0.01% 以内），视为无效并取消；仅当不存在有效外部止损时由程序接管并重新挂单。
   - REST 校验以 raw openOrders（`GET /fapi/v1/openOrders`）为主，必要时回退 ccxt openOrders，并合并 openAlgoOrders，避免 ccxt 漏掉部分 closePosition 条件单。
@@ -273,7 +273,7 @@ vibe-quant/
     ├── test_logger.py        # 日志模块测试（26 用例）
     ├── test_main_shutdown.py # 优雅退出/资源释放测试
 	    ├── test_order_cleanup.py # 退出撤单隔离测试（clientOrderId 前缀）
-	    ├── test_protective_stop.py # 保护性止损（交易所端条件单）测试
+	    ├── test_protective_stop.py # 保护性止损（交易所端条件单）测试（31 用例）
 	    ├── test_risk_manager.py  # 风控与限速测试
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
@@ -299,7 +299,7 @@ vibe-quant/
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
 | `src/execution/engine.py` | 882 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
-| `src/risk/protective_stop.py` | 694 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
+| `src/risk/protective_stop.py` | 821 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |
 | `src/notify/telegram.py` | 241 | Telegram 通知（成交/重连/风险触发/开仓告警；token/chat_id 走 env） |
 | `src/notify/bot.py` | 200 | TelegramBot 类，getUpdates long polling 命令接收器 |
@@ -351,6 +351,7 @@ vibe-quant/
 | 2025-12-23 | Bug 修复：WS 重连 guard 与撤单超时后的状态机恢复（COOLDOWN 保留订单上下文） |
 | 2025-12-23 | 新增外部止损有效性检查：无效外部止损取消并由程序接管 |
 | 2026-02-21 | 新增 Telegram Bot 命令控制：/pause、/resume、/status、/help（PauseManager + TelegramBot + main.py 集成） |
+| 2026-02-23 | 修复保护止损 -2021 错误：交叉保证金下爆仓价方向异常时跳过该侧保护止损 |
 
 ---
 

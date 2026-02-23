@@ -23,6 +23,17 @@
 | **小额实盘验证** | ✅ |
 | Telegram Bot 命令控制（暂停/恢复） | ✅ |
 | 定时暂停（/pause 支持时长参数） | ✅ |
+| 修复保护止损交叉保证金方向异常 | ✅ |
+
+## Milestone/附加改进：修复保护止损交叉保证金方向异常
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-23<br>
+**动机**：交叉保证金下同时持有 LONG/SHORT 仓位时，劣势侧的爆仓价可能在 mark_price 的"错误"方向上（如 SHORT 的 liq_price < mark_price），导致 `compute_stop_price` 计算出会立即触发的 stopPrice，Binance 拒绝下单（-2021）。<br>
+**产出**：
+
+- `src/risk/protective_stop.py`：`_sync_side` 在调用 `compute_stop_price` 前检查 `liquidation_price` 是否在 `mark_price` 的正确侧（LONG: liq < mark, SHORT: liq > mark），方向异常时跳过该侧并记录 debug 日志
+- `tests/test_protective_stop.py`：新增 4 个测试用例（SHORT liq<mark 跳过、LONG liq>mark 跳过、正常方向继续下单、mark_price=None 不检查）
 
 ## Milestone/附加改进：定时暂停（/pause 支持时长参数）
 

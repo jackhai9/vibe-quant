@@ -1162,3 +1162,252 @@ class TestInvalidExternalStop:
         exchange.cancel_algo_order.assert_called()
         exchange.place_order.assert_called()
         assert any(e.get("reason") == "cancel_invalid_external_stop" for e in events)
+
+
+@pytest.mark.asyncio
+class TestProtectiveStopLiqWrongSide:
+    """交叉保证金下爆仓价方向异常：跳过保护止损"""
+
+    async def test_short_liq_below_mark_skips(self):
+        """SHORT 持仓但 liq < mark（对冲方向导致），应跳过而非尝试下单"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "DASH/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.001"),
+            step_size=Decimal("0.01"),
+            min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"),
+        )
+        # SHORT 持仓，但 liq_price(29.52) < mark_price(31.83)
+        # 交叉保证金下 LONG 主导时会出现这种情况
+        positions = {
+            PositionSide.SHORT: Position(
+                symbol=symbol,
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("1.97"),
+                entry_price=Decimal("30.50"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+                liquidation_price=Decimal("29.52"),
+                mark_price=Decimal("31.83"),
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol,
+            rules=rules,
+            positions=positions,
+            enabled=True,
+            dist_to_liq=Decimal("0.01"),
+        )
+
+        # 不应尝试下单
+        exchange.place_order.assert_not_called()
+
+    async def test_long_liq_above_mark_skips(self):
+        """LONG 持仓但 liq > mark（对冲方向导致），应跳过"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "DASH/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.001"),
+            step_size=Decimal("0.01"),
+            min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"),
+        )
+        # LONG 持仓，但 liq_price(35.00) > mark_price(31.83)
+        # 交叉保证金下 SHORT 主导时的对称情况
+        positions = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("1.97"),
+                entry_price=Decimal("30.50"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+                liquidation_price=Decimal("35.00"),
+                mark_price=Decimal("31.83"),
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol,
+            rules=rules,
+            positions=positions,
+            enabled=True,
+            dist_to_liq=Decimal("0.01"),
+        )
+
+        exchange.place_order.assert_not_called()
+
+    async def test_short_liq_above_mark_proceeds(self):
+        """SHORT 持仓且 liq > mark（正常），应正常下单"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        # SHORT 持仓，liq_price(100) > mark_price(95) — 正常情况
+        positions = {
+            PositionSide.SHORT: Position(
+                symbol=symbol,
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("90"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("95"),
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol,
+            rules=rules,
+            positions=positions,
+            enabled=True,
+            dist_to_liq=Decimal("0.01"),
+        )
+
+        exchange.place_order.assert_called_once()
+
+    async def test_no_mark_price_still_attempts(self):
+        """mark_price 为 None 时不做方向检查，仍尝试下单"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        # mark_price = None，无法判断方向，应正常尝试
+        positions = {
+            PositionSide.SHORT: Position(
+                symbol=symbol,
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("90"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=None,
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol,
+            rules=rules,
+            positions=positions,
+            enabled=True,
+            dist_to_liq=Decimal("0.01"),
+        )
+
+        exchange.place_order.assert_called_once()
+
+    async def test_wrong_side_log_dedup(self, monkeypatch):
+        """同一 symbol+side 方向异常连续 sync 两次，只记录一次 skip_liq_wrong_side"""
+        events: list[dict] = []
+
+        def fake_log_event(*_args, **kwargs):
+            events.append(kwargs)
+
+        monkeypatch.setattr("src.risk.protective_stop.log_event", fake_log_event)
+
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(return_value=[])
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "DASH/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.001"),
+            step_size=Decimal("0.01"),
+            min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"),
+        )
+        positions = {
+            PositionSide.SHORT: Position(
+                symbol=symbol,
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("1.97"),
+                entry_price=Decimal("30.50"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+                liquidation_price=Decimal("29.52"),
+                mark_price=Decimal("31.83"),
+            )
+        }
+
+        # 第一次 sync
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+        # 第二次 sync（方向仍异常）
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+
+        wrong_side_events = [e for e in events if e.get("reason") == "skip_liq_wrong_side"]
+        assert len(wrong_side_events) == 1  # 只记录一次
+        exchange.place_order.assert_not_called()
