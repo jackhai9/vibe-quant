@@ -24,6 +24,20 @@
 | Telegram Bot 命令控制（暂停/恢复） | ✅ |
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
+| 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：修复保护止损同步调度竞态
+
+**状态**：✅ 已完成<br>
+**日期**：2026-02-23
+
+**问题**：`_schedule_protective_stop_sync` 在调度新同步任务时，对已在执行 REST 调用的前任务执行 `cancel()`，导致 `place_order` 的响应处理、`_states` 更新和日志全部丢失（"幽灵单"现象——交易所有单但本地无状态无日志）。
+
+**修复**：
+- `src/main.py`：两阶段取消策略——用 `asyncio.Event` 标记任务是否过了 debounce 进入执行阶段；debounce 阶段可取消，执行阶段不取消；新任务等前任务完成后串行执行
+- `src/risk/protective_stop.py`：`_sync_side` 的 `keep_existing_tighter`/`adopt_existing` 路径，当本地状态缺失时打 info 日志（手动取消后重新发现既有订单的场景），本地状态已存在时静默
+- `tests/test_main_shutdown.py`：新增 3 个确定性测试（debounce 可取消、执行中不取消、不并发执行）
+- `tests/test_protective_stop.py`：新增 3 个 adoption 日志测试
 
 ## Milestone/附加改进：修复保护止损交叉保证金方向异常
 

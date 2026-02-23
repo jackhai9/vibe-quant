@@ -1411,3 +1411,208 @@ class TestProtectiveStopLiqWrongSide:
         wrong_side_events = [e for e in events if e.get("reason") == "skip_liq_wrong_side"]
         assert len(wrong_side_events) == 1  # 只记录一次
         exchange.place_order.assert_not_called()
+
+
+class TestProtectiveStopAdoptionLog:
+    """adoption 路径条件日志: 仅在本地状态缺失时打印 info 日志"""
+
+    @pytest.mark.asyncio
+    async def test_adopt_existing_logs_when_no_local_state(self, monkeypatch):
+        """本地无状态时发现既有订单(价格一致), 应打 adopt_existing 日志"""
+        events: list[dict] = []
+
+        def fake_log_event(*_args, **kwargs):
+            events.append(kwargs)
+
+        monkeypatch.setattr("src.risk.protective_stop.log_event", fake_log_event)
+
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(
+            return_value=[
+                {
+                    "algoId": "999",
+                    "clientAlgoId": "vq-ps-btcusdt-L-12345",
+                    "orderType": "STOP_MARKET",
+                    "positionSide": "LONG",
+                    "closePosition": True,
+                    "triggerPrice": "101.1",
+                }
+            ]
+        )
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        positions = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("110"),
+            )
+        }
+
+        # _states 为空(无本地状态), 发现既有订单价格一致 -> 应打日志
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+
+        adopt_events = [e for e in events if e.get("reason") == "adopt_existing"]
+        assert len(adopt_events) == 1
+        assert adopt_events[0]["order_id"] == "999"
+        exchange.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_adopt_existing_silent_when_local_state_exists(self, monkeypatch):
+        """本地已有状态时, adopt_existing 不打日志(避免刷屏)"""
+        events: list[dict] = []
+
+        def fake_log_event(*_args, **kwargs):
+            events.append(kwargs)
+
+        monkeypatch.setattr("src.risk.protective_stop.log_event", fake_log_event)
+
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(
+            return_value=[
+                {
+                    "algoId": "999",
+                    "clientAlgoId": "vq-ps-btcusdt-L-12345",
+                    "orderType": "STOP_MARKET",
+                    "positionSide": "LONG",
+                    "closePosition": True,
+                    "triggerPrice": "101.1",
+                }
+            ]
+        )
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        positions = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("110"),
+            )
+        }
+
+        # 第一次 sync: 无本地状态, 会打 adopt_existing
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+        events.clear()
+
+        # 第二次 sync: 本地已有状态, 不应再打 adopt_existing
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+
+        adopt_events = [e for e in events if e.get("reason") == "adopt_existing"]
+        assert len(adopt_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_keep_tighter_logs_when_no_local_state(self, monkeypatch):
+        """本地无状态时发现更紧的既有订单(拒绝放松), 应打 keep_existing_tighter 日志"""
+        events: list[dict] = []
+
+        def fake_log_event(*_args, **kwargs):
+            events.append(kwargs)
+
+        monkeypatch.setattr("src.risk.protective_stop.log_event", fake_log_event)
+
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(
+            return_value=[
+                {
+                    "algoId": "999",
+                    "clientAlgoId": "vq-ps-btcusdt-L-12345",
+                    "orderType": "STOP_MARKET",
+                    "positionSide": "LONG",
+                    "closePosition": True,
+                    "triggerPrice": "101.1",
+                }
+            ]
+        )
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="999", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(exchange, client_order_id_prefix="vq-ps-")
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        positions = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("110"),
+            )
+        }
+
+        # dist_to_liq=0.005 -> desired_stop 更低(更松), 但既有 101.1(更紧) -> keep_existing_tighter
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions,
+            enabled=True, dist_to_liq=Decimal("0.005"),
+        )
+
+        keep_events = [e for e in events if e.get("reason") == "keep_existing_tighter"]
+        assert len(keep_events) == 1
+        assert keep_events[0]["order_id"] == "999"
+        exchange.place_order.assert_not_called()
+        exchange.cancel_algo_order.assert_not_called()

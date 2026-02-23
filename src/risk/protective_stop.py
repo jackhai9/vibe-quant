@@ -546,6 +546,7 @@ class ProtectiveStopManager:
         has_external_stop_latch: bool = False,
     ) -> None:
         desired_cid = self.build_client_order_id(symbol, side)
+        had_no_local_state = (symbol, side) not in self._states
 
         # 多余的重复单先撤掉（理论上不应出现）
         keep_order: Optional[Dict[str, Any]] = None
@@ -760,6 +761,18 @@ class ProtectiveStopManager:
                 order_id=existing_order_id,
                 stop_price=existing_norm,
             )
+            # 仅在本地状态缺失时打日志(如外部取消后重新发现既有订单), 避免正常 sync 刷屏
+            if had_no_local_state:
+                log_event(
+                    "risk",
+                    symbol=symbol,
+                    side=side.value,
+                    risk_stage=self._risk_stage,
+                    risk_level=self._get_risk_level(),
+                    reason="keep_existing_tighter",
+                    order_id=existing_order_id,
+                    price=existing_norm,
+                )
             return
 
         if keep_order is not None and existing_norm is not None and desired_norm is not None and existing_norm == desired_norm:
@@ -770,6 +783,17 @@ class ProtectiveStopManager:
                 order_id=existing_order_id,
                 stop_price=existing_norm,
             )
+            if had_no_local_state:
+                log_event(
+                    "risk",
+                    symbol=symbol,
+                    side=side.value,
+                    risk_stage=self._risk_stage,
+                    risk_level=self._get_risk_level(),
+                    reason="adopt_existing",
+                    order_id=existing_order_id,
+                    price=existing_norm,
+                )
             return
 
         # stopPrice 不同：撤旧建新（尽量保持系统端始终有单）

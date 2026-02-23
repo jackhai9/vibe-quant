@@ -4,12 +4,13 @@
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
-main.py 应用关闭行为 & 命令解析测试
+main.py 应用关闭行为 & 命令解析 & 保护止损调度竞态测试
 """
 
 import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -285,3 +286,177 @@ async def test_handle_cmd_pause_unknown_symbol():
     app.pause_manager = PauseManager()
     result = await app._handle_cmd_pause("XYZ 10s")
     assert "未知交易对" in result
+
+
+# ================================================================
+# _schedule_protective_stop_sync 两阶段取消测试
+# ================================================================
+
+
+def _make_app_for_schedule_test() -> Application:
+    """构造一个能测试 _schedule_protective_stop_sync 的 Application。"""
+    app = Application.__new__(Application)
+    app._running = True
+    app._active_symbols = {"BTC/USDT:USDT"}
+    app.exchange = MagicMock()
+    app.protective_stop_manager = MagicMock()
+    app._protective_stop_tasks = {}  # type: ignore[assignment]
+    app._protective_stop_task_reasons = {}  # type: ignore[assignment]
+    app._protective_stop_task_executing = {}  # type: ignore[assignment]
+    app._protective_stop_pending_reason = {}  # type: ignore[assignment]
+    app._positions = {}  # type: ignore[assignment]
+    app._symbol_configs = {}  # type: ignore[assignment]
+    app._rules = {}  # type: ignore[assignment]
+    return app
+
+
+@pytest.mark.asyncio
+async def test_schedule_debounce_task_can_be_cancelled():
+    """debounce 阶段的任务应该被新调度取消"""
+    app = _make_app_for_schedule_test()
+    sync_called = asyncio.Event()
+
+    async def mock_sync(*, symbol, reason):
+        sync_called.set()
+
+    app._sync_protective_stop = mock_sync  # type: ignore[method-assign]
+
+    # 第一次调度 (debounce=0.2s)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "our_algo_canceled")
+    first_task = app._protective_stop_tasks["BTC/USDT:USDT"]
+
+    # 立即第二次调度 -> 应取消第一个(还在 debounce sleep)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "our_algo_canceled")
+    second_task = app._protective_stop_tasks["BTC/USDT:USDT"]
+
+    assert first_task is not second_task
+    # cancel 已发出, yield 让事件循环处理取消
+    await asyncio.sleep(0)
+    assert first_task.cancelled() or first_task.done()
+
+    # 等第二个完成
+    await second_task
+    assert sync_called.is_set()
+
+
+@pytest.mark.asyncio
+async def test_schedule_executing_task_not_cancelled():
+    """已进入执行阶段的任务不应被取消, 新请求走脏标记, 任务完成后自行 re-run"""
+    app = _make_app_for_schedule_test()
+
+    call_order: list[str] = []
+    first_entered = asyncio.Event()
+    first_can_finish = asyncio.Event()
+
+    async def mock_sync(*, symbol, reason):
+        call_order.append(reason)
+        if reason == "startup":
+            first_entered.set()
+            await first_can_finish.wait()
+
+    app._sync_protective_stop = mock_sync  # type: ignore[method-assign]
+
+    # 第一次调度 (startup -> debounce=0s, 立即进入执行)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "startup")
+    task = app._protective_stop_tasks["BTC/USDT:USDT"]
+
+    # 等第一个进入执行阶段
+    await first_entered.wait()
+
+    # 此时 past_debounce 已 set, 新调度应走脏标记路径(不创建新任务)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "our_algo_canceled")
+    # 同一个 task 对象(脏标记模式不创建新任务)
+    assert app._protective_stop_tasks["BTC/USDT:USDT"] is task
+    assert not task.cancelled()
+
+    # 放行第一个
+    first_can_finish.set()
+    await task
+
+    # 两次 sync 都应该被调用, 且顺序正确
+    assert call_order == ["startup", "our_algo_canceled"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_no_concurrent_sync():
+    """同一 symbol 不应并发执行 _sync_protective_stop"""
+    app = _make_app_for_schedule_test()
+
+    concurrent_count = 0
+    max_concurrent = 0
+    first_entered = asyncio.Event()
+    first_can_finish = asyncio.Event()
+
+    async def mock_sync(*, symbol, reason):
+        nonlocal concurrent_count, max_concurrent
+        concurrent_count += 1
+        max_concurrent = max(max_concurrent, concurrent_count)
+        if reason == "startup":
+            first_entered.set()
+            await first_can_finish.wait()
+        concurrent_count -= 1
+
+    app._sync_protective_stop = mock_sync  # type: ignore[method-assign]
+
+    # 第一次调度(startup, debounce=0)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "startup")
+    task = app._protective_stop_tasks["BTC/USDT:USDT"]
+
+    await first_entered.wait()
+
+    # 第二次调度, 走脏标记
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "our_algo_canceled")
+
+    first_can_finish.set()
+    await task
+
+    assert max_concurrent == 1  # 始终串行
+
+
+@pytest.mark.asyncio
+async def test_schedule_triple_trigger_no_concurrent():
+    """三次触发: T1 执行中 + T2 脏标记 + T3 覆盖脏标记, 始终串行且不丢失最终请求"""
+    app = _make_app_for_schedule_test()
+
+    concurrent_count = 0
+    max_concurrent = 0
+    call_order: list[str] = []
+    first_entered = asyncio.Event()
+    first_can_finish = asyncio.Event()
+
+    async def mock_sync(*, symbol, reason):
+        nonlocal concurrent_count, max_concurrent
+        concurrent_count += 1
+        max_concurrent = max(max_concurrent, concurrent_count)
+        call_order.append(reason)
+        if reason == "startup":
+            first_entered.set()
+            await first_can_finish.wait()
+        concurrent_count -= 1
+
+    app._sync_protective_stop = mock_sync  # type: ignore[method-assign]
+
+    # T1: startup (debounce=0, 立即进入执行)
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "startup")
+    task = app._protective_stop_tasks["BTC/USDT:USDT"]
+
+    await first_entered.wait()
+
+    # T2: 走脏标记
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "our_algo_canceled")
+    assert app._protective_stop_pending_reason.get("BTC/USDT:USDT") == "our_algo_canceled"
+
+    # T3: 覆盖脏标记
+    app._schedule_protective_stop_sync("BTC/USDT:USDT", "position_update")
+    assert app._protective_stop_pending_reason.get("BTC/USDT:USDT") == "position_update"
+
+    # 同一个 task 对象(T2/T3 都不创建新任务)
+    assert app._protective_stop_tasks["BTC/USDT:USDT"] is task
+
+    # 放行 T1
+    first_can_finish.set()
+    await task
+
+    # T1 + T3 的 re-run(T2 被 T3 覆盖)
+    assert call_order == ["startup", "position_update"]
+    assert max_concurrent == 1  # 始终串行, 不会出现并发

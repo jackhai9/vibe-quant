@@ -118,6 +118,8 @@ class Application:
         self._telegram_bot_task: Optional[asyncio.Task[None]] = None
         self._protective_stop_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._protective_stop_task_reasons: Dict[str, str] = {}
+        self._protective_stop_task_executing: Dict[str, asyncio.Event] = {}  # 标记任务是否已进入执行阶段
+        self._protective_stop_pending_reason: Dict[str, str] = {}  # 脏标记: 执行中收到新请求时暂存
 
         self._running = False
         self._shutdown_event = asyncio.Event()
@@ -139,7 +141,7 @@ class Application:
 
         self._shutdown_started = False
 
-        # 订单归属标记：用于“本次运行”隔离撤单范围（避免误撤手动/其他实例订单）
+        # 订单归属标记：用于"本次运行"隔离撤单范围（避免误撤手动/其他实例订单）
         self._run_id: Optional[str] = None
         self._client_order_id_prefix: Optional[str] = None
 
@@ -184,7 +186,7 @@ class Application:
         """
         请求释放外部接管（不立即释放）。
 
-        说明：同侧可能同时存在多个外部 stop/tp；WS 收到某一张终态不代表“外部接管结束”。
+        说明：同侧可能同时存在多个外部 stop/tp；WS 收到某一张终态不代表"外部接管结束"。
         此处只把状态标记为 pending，并触发一次 verify（raw openOrders）后再决定是否 release。
         """
         enabled, _verify_ms, _max_hold_ms = self._get_external_takeover_cfg_ms(symbol)
@@ -327,7 +329,7 @@ class Application:
         生成 clientOrderId（Binance: newClientOrderId）
 
         约定：所有本程序订单都使用本次运行前缀 `<client_order_prefix>-{run_id}-`
-        （其中 `client_order_prefix` 为常量 `CLIENT_ORDER_PREFIX`），用于退出时“只清理本次运行挂单”。
+        （其中 `client_order_prefix` 为常量 `CLIENT_ORDER_PREFIX`），用于退出时"只清理本次运行挂单"。
         """
         prefix = self._client_order_id_prefix
         if not prefix:
@@ -378,8 +380,12 @@ class Application:
 
     def _on_protective_stop_task_done(self, task: asyncio.Task[Any], symbol: str, name: str) -> None:
         """保护止损同步任务回调：只记录异常，不影响主程序。"""
-        self._protective_stop_tasks.pop(symbol, None)
-        self._protective_stop_task_reasons.pop(symbol, None)
+        # 只清理自己（避免误清后续已替换的任务）
+        if self._protective_stop_tasks.get(symbol) is task:
+            self._protective_stop_tasks.pop(symbol, None)
+            self._protective_stop_task_reasons.pop(symbol, None)
+            self._protective_stop_task_executing.pop(symbol, None)
+            self._protective_stop_pending_reason.pop(symbol, None)
         try:
             exc = task.exception()
         except asyncio.CancelledError:
@@ -392,37 +398,69 @@ class Application:
             log_error(f"保护止损任务异常: {name} - {exc}", symbol=symbol)
 
     def _schedule_protective_stop_sync(self, symbol: str, reason: str) -> None:
-        """异步调度保护止损同步（合并短时间内的多次触发）。"""
+        """异步调度保护止损同步（合并短时间内的多次触发）。
+
+        两阶段策略:
+        - debounce sleep 阶段: 新调度安全取消旧任务(合并触发)
+        - REST 执行阶段: 不取消, 设置脏标记让任务完成后自行 re-run
+        """
         if not self._running:
             return
         if not self.exchange or not self.protective_stop_manager:
             return
 
-        debounce_s = self._protective_stop_debounce_s(reason)
-
         prev = self._protective_stop_tasks.get(symbol)
         prev_reason = self._protective_stop_task_reasons.get(symbol)
-        # verify 任务只需要“至少跑一次”，若已经有 verify 在跑/排队就不重复调度（避免刷屏）
-        if reason == "external_takeover_verify" and prev and not prev.done() and prev_reason == "external_takeover_verify":
-            return
+        prev_executing = self._protective_stop_task_executing.get(symbol)
+        # verify 任务只需要"至少跑一次"，若已经有 verify 在跑/排队/pending 就不重复调度（避免刷屏）
+        if reason == "external_takeover_verify":
+            if prev and not prev.done() and prev_reason == "external_takeover_verify":
+                return
+            if self._protective_stop_pending_reason.get(symbol) == "external_takeover_verify":
+                return
+
+        prev_is_executing = prev_executing is not None and prev_executing.is_set()
 
         if prev and not prev.done():
-            prev.cancel()
+            if prev_is_executing:
+                # REST 执行中: 不取消, 设脏标记让任务完成后自行 re-run
+                self._protective_stop_pending_reason[symbol] = reason
+                return
+            else:
+                # debounce sleep 中: 安全取消
+                prev.cancel()
+
+        debounce_s = self._protective_stop_debounce_s(reason)
+        past_debounce = asyncio.Event()
 
         async def _runner() -> None:
-            try:
-                # debounce：合并短时间内的多次触发（按 reason 分级）
-                if debounce_s > 0:
-                    await asyncio.sleep(debounce_s)
-                await self._sync_protective_stop(symbol=symbol, reason=reason)
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                log_error(f"保护止损同步失败: {e}", symbol=symbol)
+            current_reason = reason
+            current_debounce = debounce_s
+            while True:
+                try:
+                    # debounce: 合并短时间内的多次触发（按 reason 分级）
+                    if current_debounce > 0:
+                        await asyncio.sleep(current_debounce)
+                    past_debounce.set()
+                    await self._sync_protective_stop(symbol=symbol, reason=current_reason)
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    log_error(f"保护止损同步失败: {e}", symbol=symbol)
+                # sync 完成后检查脏标记（past_debounce 仍 set, 新请求会继续走脏标记路径）
+                pending = self._protective_stop_pending_reason.pop(symbol, None)
+                if pending is None or not self._running:
+                    break
+                current_reason = pending
+                current_debounce = self._protective_stop_debounce_s(pending)
+                self._protective_stop_task_reasons[symbol] = pending
+                # 进入下一轮 debounce 前清除执行标记, 使新调度可以取消 debounce sleep
+                past_debounce.clear()
 
         task = asyncio.create_task(_runner())
         self._protective_stop_tasks[symbol] = task
         self._protective_stop_task_reasons[symbol] = reason
+        self._protective_stop_task_executing[symbol] = past_debounce
         task.add_done_callback(lambda t, s=symbol, n=f"protective_stop_sync:{symbol}": self._on_protective_stop_task_done(t, s, n))
 
     @staticmethod
@@ -696,7 +734,7 @@ class Application:
         reason: str,
     ) -> None:
         """
-        撤销“本次运行”在该 symbol+side 的遗留挂单。
+        撤销"本次运行"在该 symbol+side 的遗留挂单。
 
         目的：当仓位被外部力量（如保护止损）归零时，避免挂单继续触发导致反向开仓。
         """
@@ -1214,7 +1252,7 @@ class Application:
             self._position_last_change[key] = (prev_amt, update.position_amt)
             self._position_update_events.setdefault(key, asyncio.Event()).set()
 
-        # 0 仓位：删除缓存，避免“幽灵仓位”
+        # 0 仓位：删除缓存，避免"幽灵仓位"
         if abs(update.position_amt) == Decimal("0"):
             symbol_positions.pop(update.position_side, None)
             if abs(prev_amt) > Decimal("0"):
@@ -1341,7 +1379,7 @@ class Application:
             elif update.order_type and update.order_type.upper() in _STOP_ORDER_TYPES and (
                 update.close_position is True or update.reduce_only is True
             ):
-                # 外部 closePosition 或 reduceOnly 条件单状态变化也可能导致“外部接管/释放”
+                # 外部 closePosition 或 reduceOnly 条件单状态变化也可能导致"外部接管/释放"
                 now_ms = current_time_ms()
                 if update.status in (OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.FILLED, OrderStatus.REJECTED):
                     self._external_takeover_request_release(
@@ -1929,7 +1967,7 @@ class Application:
             return
 
         positions = await self.exchange.fetch_positions(symbol)
-        # 先清空，再回填：避免 fetch_positions 不返回 0 仓位导致“幽灵仓位”
+        # 先清空，再回填：避免 fetch_positions 不返回 0 仓位导致"幽灵仓位"
         self._positions[symbol] = {}
 
         for pos in positions:
@@ -2087,6 +2125,8 @@ class Application:
                 task.cancel()
         await self._gather_with_timeout(ps_tasks, timeout_s=2.0, name="保护止损任务取消")
         self._protective_stop_tasks.clear()
+        self._protective_stop_task_executing.clear()
+        self._protective_stop_pending_reason.clear()
 
         # 撤销本程序挂单（避免误撤手动订单）
         await self._gather_with_timeout([self._cancel_own_orders(reason="shutdown")], timeout_s=8.0, name="撤销挂单")

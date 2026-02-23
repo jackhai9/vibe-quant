@@ -189,6 +189,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - 成交日志：以 WS 成交回执为准输出 `role=maker|taker`；REST 立即成交仅完成状态并缓存 `order_id`，在 `ws_fill_grace_ms` 窗口内接收迟到 WS 回执补打日志，超时后先通过 REST 查询 maker 状态、已实现盈亏与手续费；查询成功则输出 `maker/taker`、`pnl`、`fee`，失败才回退为 `role=unknown`
 - 全局限速（Step 9.2）：`max_orders_per_sec` / `max_cancels_per_sec`（滑动窗口计数），在主流程下单/撤单前检查
 
+- 保护止损同步调度：`_schedule_protective_stop_sync` 采用两阶段取消策略——debounce sleep 阶段可被新调度安全取消（合并触发），REST 执行阶段不取消（避免幽灵单/状态丢失），新任务等前任务完成后再执行，保证同一 symbol 串行
+- 保护止损 adoption 日志：`_sync_side` 发现既有订单且本地状态缺失时打 info 日志（`adopt_existing`/`keep_existing_tighter`），本地状态已存在时静默（避免刷屏）
+
 ### 重连后校准（已实现）
 
 - Market/UserData WS 重连成功后回调触发一次 REST 校准：重新加载 markets/rules 并刷新仓位
@@ -273,7 +276,7 @@ vibe-quant/
     ├── test_logger.py        # 日志模块测试（26 用例）
     ├── test_main_shutdown.py # 优雅退出/资源释放测试
 	    ├── test_order_cleanup.py # 退出撤单隔离测试（clientOrderId 前缀）
-	    ├── test_protective_stop.py # 保护性止损（交易所端条件单）测试（31 用例）
+	    ├── test_protective_stop.py # 保护性止损（交易所端条件单）测试（34 用例）
 	    ├── test_risk_manager.py  # 风控与限速测试
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
@@ -288,7 +291,7 @@ vibe-quant/
 | 文件 | 行数 | 说明 |
 |------|------|------|
 | `src/models.py` | 340 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
-| `src/main.py` | 1853 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
+| `src/main.py` | 2559 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
 | `src/config/loader.py` | 270 | ConfigLoader 类，YAML 加载 + 环境变量 + global/symbol 合并 |
 | `src/config/models.py` | 312 | pydantic 配置模型，支持类型验证和默认值 |
 | `src/utils/logger.py` | 483 | loguru 日志配置，按天滚动 + 结构化事件日志 |
@@ -299,7 +302,7 @@ vibe-quant/
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
 | `src/execution/engine.py` | 882 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
-| `src/risk/protective_stop.py` | 821 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
+| `src/risk/protective_stop.py` | 848 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |
 | `src/notify/telegram.py` | 241 | Telegram 通知（成交/重连/风险触发/开仓告警；token/chat_id 走 env） |
 | `src/notify/bot.py` | 200 | TelegramBot 类，getUpdates long polling 命令接收器 |
@@ -352,6 +355,7 @@ vibe-quant/
 | 2025-12-23 | 新增外部止损有效性检查：无效外部止损取消并由程序接管 |
 | 2026-02-21 | 新增 Telegram Bot 命令控制：/pause、/resume、/status、/help（PauseManager + TelegramBot + main.py 集成） |
 | 2026-02-23 | 修复保护止损 -2021 错误：交叉保证金下爆仓价方向异常时跳过该侧保护止损 |
+| 2026-02-23 | 修复保护止损同步调度竞态：两阶段取消策略（debounce 阶段可取消、执行阶段不取消），补 adoption 条件日志 |
 
 ---
 
