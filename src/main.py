@@ -2047,6 +2047,8 @@ class Application:
         while self._running:
             try:
                 await asyncio.sleep(sleep_ms / 1000)
+                if self.pause_manager.is_paused():
+                    continue
                 now_ms = current_time_ms()
                 for (symbol, side), interval_ms in intervals_ms.items():
                     if interval_ms <= 0:
