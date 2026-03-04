@@ -2463,35 +2463,46 @@ class Application:
         # 暂停状态
         pause_status = self.pause_manager.get_status()
         now = datetime.now()
+
+        def _elapsed(at: Optional[datetime]) -> str:
+            if not at:
+                return ""
+            secs = max(0, int((now - at).total_seconds()))
+            m, s = divmod(secs, 60)
+            h, m = divmod(m, 60)
+            return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
         if pause_status["global_paused"]:
             at = pause_status["global_paused_at"]
             ts = at.strftime("%H:%M:%S") if at else "?"
+            elapsed = _elapsed(at)
             resume_at = pause_status.get("global_resume_at")
             if resume_at:
                 remaining = max(0, (resume_at - now).total_seconds())
                 m, s = divmod(int(remaining), 60)
                 h, m = divmod(m, 60)
                 remain_str = f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
-                lines.append(f"暂停: 全局 (自 {ts}, 剩余 {remain_str})")
+                lines.append(f"暂停: 全局 (自 {ts}, 已暂停 {elapsed}, 剩余 {remain_str})")
                 if remaining > 60:
                     lines.append("⚠️ 暂停期间不执行强平兜底，保护性止损仍在交易所端生效")
             else:
-                lines.append(f"暂停: 全局 (自 {ts})")
+                lines.append(f"暂停: 全局 (自 {ts}, 已暂停 {elapsed})")
                 lines.append("⚠️ 暂停期间不执行强平兜底，保护性止损仍在交易所端生效")
         elif pause_status["paused_symbols"]:
             symbol_resume = pause_status.get("symbol_resume_at", {})
             for sym, at in pause_status["paused_symbols"].items():
                 short = sym.split(":")[0]
                 ts = at.strftime("%H:%M:%S") if at else "?"
+                elapsed = _elapsed(at)
                 resume_at = symbol_resume.get(sym)
                 if resume_at:
                     remaining = max(0, (resume_at - now).total_seconds())
                     m, s = divmod(int(remaining), 60)
                     h, m = divmod(m, 60)
                     remain_str = f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
-                    lines.append(f"暂停: {short} (自 {ts}, 剩余 {remain_str})")
+                    lines.append(f"暂停: {short} (自 {ts}, 已暂停 {elapsed}, 剩余 {remain_str})")
                 else:
-                    lines.append(f"暂停: {short} (自 {ts})")
+                    lines.append(f"暂停: {short} (自 {ts}, 已暂停 {elapsed})")
         else:
             lines.append("暂停: 无")
 
