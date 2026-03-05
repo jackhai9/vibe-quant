@@ -26,6 +26,23 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：A+B+C（保证金事件刷新 + 低频兜底 + 受控放松止损）
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-05
+
+**动机**：追加保证金后，运行期 `liquidation_price` 可能不及时刷新；且保护止损默认“只收紧”，导致止损价无法随风险改善下移（LONG）/上移（SHORT）。<br>
+**产出**：
+
+- `src/ws/user_data.py`：新增 `AccountUpdateEvent` 回调输出，解析 `ACCOUNT_UPDATE` 的 `a.m` 与余额变动（`B[].bc`）
+- `src/ws/user_data.py`：`AccountUpdateEvent` 增加 `has_position_delta`，用于区分“纯账户资产事件”与“成交导致的仓位事件”
+- `src/main.py`：新增账户事件触发的全量仓位刷新调度（A）；新增低频全量仓位刷新循环（B，默认 300s）；刷新后立即同步保护止损
+- `src/main.py`：优化 A 触发条件：除划转 reason 白名单外，若“余额变动且无仓位变动”也触发刷新；`ORDER` 事件保持不触发，避免按成交频率打 REST
+- `src/risk/protective_stop.py`：新增受控放松策略（C）：爆仓价改善超过阈值且满足冷却窗口时允许放松保护止损；其余场景保持“只收紧”
+- `src/config/models.py` / `config/config.example.yaml`：新增配置项  
+  `allow_loosen_on_liq_improve` / `liq_improve_threshold` / `loosen_cooldown_s` / `position_refresh_interval_s` / `margin_refresh_debounce_s`
+- 测试：`tests/test_ws_user_data.py`、`tests/test_main_shutdown.py`、`tests/test_protective_stop.py` 新增/更新覆盖
+
 ## Milestone/附加改进：修复保护止损同步调度竞态
 
 **状态**：✅ 已完成<br>

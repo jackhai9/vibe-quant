@@ -1,5 +1,5 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts and execution feedback
+# Output: shared enums and dataclasses for module contracts, account events, and execution feedback
 # Pos: core data contracts, events, and per-side execution state
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -155,6 +155,21 @@ class PositionUpdate:
     entry_price: Optional[Decimal] = None
     unrealized_pnl: Optional[Decimal] = None
     timestamp_ms: int = 0
+
+
+@dataclass
+class AccountUpdateEvent:
+    """
+    账户更新事件（从 User Data Stream 的 ACCOUNT_UPDATE 接收）
+
+    用途：
+    - 识别账户资产侧事件（如划转保证金），触发上层 REST 刷新仓位
+    """
+    reason: Optional[str] = None
+    timestamp_ms: int = 0
+    has_balance_delta: bool = False
+    balance_delta_assets: tuple[str, ...] = ()
+    has_position_delta: bool = False
 
 
 @dataclass

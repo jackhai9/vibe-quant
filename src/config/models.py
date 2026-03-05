@@ -1,5 +1,5 @@
 # Input: raw config values
-# Output: pydantic config models (including execution feedback settings, telegram bot config)
+# Output: pydantic config models (including protective-stop relax/refresh settings, execution feedback settings, telegram bot config)
 # Pos: config schema definitions
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -82,6 +82,32 @@ class ProtectiveStopConfig(BaseModel):
         gt=Decimal("0"),
         le=Decimal("1"),
         description="止损触发距离：使触发时 dist_to_liq≈dist_to_liq（按 liquidation_price 反推 stopPrice）",
+    )
+    allow_loosen_on_liq_improve: bool = Field(
+        default=True,
+        description="当爆仓价改善超过阈值时，是否允许放松保护止损（LONG 下调/SHORT 上调）",
+    )
+    liq_improve_threshold: Decimal = Field(
+        default=Decimal("0.005"),
+        gt=Decimal("0"),
+        le=Decimal("1"),
+        description="允许放松止损的爆仓价改善阈值（比例）",
+    )
+    loosen_cooldown_s: int = Field(
+        default=30,
+        ge=0,
+        description="放松止损冷却时间(s)，防止频繁撤旧建新",
+    )
+    position_refresh_interval_s: int = Field(
+        default=300,
+        ge=10,
+        description="全量仓位低频刷新周期(s)，用于更新 liquidation_price 兜底",
+    )
+    margin_refresh_debounce_s: Decimal = Field(
+        default=Decimal("2"),
+        ge=Decimal("0"),
+        le=Decimal("60"),
+        description="收到保证金相关账户事件后的刷新去抖延迟(s)",
     )
     class ExternalTakeoverConfig(BaseModel):
         """外部止损接管（手动/其他端）"""

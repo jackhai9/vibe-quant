@@ -191,6 +191,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 - 保护止损同步调度：`_schedule_protective_stop_sync` 采用两阶段取消策略——debounce sleep 阶段可被新调度安全取消（合并触发），REST 执行阶段不取消（避免幽灵单/状态丢失），新任务等前任务完成后再执行，保证同一 symbol 串行
 - 保护止损 adoption 日志：`_sync_side` 发现既有订单且本地状态缺失时打 info 日志（`adopt_existing`/`keep_existing_tighter`），本地状态已存在时静默（避免刷屏）
+- A（事件触发刷新）：User Data `ACCOUNT_UPDATE` 解析账户事件（reason + 余额变动 + 是否含仓位变动），命中保证金相关 reason，或“余额变动但无仓位变动”时调度一次全量仓位 REST 刷新（去抖后执行）
+- B（低频兜底刷新）：主循环新增低频全量仓位刷新任务（默认 300s），用于兜底更新 `liquidation_price`
+- C（受控放松止损）：保护止损在“爆仓价改善超过阈值 + 冷却窗口满足”时允许放松（LONG 下调 / SHORT 上调）；其余场景保持“只收紧”
 
 ### 重连后校准（已实现）
 
@@ -356,6 +359,7 @@ vibe-quant/
 | 2026-02-21 | 新增 Telegram Bot 命令控制：/pause、/resume、/status、/help（PauseManager + TelegramBot + main.py 集成） |
 | 2026-02-23 | 修复保护止损 -2021 错误：交叉保证金下爆仓价方向异常时跳过该侧保护止损 |
 | 2026-02-23 | 修复保护止损同步调度竞态：两阶段取消策略（debounce 阶段可取消、执行阶段不取消），补 adoption 条件日志 |
+| 2026-03-05 | 新增 A+B+C：ACCOUNT_UPDATE 账户事件触发仓位刷新 + 低频全量仓位刷新兜底 + 爆仓价改善阈值下的受控放松保护止损 |
 
 ---
 

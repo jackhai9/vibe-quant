@@ -24,7 +24,16 @@ from src.ws.user_data import (
     WS_TESTNET_URL,
     KEEPALIVE_INTERVAL_MS,
 )
-from src.models import AlgoOrderUpdate, OrderUpdate, OrderSide, PositionSide, OrderStatus, PositionUpdate, LeverageUpdate
+from src.models import (
+    AccountUpdateEvent,
+    AlgoOrderUpdate,
+    OrderUpdate,
+    OrderSide,
+    PositionSide,
+    OrderStatus,
+    PositionUpdate,
+    LeverageUpdate,
+)
 from src.utils.logger import setup_logger
 
 
@@ -520,6 +529,35 @@ class TestParseAccountUpdate:
         assert parsed[2].entry_price is None
         assert parsed[2].unrealized_pnl == Decimal("0")
 
+    def test_parse_account_update_event(self):
+        account_events: List[AccountUpdateEvent] = []
+        client = UserDataWSClient(
+            api_key="key",
+            api_secret="secret",
+            on_order_update=lambda _: None,
+            on_account_update_event=account_events.append,
+        )
+
+        data = {
+            "e": "ACCOUNT_UPDATE",
+            "E": 1591097736594,
+            "a": {
+                "m": "MARGIN_TRANSFER",
+                "B": [
+                    {"a": "USDT", "bc": "10.5"},
+                    {"a": "BNB", "bc": "0"},
+                ],
+                "P": [],
+            },
+        }
+
+        parsed = client._parse_account_update_event(data)
+        assert parsed is not None
+        assert parsed.reason == "MARGIN_TRANSFER"
+        assert parsed.has_balance_delta is True
+        assert parsed.balance_delta_assets == ("USDT",)
+        assert parsed.has_position_delta is False
+
 
 class TestParseAccountConfigUpdate:
     """ACCOUNT_CONFIG_UPDATE 解析测试"""
@@ -631,24 +669,33 @@ class TestHandleMessage:
         """测试账户更新消息触发仓位更新回调"""
         order_updates: List[OrderUpdate] = []
         position_updates: List[PositionUpdate] = []
+        account_events: List[AccountUpdateEvent] = []
 
         client = UserDataWSClient(
             api_key="key",
             api_secret="secret",
             on_order_update=order_updates.append,
             on_position_update=position_updates.append,
+            on_account_update_event=account_events.append,
         )
 
         message = {
             "e": "ACCOUNT_UPDATE",
             "E": 1591097736594,
-            "a": {"P": [{"s": "BTCUSDT", "pa": "0.1", "ep": "50000", "up": "0", "ps": "LONG"}]},
+            "a": {
+                "m": "MARGIN_TRANSFER",
+                "B": [{"a": "USDT", "bc": "1"}],
+                "P": [{"s": "BTCUSDT", "pa": "0.1", "ep": "50000", "up": "0", "ps": "LONG"}],
+            },
         }
 
         await client._handle_message(message)
 
         assert len(order_updates) == 0
         assert len(position_updates) == 1
+        assert len(account_events) == 1
+        assert account_events[0].reason == "MARGIN_TRANSFER"
+        assert account_events[0].has_position_delta is True
         assert position_updates[0].symbol == "BTC/USDT:USDT"
         assert position_updates[0].position_side == PositionSide.LONG
         assert position_updates[0].position_amt == Decimal("0.1")

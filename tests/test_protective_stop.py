@@ -1616,3 +1616,166 @@ class TestProtectiveStopAdoptionLog:
         assert keep_events[0]["order_id"] == "999"
         exchange.place_order.assert_not_called()
         exchange.cancel_algo_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sync_allows_loosen_when_liq_improves_enough(self):
+        """C: 爆仓价改善超过阈值时，允许放松保护止损（撤旧建新）。"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(
+            side_effect=[
+                [],  # 第一次：无既有单，直接下单
+                [    # 第二次：存在既有单（更紧）
+                    {
+                        "algoId": "1",
+                        "clientAlgoId": "vq-ps-btcusdt-L-12345",
+                        "orderType": "STOP_MARKET",
+                        "positionSide": "LONG",
+                        "closePosition": True,
+                        "triggerPrice": "101.1",
+                    }
+                ],
+            ]
+        )
+        exchange.place_order = AsyncMock(
+            side_effect=[
+                OrderResult(success=True, order_id="1", status=OrderStatus.NEW),
+                OrderResult(success=True, order_id="2", status=OrderStatus.NEW),
+            ]
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(
+            exchange,
+            client_order_id_prefix="vq-ps-",
+            allow_loosen_on_liq_improve=True,
+            liq_improve_threshold=Decimal("0.005"),
+            loosen_cooldown_s=0,
+        )
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        positions_v1 = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("110"),
+            )
+        }
+        positions_v2 = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("98"),
+                mark_price=Decimal("110"),
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions_v1,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions_v2,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+
+        exchange.cancel_algo_order.assert_called_once_with(symbol, "1")
+        assert exchange.place_order.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_sync_keeps_tighter_when_liq_improve_below_threshold(self):
+        """C: 爆仓价改善不足阈值时，仍保持只收紧策略。"""
+        exchange = MagicMock(spec=ExchangeAdapter)
+        exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exchange.fetch_open_orders_raw = AsyncMock(return_value=[])
+        exchange.fetch_open_algo_orders = AsyncMock(
+            side_effect=[
+                [],
+                [
+                    {
+                        "algoId": "1",
+                        "clientAlgoId": "vq-ps-btcusdt-L-12345",
+                        "orderType": "STOP_MARKET",
+                        "positionSide": "LONG",
+                        "closePosition": True,
+                        "triggerPrice": "101.1",
+                    }
+                ],
+            ]
+        )
+        exchange.place_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.NEW)
+        )
+        exchange.cancel_algo_order = AsyncMock(
+            return_value=OrderResult(success=True, order_id="1", status=OrderStatus.CANCELED)
+        )
+
+        mgr = ProtectiveStopManager(
+            exchange,
+            client_order_id_prefix="vq-ps-",
+            liq_improve_threshold=Decimal("0.005"),
+            loosen_cooldown_s=0,
+        )
+        symbol = "BTC/USDT:USDT"
+        rules = SymbolRules(
+            symbol=symbol,
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+        positions_v1 = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("100"),
+                mark_price=Decimal("110"),
+            )
+        }
+        # 100 -> 99.7 仅改善 0.3%，低于 0.5% 阈值
+        positions_v2 = {
+            PositionSide.LONG: Position(
+                symbol=symbol,
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("0.01"),
+                entry_price=Decimal("100"),
+                unrealized_pnl=Decimal("0"),
+                leverage=10,
+                liquidation_price=Decimal("99.7"),
+                mark_price=Decimal("110"),
+            )
+        }
+
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions_v1,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+        await mgr.sync_symbol(
+            symbol=symbol, rules=rules, positions=positions_v2,
+            enabled=True, dist_to_liq=Decimal("0.01"),
+        )
+
+        exchange.cancel_algo_order.assert_not_called()
+        assert exchange.place_order.await_count == 1

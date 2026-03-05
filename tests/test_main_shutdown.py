@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.main import Application
+from src.models import AccountUpdateEvent
 from src.notify.pause_manager import PauseManager
 from src.utils.logger import setup_logger
 
@@ -122,6 +123,72 @@ def test_protective_stop_debounce_classification():
     assert Application._protective_stop_debounce_s("calibration:user_data") == 0.0
     assert Application._protective_stop_debounce_s("order_update:FILLED") == 0.2
     assert Application._protective_stop_debounce_s("our_algo:CANCELED") == 0.2
+
+
+def test_should_refresh_on_account_event_for_margin_transfer():
+    event = AccountUpdateEvent(
+        reason="MARGIN_TRANSFER",
+        timestamp_ms=1,
+        has_balance_delta=True,
+        balance_delta_assets=("USDT",),
+        has_position_delta=False,
+    )
+    assert Application._should_refresh_on_account_event(event) is True
+
+
+def test_should_refresh_on_account_event_for_unknown_balance_delta():
+    event = AccountUpdateEvent(
+        reason=None,
+        timestamp_ms=1,
+        has_balance_delta=True,
+        balance_delta_assets=("USDT",),
+        has_position_delta=False,
+    )
+    assert Application._should_refresh_on_account_event(event) is True
+
+
+def test_should_not_refresh_on_account_event_for_order_reason():
+    event = AccountUpdateEvent(
+        reason="ORDER",
+        timestamp_ms=1,
+        has_balance_delta=True,
+        balance_delta_assets=("USDT",),
+        has_position_delta=True,
+    )
+    assert Application._should_refresh_on_account_event(event) is False
+
+
+def test_should_refresh_on_account_event_for_unknown_reason_without_position_delta():
+    event = AccountUpdateEvent(
+        reason="WALLET_TRANSFER_OUT",
+        timestamp_ms=1,
+        has_balance_delta=True,
+        balance_delta_assets=("USDT",),
+        has_position_delta=False,
+    )
+    assert Application._should_refresh_on_account_event(event) is True
+
+
+def test_on_account_update_event_schedules_refresh():
+    app = Application.__new__(Application)
+    app._running = True
+    app._margin_refresh_debounce_s = 2.5
+    app._schedule_positions_refresh = MagicMock()
+
+    app._on_account_update_event(
+        AccountUpdateEvent(
+            reason="MARGIN_TRANSFER",
+            timestamp_ms=1,
+            has_balance_delta=True,
+            balance_delta_assets=("USDT",),
+            has_position_delta=False,
+        )
+    )
+
+    app._schedule_positions_refresh.assert_called_once_with(
+        reason="account_update:MARGIN_TRANSFER",
+        debounce_s=2.5,
+    )
 
 
 # ================================================================

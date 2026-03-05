@@ -1,5 +1,5 @@
 # Input: API keys, listenKey, callbacks, reconnect state
-# Output: order/position/leverage updates (maker role/pnl/fee + aiohttp ws + proxy + explicit close timeout)
+# Output: order/position/leverage/account updates (maker role/pnl/fee + aiohttp ws + proxy + explicit close timeout)
 # Pos: user data WS client (account stream)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -19,6 +19,7 @@ User Data Stream WebSocket 模块
 输出：
 - OrderUpdate（通过回调）
 - PositionUpdate（通过回调）
+- AccountUpdateEvent（通过回调）
 - LeverageUpdate（通过回调）
 """
 
@@ -30,6 +31,7 @@ from typing import Callable, Dict, Optional, Any, List
 import aiohttp
 
 from src.models import (
+    AccountUpdateEvent,
     AlgoOrderUpdate,
     OrderUpdate,
     OrderSide,
@@ -78,6 +80,7 @@ class UserDataWSClient:
         on_order_update: Callable[[OrderUpdate], None],
         on_algo_order_update: Optional[Callable[[AlgoOrderUpdate], None]] = None,
         on_position_update: Optional[Callable[[PositionUpdate], None]] = None,
+        on_account_update_event: Optional[Callable[[AccountUpdateEvent], None]] = None,
         on_leverage_update: Optional[Callable[[LeverageUpdate], None]] = None,
         on_reconnect: Optional[Callable[[str], None]] = None,
         testnet: bool = False,
@@ -95,6 +98,7 @@ class UserDataWSClient:
             on_order_update: 收到订单更新时的回调
             on_algo_order_update: 收到 Algo 条件单更新时的回调（ALGO_UPDATE）
             on_position_update: 收到仓位更新时的回调（ACCOUNT_UPDATE）
+            on_account_update_event: 收到账户更新事件时的回调（ACCOUNT_UPDATE）
             on_leverage_update: 收到杠杆更新时的回调（ACCOUNT_CONFIG_UPDATE）
             on_reconnect: WS 重连成功回调（用于触发上层 REST 校准）
             testnet: 是否使用测试网
@@ -108,6 +112,7 @@ class UserDataWSClient:
         self.on_order_update = on_order_update
         self.on_algo_order_update = on_algo_order_update
         self.on_position_update = on_position_update
+        self.on_account_update_event = on_account_update_event
         self.on_leverage_update = on_leverage_update
         self.on_reconnect = on_reconnect
         self.testnet = testnet
@@ -402,11 +407,13 @@ class UserDataWSClient:
             return
 
         if event_type == "ACCOUNT_UPDATE":
-            if not self.on_position_update:
-                return
-            updates = self._parse_account_update(data)
-            for update in updates:
-                self.on_position_update(update)
+            account_event = self._parse_account_update_event(data)
+            if account_event and self.on_account_update_event:
+                self.on_account_update_event(account_event)
+            if self.on_position_update:
+                updates = self._parse_account_update(data)
+                for update in updates:
+                    self.on_position_update(update)
             return
 
         if event_type == "ACCOUNT_CONFIG_UPDATE":
@@ -651,6 +658,65 @@ class UserDataWSClient:
             )
 
         return updates
+
+    def _parse_account_update_event(self, data: Dict[str, Any]) -> Optional[AccountUpdateEvent]:
+        """
+        解析 ACCOUNT_UPDATE 的账户级事件信息（reason + 余额变动）。
+
+        典型字段（简化）：
+        {
+          "e": "ACCOUNT_UPDATE",
+          "E": 123456789,
+          "a": {
+            "m": "MARGIN_TRANSFER",
+            "B": [
+              {"a": "USDT", "wb": "100", "cw": "80", "bc": "10"}
+            ]
+          }
+        }
+        """
+        account = data.get("a")
+        if not isinstance(account, dict):
+            return None
+
+        reason_raw = account.get("m")
+        reason = None
+        if isinstance(reason_raw, str):
+            normalized = reason_raw.strip().upper()
+            reason = normalized if normalized else None
+
+        raw_balances = account.get("B")
+        has_balance_delta = False
+        assets: list[str] = []
+        if isinstance(raw_balances, list):
+            for raw in raw_balances:
+                if not isinstance(raw, dict):
+                    continue
+                delta_raw = raw.get("bc", "0")
+                try:
+                    delta = Decimal(str(delta_raw))
+                except Exception:
+                    continue
+                if delta == Decimal("0"):
+                    continue
+                has_balance_delta = True
+                asset = str(raw.get("a", "")).strip().upper()
+                if asset:
+                    assets.append(asset)
+
+        raw_positions = account.get("P")
+        has_position_delta = False
+        if isinstance(raw_positions, list):
+            has_position_delta = any(isinstance(raw, dict) for raw in raw_positions)
+
+        timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
+        return AccountUpdateEvent(
+            reason=reason,
+            timestamp_ms=timestamp_ms,
+            has_balance_delta=has_balance_delta,
+            balance_delta_assets=tuple(sorted(set(assets))),
+            has_position_delta=has_position_delta,
+        )
 
     def _parse_account_config_update(self, data: Dict[str, Any]) -> Optional[LeverageUpdate]:
         """

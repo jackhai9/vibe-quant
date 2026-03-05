@@ -1,5 +1,5 @@
 # Input: positions, rules, exchange adapter, external stop orders
-# Output: protective stop orders, takeover decisions, and stable clientOrderId state
+# Output: protective stop orders, takeover decisions, liq-improvement relax control, and stable clientOrderId state
 # Pos: protective stop manager
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -47,6 +47,8 @@ class ProtectiveStopState:
     client_order_id: str
     order_id: Optional[str] = None
     stop_price: Optional[Decimal] = None
+    liquidation_price: Optional[Decimal] = None
+    last_loosen_ms: int = 0
 
 
 class ProtectiveStopManager:
@@ -60,11 +62,17 @@ class ProtectiveStopManager:
         *,
         client_order_id_prefix: str,
         risk_levels: Optional[Dict[str, int]] = None,
+        allow_loosen_on_liq_improve: bool = True,
+        liq_improve_threshold: Decimal = Decimal("0.005"),
+        loosen_cooldown_s: int = 30,
     ):
         self._exchange = exchange
         self._client_order_id_prefix = client_order_id_prefix
         self._risk_stage = "protective_stop"
         self._risk_levels = dict(risk_levels or {})
+        self._allow_loosen_on_liq_improve = allow_loosen_on_liq_improve
+        self._liq_improve_threshold = liq_improve_threshold
+        self._loosen_cooldown_ms = max(int(loosen_cooldown_s), 0) * 1000
         self._states: Dict[tuple[str, PositionSide], ProtectiveStopState] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._startup_existing_logged: set[tuple[str, PositionSide]] = set()
@@ -72,6 +80,28 @@ class ProtectiveStopManager:
         self._external_multi_sig: Dict[tuple[str, PositionSide], tuple[str, ...]] = {}
         self._no_liq_price_logged: set[tuple[str, PositionSide]] = set()
         self._liq_wrong_side_logged: set[tuple[str, PositionSide]] = set()
+
+    def _is_liq_improved(
+        self,
+        *,
+        position_side: PositionSide,
+        previous_liq: Decimal,
+        current_liq: Decimal,
+    ) -> bool:
+        """判断爆仓价是否按预期方向改善且超过阈值。"""
+        if previous_liq <= Decimal("0") or current_liq <= Decimal("0"):
+            return False
+        if position_side == PositionSide.LONG:
+            # LONG：爆仓价越低越安全
+            if current_liq >= previous_liq:
+                return False
+            improve = (previous_liq - current_liq) / previous_liq
+        else:
+            # SHORT：爆仓价越高越安全
+            if current_liq <= previous_liq:
+                return False
+            improve = (current_liq - previous_liq) / previous_liq
+        return improve >= self._liq_improve_threshold
 
     def _get_risk_level(self) -> Optional[int]:
         return self._risk_levels.get(self._risk_stage)
@@ -547,6 +577,7 @@ class ProtectiveStopManager:
     ) -> None:
         desired_cid = self.build_client_order_id(symbol, side)
         had_no_local_state = (symbol, side) not in self._states
+        previous_state = self._states.get((symbol, side))
 
         # 多余的重复单先撤掉（理论上不应出现）
         keep_order: Optional[Dict[str, Any]] = None
@@ -754,26 +785,62 @@ class ProtectiveStopManager:
                 or (side == PositionSide.SHORT and desired_norm > existing_norm)
             )
         ):
-            self._states[(symbol, side)] = ProtectiveStopState(
-                symbol=symbol,
-                position_side=side,
-                client_order_id=existing_cid or desired_cid,
-                order_id=existing_order_id,
-                stop_price=existing_norm,
-            )
-            # 仅在本地状态缺失时打日志(如外部取消后重新发现既有订单), 避免正常 sync 刷屏
-            if had_no_local_state:
+            allow_loosen = False
+            now_ms = int(time.time() * 1000)
+            if (
+                self._allow_loosen_on_liq_improve
+                and previous_state is not None
+                and previous_state.liquidation_price is not None
+                and self._is_liq_improved(
+                    position_side=side,
+                    previous_liq=previous_state.liquidation_price,
+                    current_liq=liquidation_price,
+                )
+                and (
+                    previous_state.last_loosen_ms <= 0
+                    or now_ms - previous_state.last_loosen_ms >= self._loosen_cooldown_ms
+                )
+            ):
+                allow_loosen = True
                 log_event(
                     "risk",
                     symbol=symbol,
                     side=side.value,
                     risk_stage=self._risk_stage,
                     risk_level=self._get_risk_level(),
-                    reason="keep_existing_tighter",
-                    order_id=existing_order_id,
-                    price=existing_norm,
+                    reason="allow_loosen_on_liq_improve",
+                    old_liq_price=str(previous_state.liquidation_price),
+                    new_liq_price=str(liquidation_price),
+                    old_stop_price=str(existing_norm),
+                    new_stop_price=str(desired_norm),
                 )
-            return
+
+            if allow_loosen:
+                # 继续走撤旧建新逻辑
+                pass
+            else:
+                self._states[(symbol, side)] = ProtectiveStopState(
+                    symbol=symbol,
+                    position_side=side,
+                    client_order_id=existing_cid or desired_cid,
+                    order_id=existing_order_id,
+                    stop_price=existing_norm,
+                    liquidation_price=liquidation_price,
+                    last_loosen_ms=previous_state.last_loosen_ms if previous_state else 0,
+                )
+                # 仅在本地状态缺失时打日志(如外部取消后重新发现既有订单), 避免正常 sync 刷屏
+                if had_no_local_state:
+                    log_event(
+                        "risk",
+                        symbol=symbol,
+                        side=side.value,
+                        risk_stage=self._risk_stage,
+                        risk_level=self._get_risk_level(),
+                        reason="keep_existing_tighter",
+                        order_id=existing_order_id,
+                        price=existing_norm,
+                    )
+                return
 
         if keep_order is not None and existing_norm is not None and desired_norm is not None and existing_norm == desired_norm:
             self._states[(symbol, side)] = ProtectiveStopState(
@@ -782,6 +849,8 @@ class ProtectiveStopManager:
                 client_order_id=existing_cid or desired_cid,  # 使用现有订单的实际 cid
                 order_id=existing_order_id,
                 stop_price=existing_norm,
+                liquidation_price=liquidation_price,
+                last_loosen_ms=previous_state.last_loosen_ms if previous_state else 0,
             )
             if had_no_local_state:
                 log_event(
@@ -834,6 +903,20 @@ class ProtectiveStopManager:
             client_order_id=desired_cid,
             order_id=result.order_id,
             stop_price=desired_stop_price,
+            liquidation_price=liquidation_price,
+            last_loosen_ms=(
+                int(time.time() * 1000)
+                if (
+                    keep_order is not None
+                    and existing_norm is not None
+                    and desired_norm is not None
+                    and (
+                        (side == PositionSide.LONG and desired_norm < existing_norm)
+                        or (side == PositionSide.SHORT and desired_norm > existing_norm)
+                    )
+                )
+                else (previous_state.last_loosen_ms if previous_state else 0)
+            ),
         )
 
         log_event(

@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands
-# Output: application lifecycle, async tasks, runtime symbol orchestration, and pause/resume control
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, and pause/resume control
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -45,6 +45,7 @@ from src.notify.telegram import TelegramNotifier
 from src.notify.pause_manager import PauseManager
 from src.notify.bot import TelegramBot
 from src.models import (
+    AccountUpdateEvent,
     MarketEvent,
     OrderUpdate,
     AlgoOrderUpdate,
@@ -133,11 +134,18 @@ class Application:
         self._main_loop_task: Optional[asyncio.Task[None]] = None
         self._timeout_check_task: Optional[asyncio.Task[None]] = None
         self._fill_rate_log_task: Optional[asyncio.Task[None]] = None
+        self._position_refresh_loop_task: Optional[asyncio.Task[None]] = None
         self._market_ws_task: Optional[asyncio.Task[None]] = None
         self._user_data_ws_task: Optional[asyncio.Task[None]] = None
         self._calibration_task: Optional[asyncio.Task[None]] = None
         self._calibration_lock = asyncio.Lock()
         self._calibrating = False
+        self._positions_refresh_lock = asyncio.Lock()
+        self._positions_refresh_task: Optional[asyncio.Task[Any]] = None
+        self._positions_refresh_dirty = False
+        self._positions_refresh_pending_reason: Optional[str] = None
+        self._margin_refresh_debounce_s: float = 2.0
+        self._position_refresh_interval_s: int = 300
 
         self._shutdown_started = False
 
@@ -396,6 +404,83 @@ class Application:
 
         if exc:
             log_error(f"保护止损任务异常: {name} - {exc}", symbol=symbol)
+
+    def _on_positions_refresh_task_done(self, task: asyncio.Task[Any], name: str) -> None:
+        """全量仓位刷新任务回调。"""
+        if self._positions_refresh_task is task:
+            self._positions_refresh_task = None
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            log_error(f"仓位刷新任务状态异常: {name} - {e}")
+            return
+        if exc:
+            log_error(f"仓位刷新任务异常: {name} - {exc}")
+
+    def _schedule_positions_refresh(self, *, reason: str, debounce_s: float) -> None:
+        """
+        异步调度全量仓位刷新（A：事件触发；B：低频兜底）。
+
+        语义：
+        - 已有刷新任务在跑时只打脏标记，任务结束后再跑一轮；
+        - 多次触发合并，避免无意义重复 REST。
+        """
+        if not self._running or not self.exchange:
+            return
+
+        existing = self._positions_refresh_task
+        if existing and not existing.done():
+            self._positions_refresh_dirty = True
+            self._positions_refresh_pending_reason = reason
+            return
+
+        self._positions_refresh_dirty = False
+        self._positions_refresh_pending_reason = None
+
+        async def _runner(initial_reason: str, initial_debounce_s: float) -> None:
+            current_reason = initial_reason
+            current_debounce = max(initial_debounce_s, 0.0)
+            while self._running:
+                if current_debounce > 0:
+                    await asyncio.sleep(current_debounce)
+                await self._refresh_all_positions_and_sync(reason=current_reason)
+                if not self._positions_refresh_dirty:
+                    break
+                current_reason = self._positions_refresh_pending_reason or "coalesced"
+                self._positions_refresh_dirty = False
+                self._positions_refresh_pending_reason = None
+                current_debounce = 0.0
+
+        task = asyncio.create_task(_runner(reason, debounce_s))
+        self._positions_refresh_task = task
+        task.add_done_callback(lambda t, n=f"positions_refresh:{reason}": self._on_positions_refresh_task_done(t, n))
+
+    async def _refresh_all_positions_and_sync(self, *, reason: str) -> None:
+        """执行一次全量仓位刷新，并立即同步保护止损。"""
+        if not self._running or not self.exchange:
+            return
+        if self._calibrating:
+            return
+
+        async with self._positions_refresh_lock:
+            if not self._running or self._calibrating:
+                return
+            before_symbols = set(self._active_symbols)
+            try:
+                await self._fetch_all_positions()
+                if set(self._active_symbols) != before_symbols:
+                    await self._rebuild_market_ws(reason=f"positions_refresh:{reason}")
+                await self._sync_protective_stops_all(reason=f"positions_refresh:{reason}")
+                log_event(
+                    "position_refresh",
+                    level="debug",
+                    reason=reason,
+                    active_symbols=len(self._active_symbols),
+                )
+            except Exception as e:
+                log_error(f"全量仓位刷新失败: {e}", reason=reason)
 
     def _schedule_protective_stop_sync(self, symbol: str, reason: str) -> None:
         """异步调度保护止损同步（合并短时间内的多次触发）。
@@ -808,6 +893,9 @@ class Application:
         # 2. 初始化交易所适配器
         logger.info("初始化交易所适配器...")
         global_config = self.config_loader.config.global_
+        pstop_global_cfg = global_config.risk.protective_stop
+        self._margin_refresh_debounce_s = float(pstop_global_cfg.margin_refresh_debounce_s)
+        self._position_refresh_interval_s = int(pstop_global_cfg.position_refresh_interval_s)
 
         # Telegram 通知（可选）
         telegram_cfg = global_config.telegram
@@ -887,6 +975,9 @@ class Application:
             self.exchange,
             client_order_id_prefix=PROTECTIVE_STOP_PREFIX,
             risk_levels=global_config.risk.levels,
+            allow_loosen_on_liq_improve=pstop_global_cfg.allow_loosen_on_liq_improve,
+            liq_improve_threshold=pstop_global_cfg.liq_improve_threshold,
+            loosen_cooldown_s=pstop_global_cfg.loosen_cooldown_s,
         )
 
         # 加载交易规则（全量，symbol 运行时按需初始化）
@@ -908,6 +999,7 @@ class Application:
             on_order_update=self._on_order_update,
             on_algo_order_update=self._on_algo_order_update,
             on_position_update=self._on_position_update,
+            on_account_update_event=self._on_account_update_event,
             on_leverage_update=self._on_leverage_update,
             on_reconnect=self._on_ws_reconnect,
             testnet=global_config.testnet,
@@ -1094,6 +1186,40 @@ class Application:
         self._calibration_task = asyncio.create_task(self._calibrate_after_reconnect(stream_type))
         self._calibration_task.add_done_callback(
             lambda t, n="calibration": self._on_background_task_done(t, n)
+        )
+
+    @staticmethod
+    def _should_refresh_on_account_event(event: AccountUpdateEvent) -> bool:
+        """
+        判断账户事件是否需要触发全量仓位刷新。
+
+        触发条件：
+        - 事件原因为保证金/资产划转相关（A）；
+        - 或存在余额变化，且该事件不含仓位变化（覆盖未知划转 reason 变体）；
+        - ORDER 事件即使有余额变化也不触发（避免每笔成交触发 REST）。
+        """
+        reason = (event.reason or "").upper()
+        if reason in {"MARGIN_TRANSFER", "ASSET_TRANSFER", "MARGIN_TYPE_CHANGE"}:
+            return True
+        if not event.has_balance_delta:
+            return False
+        if reason == "ORDER":
+            return False
+        if not event.has_position_delta:
+            return True
+        return not reason
+
+    def _on_account_update_event(self, event: AccountUpdateEvent) -> None:
+        """处理 ACCOUNT_UPDATE 的账户级事件（用于触发仓位刷新）。"""
+        if not self._running:
+            return
+        if not self._should_refresh_on_account_event(event):
+            return
+
+        reason = f"account_update:{event.reason or 'UNKNOWN'}"
+        self._schedule_positions_refresh(
+            reason=reason,
+            debounce_s=self._margin_refresh_debounce_s,
         )
 
     async def _calibrate_after_reconnect(self, stream_type: str) -> None:
@@ -1632,6 +1758,8 @@ class Application:
             self._main_loop_task = asyncio.create_task(self._main_loop())
             self._timeout_check_task = asyncio.create_task(self._timeout_check_loop())
             self._fill_rate_log_task = asyncio.create_task(self._fill_rate_log_loop())
+            if self.exchange:
+                self._position_refresh_loop_task = asyncio.create_task(self._position_refresh_loop())
 
             # 启动 Telegram Bot（如已配置）
             if self.telegram_bot:
@@ -2081,6 +2209,23 @@ class Application:
                 log_error(f"成交率日志循环错误: {e}")
                 await asyncio.sleep(1)
 
+    async def _position_refresh_loop(self) -> None:
+        """低频全量仓位刷新（B：兜底）。"""
+        while self._running:
+            try:
+                await asyncio.sleep(self._position_refresh_interval_s)
+                if not self._running:
+                    break
+                self._schedule_positions_refresh(
+                    reason="periodic",
+                    debounce_s=0.0,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_error(f"低频仓位刷新循环错误: {e}")
+                await asyncio.sleep(1)
+
     async def shutdown(self) -> None:
         """优雅关闭"""
         if self._shutdown_started:
@@ -2103,6 +2248,7 @@ class Application:
                 self._main_loop_task,
                 self._timeout_check_task,
                 self._fill_rate_log_task,
+                self._position_refresh_loop_task,
                 self._calibration_task,
             ]
             if t
@@ -2129,6 +2275,14 @@ class Application:
         self._protective_stop_tasks.clear()
         self._protective_stop_task_executing.clear()
         self._protective_stop_pending_reason.clear()
+
+        # 取消全量仓位刷新任务
+        if self._positions_refresh_task and not self._positions_refresh_task.done():
+            self._positions_refresh_task.cancel()
+            await self._gather_with_timeout([self._positions_refresh_task], timeout_s=2.0, name="仓位刷新任务取消")
+        self._positions_refresh_task = None
+        self._positions_refresh_dirty = False
+        self._positions_refresh_pending_reason = None
 
         # 撤销本程序挂单（避免误撤手动订单）
         await self._gather_with_timeout([self._cancel_own_orders(reason="shutdown")], timeout_s=8.0, name="撤销挂单")

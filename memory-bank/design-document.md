@@ -236,6 +236,11 @@ maker 订单要求：
 - 配置：
   - `global.risk.protective_stop.enabled`
   - `global.risk.protective_stop.dist_to_liq`（默认 0.01）
+  - `global.risk.protective_stop.allow_loosen_on_liq_improve`
+  - `global.risk.protective_stop.liq_improve_threshold`
+  - `global.risk.protective_stop.loosen_cooldown_s`
+  - `global.risk.protective_stop.position_refresh_interval_s`
+  - `global.risk.protective_stop.margin_refresh_debounce_s`
   - `symbols.<symbol>.risk.protective_stop_dist_to_liq`（按 symbol 覆盖）
   - 外部止损/止盈接管（避免与手动 stop/tp 冲突）：
     - `global.risk.protective_stop.external_takeover.enabled`
@@ -244,6 +249,14 @@ maker 订单要求：
 - stopPrice 计算（按 liquidation_price 反推触发点）：
   - LONG：`stopPrice = liquidation_price / (1 - D)`（SELL stop）
   - SHORT：`stopPrice = liquidation_price / (1 + D)`（BUY stop）
+- 更新策略：
+  - 默认“只收紧”保护止损（LONG 只上调，SHORT 只下调）
+  - 当爆仓价改善超过阈值（`liq_improve_threshold`）且距离上次放松超过冷却窗口（`loosen_cooldown_s`）时，允许受控放松（LONG 下调，SHORT 上调）
+- liquidation_price 刷新：
+  - A：`ACCOUNT_UPDATE` 账户事件触发一次全量仓位刷新（`margin_refresh_debounce_s` 去抖）：
+    - 命中保证金/资产划转 reason（如 `MARGIN_TRANSFER` / `ASSET_TRANSFER` / `MARGIN_TYPE_CHANGE`）；
+    - 或账户余额发生变化且该事件不包含仓位变动（用于覆盖未知划转 reason 变体）
+  - B：低频全量仓位刷新兜底（`position_refresh_interval_s`）
 
 ---
 
@@ -309,6 +322,11 @@ global:
     protective_stop:
       enabled: true
       dist_to_liq: 0.01
+      allow_loosen_on_liq_improve: true
+      liq_improve_threshold: 0.005
+      loosen_cooldown_s: 30
+      position_refresh_interval_s: 300
+      margin_refresh_debounce_s: 2
 
   rate_limit:
     max_orders_per_sec: 5

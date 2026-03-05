@@ -112,6 +112,16 @@ global:
       enabled: true
       # dist_to_liq = abs(mark_price - liquidation_price) / mark_price
       dist_to_liq: 0.01
+      # C：当爆仓价改善超过阈值时，允许放松保护止损（LONG 下调 / SHORT 上调）
+      allow_loosen_on_liq_improve: true
+      # 爆仓价改善阈值（比例），如 0.005 = 0.5%
+      liq_improve_threshold: 0.005
+      # 放松止损冷却时间(s)，防止频繁撤旧建新
+      loosen_cooldown_s: 3
+      # B：低频全量仓位刷新周期(s)，用于更新 liquidation_price 兜底
+      position_refresh_interval_s: 300
+      # A：收到保证金相关账户事件后的刷新去抖(s)
+      margin_refresh_debounce_s: 2
       # 外部止损接管：当检测到外部 stop/tp（closePosition=true 字段 或 reduceOnly=true 字段）时，本程序停止维护自己的保护止损；并定期用 REST 校验释放锁存（REST 以 raw openOrders 为主）
       external_takeover:
         enabled: true
