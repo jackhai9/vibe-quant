@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Binance 双击订单簿一键平多（定制版）
 // @namespace    tm.binance.close.long
-// @version      1.0.0
+// @version      1.0.1
 // @description  双击订单簿价格 -> 填数量 -> 自动点“平多”
 // @match        https://www.binance.com/*/futures/*
 // @match        https://www.binance.com/futures/*
+// @updateURL    https://raw.githubusercontent.com/jackhai9/vibe-quant/main/tm-binance-close-long.user.js
+// @downloadURL  https://raw.githubusercontent.com/jackhai9/vibe-quant/main/tm-binance-close-long.user.js
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
