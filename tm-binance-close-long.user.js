@@ -13,8 +13,14 @@
   'use strict';
 
   const CFG = {
-    // 默认平仓数量
-    DEFAULT_QTY: '0.002',
+    // 按 symbol 覆盖默认数量（优先级最高）
+    SYMBOL_QTY: {
+      DASHUSDT: '0.002',
+      // BTCUSDT: '0.001',
+      // ETHUSDT: '0.01',
+    },
+    // 未配置 SYMBOL_QTY 时，是否自动使用该 symbol 的最小下单量
+    AUTO_USE_MIN_QTY: true,
     // 防误触：需按住 Shift 再双击
     REQUIRE_SHIFT: true,
     // true=只填数量；false=填数量并自动点“平多”
@@ -87,6 +93,54 @@
     return /^\d+(\.\d+)?$/.test(txt) ? txt : null;
   }
 
+  function getCurrentSymbol() {
+    const m = location.pathname.match(/\/futures\/([A-Z0-9_]+)/i);
+    if (m && m[1]) return m[1].toUpperCase();
+
+    const title = document.title || '';
+    const t = title.match(/([A-Z0-9_]{6,})\s+U/i);
+    return t && t[1] ? t[1].toUpperCase() : null;
+  }
+
+  function readMinQtyFromAppData(symbol) {
+    try {
+      const el = document.querySelector('#__APP_DATA');
+      if (!el || !el.textContent) return null;
+      const data = JSON.parse(el.textContent);
+      const perpetual =
+        data?.appState?.loader?.dataByRouteId?.bd56?.reactQueryData?.productFutureService?.perpetual;
+      const sInfo = perpetual?.[symbol];
+      if (!sInfo) return null;
+      const filters = Array.isArray(sInfo.f) ? sInfo.f : [];
+      const lot = filters.find((x) => x && x.filterType === 'LOT_SIZE');
+      const minQty = lot?.minQty;
+      return typeof minQty === 'string' && minQty ? minQty : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function readMinQtyFromQtyInput() {
+    const input = findQtyInput();
+    if (!input) return null;
+    const step = input.getAttribute('step');
+    return step && /^\d+(\.\d+)?$/.test(step) ? step : null;
+  }
+
+  function resolveTargetQty() {
+    const symbol = getCurrentSymbol();
+    if (symbol && CFG.SYMBOL_QTY[symbol]) {
+      return { qty: String(CFG.SYMBOL_QTY[symbol]), source: `SYMBOL_QTY(${symbol})`, symbol };
+    }
+
+    if (CFG.AUTO_USE_MIN_QTY) {
+      const minQty = (symbol && readMinQtyFromAppData(symbol)) || readMinQtyFromQtyInput();
+      if (minQty) return { qty: minQty, source: 'AUTO_MIN_QTY', symbol };
+    }
+
+    return null;
+  }
+
   document.addEventListener('dblclick', (e) => {
     try {
       if (CFG.DEBUG) {
@@ -125,8 +179,13 @@
         return;
       }
 
-      setInputValueReact(qtyInput, CFG.DEFAULT_QTY);
-      log('已填数量', CFG.DEFAULT_QTY, '触发价格', clickedPrice);
+      const qtyPlan = resolveTargetQty();
+      if (!qtyPlan || !qtyPlan.qty) {
+        warn('未找到可用数量来源（SYMBOL_QTY/AUTO_MIN_QTY）');
+        return;
+      }
+      setInputValueReact(qtyInput, qtyPlan.qty);
+      log('已填数量', qtyPlan.qty, '来源', qtyPlan.source, 'symbol', qtyPlan.symbol, '触发价格', clickedPrice);
 
       if (CFG.SAFE_MODE) {
         lastTs = now;
