@@ -123,6 +123,7 @@ class Application:
         self._protective_stop_pending_reason: Dict[str, str] = {}  # 脏标记: 执行中收到新请求时暂存
 
         self._running = False
+        self._started_at: Optional[datetime] = None
         self._shutdown_event = asyncio.Event()
         self._positions: Dict[str, Dict[PositionSide, Position]] = {}  # symbol -> side -> Position
         self._symbol_leverage: Dict[str, int] = {}  # symbol -> leverage
@@ -1725,6 +1726,7 @@ class Application:
         """运行应用"""
         logger = get_logger()
         self._running = True
+        self._started_at = datetime.now()
 
         try:
             # 获取初始仓位
@@ -2613,11 +2615,6 @@ class Application:
         lines: list[str] = ["【状态】"]
 
         # 运行状态
-        lines.append(f"运行中: {'是' if self._running else '否'}")
-        lines.append(f"校准中: {'是' if self._calibrating else '否'}")
-
-        # 暂停状态
-        pause_status = self.pause_manager.get_status()
         now = datetime.now()
 
         def _elapsed(at: Optional[datetime]) -> str:
@@ -2627,6 +2624,13 @@ class Application:
             m, s = divmod(secs, 60)
             h, m = divmod(m, 60)
             return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+        uptime = _elapsed(self._started_at)
+        lines.append(f"运行中: {'是' if self._running else '否'}" + (f" ({uptime})" if uptime else ""))
+        lines.append(f"校准中: {'是' if self._calibrating else '否'}")
+
+        # 暂停状态
+        pause_status = self.pause_manager.get_status()
 
         if pause_status["global_paused"]:
             at = pause_status["global_paused_at"]
