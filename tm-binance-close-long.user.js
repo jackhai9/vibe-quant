@@ -84,7 +84,7 @@
   function isOrderbookPriceNode(node) {
     if (!node) return null;
     return node.closest(
-      '#futuresOrderbook .ask-light.emit-price, #futuresOrderbook .bid-light.emit-price, #futuresOrderbook .row-content .emit-price'
+      '#futuresOrderbook .ask-light.emit-price, #futuresOrderbook .bid-light.emit-price'
     );
   }
 
