@@ -26,7 +26,25 @@
 
   let lastTs = 0;
 
-  const log = (...args) => CFG.DEBUG && console.log('[TM-QuickCloseLong]', ...args);
+  const PREFIX = '[双击订单簿一键平多]';
+
+  function emit(level, ...args) {
+    if (!CFG.DEBUG && level !== 'ERR') return;
+    // 在部分扩展/页面 hook 场景下，console.log/warn 可能被吞；统一走 error 通道确保可见
+    console.error(PREFIX, `[${level}]`, ...args);
+  }
+
+  function log(...args) {
+    emit('LOG', ...args);
+  }
+
+  function warn(...args) {
+    emit('WARN', ...args);
+  }
+
+  function err(...args) {
+    emit('ERR', ...args);
+  }
 
   function setInputValueReact(input, value) {
     const setter = Object.getOwnPropertyDescriptor(
@@ -60,7 +78,7 @@
   function isOrderbookPriceNode(node) {
     if (!node) return null;
     return node.closest(
-      '#futuresOrderbook .ask-light.emit-price, #futuresOrderbook .bid-light.emit-price'
+      '#futuresOrderbook .ask-light.emit-price, #futuresOrderbook .bid-light.emit-price, #futuresOrderbook .row-content .emit-price'
     );
   }
 
@@ -70,34 +88,72 @@
   }
 
   document.addEventListener('dblclick', (e) => {
-    const now = Date.now();
-    if (now - lastTs < CFG.COOLDOWN_MS) return;
-    if (CFG.REQUIRE_SHIFT && !e.shiftKey) return;
+    try {
+      if (CFG.DEBUG) {
+        log('捕获到 dblclick', {
+          targetClass: e.target?.className || '',
+          targetText: (e.target?.textContent || '').trim().slice(0, 24),
+          shiftKey: e.shiftKey,
+        });
+      }
 
-    const priceNode = isOrderbookPriceNode(e.target);
-    if (!priceNode) return;
+      const now = Date.now();
+      if (now - lastTs < CFG.COOLDOWN_MS) {
+        if (CFG.DEBUG) warn('跳过：cooldown');
+        return;
+      }
+      if (CFG.REQUIRE_SHIFT && !e.shiftKey) {
+        if (CFG.DEBUG) warn('跳过：需要按住 Shift');
+        return;
+      }
 
-    const clickedPrice = parsePrice(priceNode);
-    if (!clickedPrice) return;
+      const priceNode = isOrderbookPriceNode(e.target);
+      if (!priceNode) {
+        if (CFG.DEBUG) warn('跳过：不是订单簿价格节点');
+        return;
+      }
 
-    const qtyInput = findQtyInput();
-    if (!qtyInput) return log('未找到数量输入框');
+      const clickedPrice = parsePrice(priceNode);
+      if (!clickedPrice) {
+        if (CFG.DEBUG) warn('跳过：价格解析失败');
+        return;
+      }
 
-    setInputValueReact(qtyInput, CFG.DEFAULT_QTY);
-    log('已填数量', CFG.DEFAULT_QTY, '触发价格', clickedPrice);
+      const qtyInput = findQtyInput();
+      if (!qtyInput) {
+        warn('未找到数量输入框');
+        return;
+      }
 
-    if (CFG.SAFE_MODE) {
+      setInputValueReact(qtyInput, CFG.DEFAULT_QTY);
+      log('已填数量', CFG.DEFAULT_QTY, '触发价格', clickedPrice);
+
+      if (CFG.SAFE_MODE) {
+        lastTs = now;
+        warn('SAFE_MODE=true，仅填数量，不点击平多');
+        return;
+      }
+
+      const closeLongBtn = findCloseLongButton();
+      if (!closeLongBtn) {
+        warn('未找到“平多”按钮');
+        return;
+      }
+
+      closeLongBtn.click();
       lastTs = now;
-      return log('SAFE_MODE=true，仅填数量，不点击平多');
+      log('已点击平多');
+    } catch (e2) {
+      err('dblclick handler 异常:', e2);
     }
-
-    const closeLongBtn = findCloseLongButton();
-    if (!closeLongBtn) return log('未找到“平多”按钮');
-
-    closeLongBtn.click();
-    lastTs = now;
-    log('已点击平多');
   });
 
-  log('脚本加载完成');
+  window.__TM_CLOSE_LONG_DEBUG__ = {
+    cfg: CFG,
+    findQtyInput,
+    findCloseLongButton,
+    isOrderbookPriceNode,
+  };
+
+  log('脚本加载完成', location.href);
 })();
