@@ -112,9 +112,8 @@
       const sInfo = perpetual?.[symbol];
       if (!sInfo) return null;
       const filters = Array.isArray(sInfo.f) ? sInfo.f : [];
-      const lot = filters.find((x) => x && x.filterType === 'LOT_SIZE');
-      const minQty = lot?.minQty;
-      return typeof minQty === 'string' && minQty ? minQty : null;
+      const lot = filters.find((x) => x && x.filterType === 'LOT_SIZE') || {};
+      return typeof lot.minQty === 'string' && lot.minQty ? lot.minQty : null;
     } catch (_e) {
       return null;
     }
@@ -133,12 +132,11 @@
       return { qty: String(CFG.SYMBOL_QTY[symbol]), source: `SYMBOL_QTY(${symbol})`, symbol };
     }
 
-    if (CFG.AUTO_USE_MIN_QTY) {
-      const minQty = (symbol && readMinQtyFromAppData(symbol)) || readMinQtyFromQtyInput();
-      if (minQty) return { qty: minQty, source: 'AUTO_MIN_QTY', symbol };
-    }
+    if (!CFG.AUTO_USE_MIN_QTY) return null;
 
-    return null;
+    const minQty = (symbol && readMinQtyFromAppData(symbol)) || readMinQtyFromQtyInput();
+    if (!minQty) return null;
+    return { qty: minQty, source: 'AUTO_MIN_QTY', symbol };
   }
 
   document.addEventListener('dblclick', (e) => {
@@ -179,6 +177,12 @@
         return;
       }
 
+      const closeLongBtn = findCloseLongButton();
+      if (!closeLongBtn) {
+        warn('未找到“平多”按钮');
+        return;
+      }
+
       const qtyPlan = resolveTargetQty();
       if (!qtyPlan || !qtyPlan.qty) {
         warn('未找到可用数量来源（SYMBOL_QTY/AUTO_MIN_QTY）');
@@ -190,12 +194,6 @@
       if (CFG.SAFE_MODE) {
         lastTs = now;
         warn('SAFE_MODE=true，仅填数量，不点击平多');
-        return;
-      }
-
-      const closeLongBtn = findCloseLongButton();
-      if (!closeLongBtn) {
-        warn('未找到“平多”按钮');
         return;
       }
 
