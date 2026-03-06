@@ -11,5 +11,5 @@
 
 ## 文件清单
 
-- `adapter.py`：ccxt 适配与交易所操作封装
+- `adapter.py`：ccxt 适配与交易所操作封装（含 `_parse_ccxt_error` 结构化错误解析）
 - `__init__.py`：模块导出

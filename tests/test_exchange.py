@@ -533,3 +533,104 @@ class TestAsyncMethods:
 
         with pytest.raises(RuntimeError, match="未初始化"):
             await adapter.fetch_positions()
+
+
+class TestParseCcxtError:
+    """_parse_ccxt_error 解析测试"""
+
+    def test_full_format_with_http_status_and_json(self):
+        """完整格式：含 HTTP status + JSON body"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.BadRequest(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order '
+            '400 Bad Request {"code":-2021,"msg":"Order would immediately trigger."}'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "400"
+        assert result["code"] == "-2021"
+        assert result["msg"] == "Order would immediately trigger."
+
+    def test_rate_limit_429(self):
+        """429 限流"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.RateLimitExceeded(
+            'binanceusdm GET https://fapi.binance.com/fapi/v1/openOrders '
+            '429 Too Many Requests {"code":-1015,"msg":"Too many request weight used."}'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "429"
+        assert result["code"] == "-1015"
+        assert result["msg"] == "Too many request weight used."
+
+    def test_post_only_reject(self):
+        """Post-only 拒单 (-5022)"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.InvalidOrder(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order '
+            '400 Bad Request {"code":-5022,"msg":"Due to the order could be filled as taker, the timestamp has arrived."}'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "400"
+        assert result["code"] == "-5022"
+
+    def test_url_only_no_http_response(self):
+        """仅含 URL（网络超时等无 HTTP 响应）"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.NetworkError(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order'
+        )
+        result = _parse_ccxt_error(exc)
+        assert "http_status" not in result
+        assert "code" not in result
+        assert "msg" not in result
+
+    def test_json_without_code_msg(self):
+        """JSON 中无 code/msg"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.ExchangeError(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order '
+            '500 Internal Server Error {"error":"unknown"}'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "500"
+        assert "code" not in result
+        assert "msg" not in result
+
+    def test_plain_exception(self):
+        """非 ccxt 异常（普通 Exception）"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = RuntimeError("something went wrong")
+        result = _parse_ccxt_error(exc)
+        assert result == {}
+
+    def test_malformed_json(self):
+        """JSON 格式损坏"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.ExchangeError(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order '
+            '400 Bad Request {broken json}'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "400"
+        assert "code" not in result
+        assert "msg" not in result
+
+    def test_json_with_trailing_text(self):
+        """JSON 后有尾巴文本（防御未来 ccxt 格式变化）"""
+        from src.exchange.adapter import _parse_ccxt_error
+
+        exc = ccxt.ExchangeError(
+            'binanceusdm POST https://fapi.binance.com/fapi/v1/order '
+            '400 Bad Request {"code":-2021,"msg":"Order would immediately trigger."} some trailing text'
+        )
+        result = _parse_ccxt_error(exc)
+        assert result["http_status"] == "400"
+        assert result["code"] == "-2021"
+        assert result["msg"] == "Order would immediately trigger."

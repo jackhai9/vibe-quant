@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data, order results, and filter-based rules
+# Output: market/position data, order results, filter-based rules, and structured error parsing (_parse_ccxt_error)
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -23,6 +23,7 @@
 - OrderResult
 """
 
+import json
 import re
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Sequence, cast
@@ -43,6 +44,40 @@ from src.models import (
 from src.utils import round_to_tick, round_to_step, round_up_to_step
 from src.utils.helpers import ws_stream_to_symbol
 from src.utils.logger import get_logger, log_error, log_event, log_order_reject
+
+
+def _parse_ccxt_error(exc: Exception) -> dict[str, str | None]:
+    """从 ccxt 异常字符串中提取 HTTP 状态码和 Binance 错误码/消息。"""
+    raw = str(exc)
+    result: dict[str, str | None] = {}
+    # 提取 http_status：URL 后的数字
+    m = re.search(r'https?://\S+\s+(\d{3})\s', raw)
+    if m:
+        result["http_status"] = m.group(1)
+    # 提取 Binance code + msg
+    # 从最后一个 '{' 开始，先尝试到末尾解析；若失败（JSON 后有尾巴文本），
+    # 回退找配对的 '}' 再解析，兼容未来 ccxt 格式变化
+    brace_pos = raw.rfind('{')
+    if brace_pos >= 0:
+        json_str = raw[brace_pos:]
+        try:
+            data = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            # 回退：找配对的 '}'
+            close_pos = raw.rfind('}')
+            if close_pos > brace_pos:
+                try:
+                    data = json.loads(raw[brace_pos:close_pos + 1])
+                except (json.JSONDecodeError, ValueError):
+                    data = None
+            else:
+                data = None
+        if isinstance(data, dict):
+            if "code" in data:
+                result["code"] = str(data["code"])
+            if "msg" in data:
+                result["msg"] = data["msg"]
+    return result
 
 
 class ExchangeAdapter:
@@ -356,7 +391,7 @@ class ExchangeAdapter:
             return result
 
         except Exception as e:
-            log_error(f"获取仓位失败: {e}", symbol=symbol)
+            log_error(f"获取仓位失败: {e}", symbol=symbol, **_parse_ccxt_error(e))
             raise
 
     async def fetch_leverage_map(self, symbols: Sequence[str]) -> Dict[str, int]:
@@ -486,7 +521,7 @@ class ExchangeAdapter:
             return result
 
         except ccxt.InsufficientFunds as e:
-            log_error(f"余额不足: {e}", symbol=intent.symbol)
+            log_error(f"余额不足: {e}", symbol=intent.symbol, **_parse_ccxt_error(e))
             return OrderResult(
                 success=False,
                 order_id=None,
@@ -514,7 +549,7 @@ class ExchangeAdapter:
                     qty=intent.qty,
                 )
             else:
-                log_error(f"无效订单: {e}", symbol=intent.symbol)
+                log_error(f"无效订单: {e}", symbol=intent.symbol, **_parse_ccxt_error(e))
             return OrderResult(
                 success=False,
                 order_id=None,
@@ -523,7 +558,7 @@ class ExchangeAdapter:
                 error_message=f"无效订单: {e}",
             )
         except Exception as e:
-            log_error(f"下单失败: {e}", symbol=intent.symbol)
+            log_error(f"下单失败: {e}", symbol=intent.symbol, **_parse_ccxt_error(e))
             return OrderResult(
                 success=False,
                 order_id=None,
@@ -614,7 +649,13 @@ class ExchangeAdapter:
             return result
 
         except Exception as e:
-            logger.debug(f"撤 algo 订单失败（可能已成交/取消）: {symbol} algo_id={algo_id} - {e}")
+            err_info = _parse_ccxt_error(e)
+            logger.debug(
+                f"撤 algo 订单失败（可能已成交/取消）: {symbol} algo_id={algo_id} - {e}"
+                + (f" | http_status={err_info.get('http_status')}" if err_info.get("http_status") else "")
+                + (f" | code={err_info.get('code')}" if err_info.get("code") else "")
+                + (f" | msg={err_info.get('msg')}" if err_info.get("msg") else "")
+            )
             return OrderResult(
                 success=False,
                 order_id=algo_id,
@@ -723,8 +764,7 @@ class ExchangeAdapter:
         try:
             resp = await self.exchange.fapiPrivateGetOpenOrders(params)
         except Exception as e:
-            logger = get_logger()
-            logger.warning(f"获取 raw openOrders 失败: {e}, symbol={symbol}")
+            log_error(f"获取 raw openOrders 失败: {e}", symbol=symbol, **_parse_ccxt_error(e))
             return []
 
         if isinstance(resp, list):
@@ -763,8 +803,7 @@ class ExchangeAdapter:
                 return response.get("data", response.get("orders", []))
             return []
         except Exception as e:
-            logger = get_logger()
-            logger.warning(f"获取 algo 挂单失败: {e}, symbol={symbol}")
+            log_error(f"获取 algo 挂单失败: {e}", symbol=symbol, **_parse_ccxt_error(e))
             return []
 
     async def fetch_order_trade_meta(
