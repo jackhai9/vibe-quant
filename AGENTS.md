@@ -1,106 +1,126 @@
-# AGENTS.md
+# vibe-quant
 
-This file provides authoritative guidance for AI coding agents (e.g., OpenAI Codex and similar systems) when working with code in this repository.
+## Scope
 
-## Project Overview
+- 本仓库是 Binance U 本位永续合约 Hedge 模式 reduce-only 平仓执行器。
+- 目标是低冲击平仓，不是通用交易机器人。
+- 规则真源只保留在本文件；`CLAUDE.md` 应作为同内容入口，而不是第二份手册。
 
-vibe-quant is a Binance USDT-Margined perpetual futures position executor designed for **Hedge Mode reduce-only closing**. It uses ccxt + WebSocket to execute small-lot position exits with minimal market impact through execution mode rotation (maker → aggressive limit).
+## Core Constraints
 
-**Key constraints:**
-
-- Do not rely on sending `reduceOnly`; enforce reduce-only semantics via `positionSide + side + qty<=position`
-- Hedge mode requires `positionSide=LONG/SHORT`
-- Target latency: < 200ms end-to-end
+- 不依赖交易所 `reduceOnly` 参数来保证 reduce-only 语义；必须通过 `positionSide + side + qty <= position` 约束来保证。
+- Hedge 模式必须显式区分 `positionSide=LONG/SHORT`。
+- 任何执行、风控、下单逻辑改动，都优先保证不会扩大仓位、不会反向开仓、不会破坏 reduce-only 语义。
+- 个人项目允许打破旧格式和 legacy 代码，但必须同步收口文档，不保留半新半旧状态。
 
 ## Architecture
 
-### Core Modules
-- **ConfigManager**: Global defaults + per-symbol overrides, optional hot reload
-- **ExchangeAdapter** (ccxt): Markets/positions/balance fetch, order placement/cancellation
-- **WSClient**: Subscribes to trade + best bid/ask streams
-- **SignalEngine**: Exit condition evaluation, sliding window returns, multiplier calculation
-- **ExecutionEngine**: Per-side state machine, mode rotation, order management
-- **RiskManager**: Liquidation distance fallback, stale data protection, rate limiting
-- **Logger**: Daily rotating logs
-- **Notifier**: Telegram notifications
+关键入口与高风险模块：
 
-### Execution Mode Rotation
-Per `symbol + positionSide`, maintains state machine: `IDLE → PLACE → WAIT → (FILLED|TIMEOUT) → CANCEL → COOLDOWN → IDLE`
+- `src/main.py`
+  入口、生命周期、优雅退出。
+- `src/exchange/adapter.py`
+  交易所 REST 适配，订单/持仓/市场元数据真源。
+- `src/ws/market.py` / `src/ws/user_data.py`
+  市场与用户数据流，时序和重连语义敏感。
+- `src/execution/engine.py`
+  执行状态机，最容易引入竞态、重复下单、撤单错误。
+- `src/risk/manager.py` / `src/risk/protective_stop.py` / `src/risk/rate_limiter.py`
+  风控兜底、保护止损、限速。
+- `src/signal/engine.py`
+  信号判断、滑动窗口、倍数计算。
+- `src/config/*`
+  配置 schema 与加载逻辑。
+- `src/notify/*`
+  Telegram 通知和暂停控制。
 
-Two execution modes:
-1. **MAKER_ONLY**: Post-only limit (GTX), timeout cancel
-2. **AGGRESSIVE_LIMIT**: Limit closer to execution direction, no post-only
+## Docs As Code
 
-### Signal Conditions
-- LONG exit: `last_trade > prev_trade && best_bid >= last_trade` OR bid improvement
-- SHORT exit: `last_trade < prev_trade && best_ask <= last_trade` OR ask improvement
-- Acceleration: Sliding window return triggers larger position slices
+- 代码、架构、配置、行为变更完成前，必须同步更新对应文档。
+- 重要功能或里程碑完成后，更新：
+  - `memory-bank/architecture.md`
+  - `memory-bank/progress.md`
+- 若目录结构或文件职责变化，更新对应目录下的 `README.md`。
+- 若文件实现变化且该文件受文件头注释约束，更新文件头注释。
 
-### Quantity Calculation
-`final_mult = base_mult × roi_mult × accel_mult` (capped by `max_mult` and `max_order_notional`)
+文件头注释例外：
 
-Completion: Position is done when remaining quantity rounds to 0 via `stepSize` or is below `minQty`.
-
-## Configuration
-
-YAML-based with global defaults and per-symbol overrides. Key sections:
-- `global.execution`: TTL, cooldown, mode rotation thresholds, pricing strategy
-- `global.accel`: Sliding window acceleration tiers
-- `global.roi`: ROI-based multiplier tiers
-- `global.risk`: Liquidation distance thresholds
-- `global.rate_limit`: Orders/cancels per second limits
-- `symbols.<SYMBOL>`: Per-symbol overrides
-
-## Tech Stack (Planned)
-
-- **Language**: Python 3.11+
-- **Async**: asyncio
-- **Exchange**: ccxt (REST) + binance-futures-connector or websocket-client (WS)
-- **Config**: PyYAML + pydantic
-- **Logging**: loguru
-- **Notifications**: python-telegram-bot
-- **Testing**: pytest + pytest-asyncio
-
-# 核心工作规则
-
-## 0. 关键约束（违反即任务失败）
-- **必须使用中文回复**：所有解释和交互必须使用中文
-- **文档即代码 (Docs-as-Code)**：功能、架构或代码的更新必须在工作结束前同步更新相关文档
-- **安全红线**：禁止生成恶意代码，必须通过基础安全检查
-- **先讨论后编码**：不明白的地方反问我，先不着急编码，需求澄清完成、关键假设达成一致后，方可进入编码
-
-## 1. 动态文档架构体系 (Fractal Documentation System)
-> 核心原则：系统必须具备"自我描述性"，任何代码变更必须反映在以下三个层级中
-
-### 1.1 根目录文档 (Root MD)
-- 任何功能、架构、写法更新，必须在工作结束后更新主目录的相关子文档
-
-### 1.2 文件夹级文档 (Folder MD)
-- 每个文件夹下应有 `README.md`
-- 内容：极简架构说明（3行内）+ 文件清单（名字/地位/功能）
-- **自维护声明**：文件开头必须声明："一旦我所属的文件夹有所变化，请更新我。"
-
-### 1.3 文件级注释（File Header）
-每个文件开头应包含三行极简注释：
-- `Input`: 依赖外部的什么（参数/模块/数据）
-- `Output`: 对外提供什么（API/组件/结果）
-- `Pos`: 在系统中的地位是什么
-- **自维护声明**：注释后必须声明："一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。"
-
-**例外（无需文件头注释）**：
-- 代理指引/协作约束文件：`AGENTS.md`、`CLAUDE.md`
-- 运行时本地配置：`config/*.yaml`、`.env`（含 `.env.*`）
+- `AGENTS.md`、`CLAUDE.md`
+- `config/*.yaml`、`.env`、`.env.*`
 - 自动生成目录/文件：`.pytest_cache/`、`logs/`、`__pycache__/`、`*.log`、`*.log.gz`
-- 其他明确标注“不要改动/自动生成”的文件
+- 其他明确标注“自动生成/不要改动”的文件
 
-## 2. 开发规范
-- 强调模块化（多文件），避免单体巨型文件
-- 编码前必须阅读 memory-bank/architecture.md 和 memory-bank/design-document.md
-- 完成重要功能或里程碑后，更新 memory-bank/architecture.md（含每个文件的作用说明）和 memory-bank/progress.md（记录做了什么以便知晓进度）
-- 个人项目：**No backward compatibility** - 可自由打破旧格式，重构时可移除 legacy 代码
+## Hard Rules
 
-## 3. Markdown 编写规范
-- **换行**：普通单行换行不会渲染为换行，需用 `<br>` 或改为 Markdown 标准结构（列表/分段/标题）实现换行
+- 回复统一使用中文。
+- 修改前先理解真实架构，不要根据文件名猜行为。
+- 重要编码前先阅读：
+  - `memory-bank/architecture.md`
+  - `memory-bank/design-document.md`
+- 禁止生成恶意代码；必须注意密钥、token、环境变量和外部接口泄漏风险。
+- 任何可能影响对外交互、下单、撤单、止损的改动，都不能只靠静态阅读自证正确。
 
-## 4. 安全审计
-- ultrathink：完整研究这个项目，重点看其是否有安全问题，是否有密钥泄漏。列出其对外交互的所有ur和接口。
+## Validation
+
+最低验证按改动范围选择，不要假装“没跑也算通过”：
+
+- Python 类型检查：`pyright src/`
+- 全量测试：`pytest`
+- 定向测试：
+  - 执行引擎：`pytest tests/test_execution.py -q`
+  - 交易所适配：`pytest tests/test_exchange.py -q`
+  - 风控/保护止损：`pytest tests/test_risk_manager.py tests/test_protective_stop.py -q`
+  - WebSocket：`pytest tests/test_ws_market.py tests/test_ws_user_data.py -q`
+  - 配置：`pytest tests/test_config.py -q`
+  - 主流程/退出：`pytest tests/test_main_shutdown.py -q`
+
+如果没有运行某项验证，最终说明必须明确写出未验证项和原因。
+
+## Plan Gate
+
+出现下列任一情况，先写 5 行计划再改代码：
+
+- 改动 `execution`、`exchange`、`risk`、`ws`、`signal`、`config` 任一核心模块
+- 改动订单状态机、撤单逻辑、保护止损、rate limiter、用户数据流处理
+- 改动配置 schema、默认参数、运行入口、部署方式
+- 改动 docs-as-code 规则或 memory-bank 文档结构
+
+计划模板：
+
+```md
+Goal:
+Files:
+Risks:
+Validation:
+Out of scope:
+```
+
+小范围文案、注释、纯文档排版可跳过。
+
+## Review Priorities
+
+review 时优先找功能回归，不要先谈风格：
+
+- 是否破坏 reduce-only 语义
+- 是否可能导致重复下单、漏撤单、状态机卡死
+- 是否引入 stale 数据、竞态、重连时序错误
+- 是否让保护止损、外部接管、panic close 失效
+- 是否更新了必要文档与文件头注释
+
+输出顺序默认：
+
+- `Findings`
+- `Notes`
+
+## Release Rules
+
+- 改动完成后，确认相关文档已同步。
+- 如果改动触及核心交易路径，至少运行一项针对性测试和 `pyright src/`，除非明确说明为什么没跑。
+- 本仓库没有 userscript 那种 `@version` 头部约束；release 重点在验证、文档同步、提交说明清晰。
+
+## Done When
+
+- 代码或文档已落盘。
+- 相关 `README.md` / memory-bank / 文件头注释已按规则同步。
+- 已运行的验证命令和结果已记录。
+- 未运行的验证与残余风险已明确说明。
