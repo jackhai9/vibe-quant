@@ -1,6 +1,7 @@
 ---
 name: vibe-quant-review
-description: Review changes in vibe-quant with focus on reduce-only safety, execution state machine regressions, exchange and websocket race conditions, protective stop behavior, docs-as-code drift, and missing validation.
+version: "1.0"
+description: Review vibe-quant changes for trading safety and doc drift.
 ---
 
 # vibe-quant-review

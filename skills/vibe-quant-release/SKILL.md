@@ -1,6 +1,7 @@
 ---
 name: vibe-quant-release
-description: Prepare a release for vibe-quant by verifying tests and pyright, ensuring docs-as-code updates are complete, checking memory-bank sync, and producing a clean commit summary.
+version: "1.0"
+description: Ship vibe-quant changes with validation and doc sync.
 ---
 
 # vibe-quant-release
