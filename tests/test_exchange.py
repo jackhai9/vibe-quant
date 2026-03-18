@@ -1,5 +1,5 @@
 # Input: 被测模块与 pytest 夹具
-# Output: pytest 断言结果
+# Output: pytest 断言结果（含初始化重试与代理诊断）
 # Pos: 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -35,6 +35,14 @@ def setup_logger_for_tests():
     with TemporaryDirectory() as tmpdir:
         setup_logger(Path(tmpdir), console=False)
         yield
+
+
+def _make_exchange_not_available(message: str, *, cause: BaseException | None = None) -> ccxt.ExchangeNotAvailable:
+    """构造带 cause 的 ccxt 网络异常。"""
+    exc = ccxt.ExchangeNotAvailable(message)
+    if cause is not None:
+        exc.__cause__ = cause
+    return exc
 
 
 class TestExchangeAdapterInit:
@@ -87,6 +95,66 @@ class TestExchangeAdapterInit:
             dummy_exchange.close.assert_awaited()
             assert adapter._initialized is False
             assert adapter._exchange is None
+
+    @pytest.mark.asyncio
+    async def test_initialize_retries_retryable_network_error(self):
+        """initialize() 对启动期网络错误做有限重试，并在成功后保留新实例。"""
+        first_exchange = MagicMock()
+        first_exchange.load_markets = AsyncMock(
+            side_effect=_make_exchange_not_available(
+                "binanceusdm GET https://fapi.binance.com/fapi/v1/exchangeInfo",
+                cause=ConnectionResetError("proxy reset"),
+            )
+        )
+        first_exchange.close = AsyncMock(return_value=None)
+
+        second_exchange = MagicMock()
+        second_exchange.load_markets = AsyncMock(return_value=None)
+        second_exchange.markets = {}
+
+        sleep_mock = AsyncMock(return_value=None)
+        with patch("src.exchange.adapter.asyncio.sleep", sleep_mock), patch(
+            "src.exchange.adapter.ccxt.binanceusdm",
+            side_effect=[first_exchange, second_exchange],
+        ):
+            adapter = ExchangeAdapter(api_key="k", api_secret="s", testnet=False)
+            await adapter.initialize()
+
+        first_exchange.close.assert_awaited_once()
+        sleep_mock.assert_awaited_once()
+        assert adapter._initialized is True
+        assert adapter._exchange is second_exchange
+
+    @pytest.mark.asyncio
+    async def test_initialize_failure_logs_proxy_diagnostic(self):
+        """initialize() 最终失败时输出代理路径诊断，并把提示写入异常 notes。"""
+        dummy_exchange = MagicMock()
+        dummy_exchange.load_markets = AsyncMock(
+            side_effect=_make_exchange_not_available(
+                "binanceusdm GET https://fapi.binance.com/fapi/v1/exchangeInfo",
+                cause=ConnectionResetError("proxy reset"),
+            )
+        )
+        dummy_exchange.close = AsyncMock(return_value=None)
+        logger = MagicMock()
+
+        with patch("src.exchange.adapter.asyncio.sleep", AsyncMock(return_value=None)), patch(
+            "src.exchange.adapter.get_logger",
+            return_value=logger,
+        ), patch("src.exchange.adapter.ccxt.binanceusdm", return_value=dummy_exchange):
+            adapter = ExchangeAdapter(
+                api_key="k",
+                api_secret="s",
+                testnet=False,
+                proxy="http://127.0.0.1:7890",
+            )
+            with pytest.raises(ccxt.ExchangeNotAvailable) as exc_info:
+                await adapter.initialize()
+
+        error_messages = [str(call.args[0]) for call in logger.error.call_args_list]
+        assert any("global.proxy 设为 null" in message for message in error_messages)
+        assert any("proxy=http://127.0.0.1:7890" in message for message in error_messages)
+        assert any("global.proxy 设为 null" in note for note in exc_info.value.__notes__)
 
 
 class TestRoundingFunctions:

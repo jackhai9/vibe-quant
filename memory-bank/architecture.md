@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断） -->
 <!-- Pos: memory-bank/architecture 总览 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -88,7 +88,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 |------|------|------|------|
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s + User Data Stream（含 ACCOUNT_UPDATE/ACCOUNT_CONFIG_UPDATE），断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
-| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order） | 配置, OrderIntent | OrderResult, Position |
+| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断 | 配置, OrderIntent | OrderResult, Position |
 | **SignalEngine** | 评估平仓触发条件，维护 prev/last trade price；计算 accel/ROI 倍数 | MarketEvent, Position | ExitSignal |
 | **ExecutionEngine** | 状态机管理，下单/撤单/TTL 超时处理（含成交率反馈与 TTL 覆盖） | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |

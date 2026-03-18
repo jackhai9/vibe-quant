@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断）-->
 <!-- Pos: memory-bank/progress 维护日志与变更记录 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -25,6 +25,19 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：交易所启动期网络重试与代理诊断
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-18
+
+**动机**：`load_markets()` 在代理链路抖动或本地代理不可用时，会以 `ExchangeNotAvailable` 直接终止启动；原日志缺少根因和排查方向，容易把本地代理故障误判成 Binance 故障。<br>
+**产出**：
+
+- `src/exchange/adapter.py`：启动时为 `load_markets()` 增加有限重试；每次重试使用新的 ccxt 实例，避免复用失败 session
+- `src/exchange/adapter.py`：最终失败时输出 `root_cause`、`proxy/direct` 路径和排查建议，并写入异常 notes
+- `tests/test_exchange.py`：新增初始化重试成功、代理故障诊断两类测试
+- `src/exchange/README.md` / `memory-bank/architecture.md`：同步记录启动期重试与代理诊断行为
 
 ## Milestone/附加改进：A+B+C（保证金事件刷新 + 低频兜底 + 受控放松止损）
 

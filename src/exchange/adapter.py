@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data, order results, filter-based rules, and structured error parsing (_parse_ccxt_error)
+# Output: market/position data, order results, filter-based rules, structured error parsing, and init retry diagnostics
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -23,11 +23,13 @@
 - OrderResult
 """
 
+import asyncio
 import json
 import re
 from decimal import Decimal
-from typing import Dict, List, Optional, Any, Sequence, cast
+from typing import Dict, List, Optional, Any, Sequence, Iterator, cast
 
+import aiohttp
 import ccxt.async_support as ccxt
 
 from src.models import (
@@ -44,6 +46,16 @@ from src.models import (
 from src.utils import round_to_tick, round_to_step, round_up_to_step
 from src.utils.helpers import ws_stream_to_symbol
 from src.utils.logger import get_logger, log_error, log_event, log_order_reject
+
+
+INITIALIZE_MAX_ATTEMPTS = 3
+INITIALIZE_RETRY_BASE_DELAY_S = 1.0
+_RETRYABLE_CCXT_ERROR_NAMES = {
+    "DDoSProtection",
+    "ExchangeNotAvailable",
+    "NetworkError",
+    "RequestTimeout",
+}
 
 
 def _parse_ccxt_error(exc: Exception) -> dict[str, str | None]:
@@ -78,6 +90,49 @@ def _parse_ccxt_error(exc: Exception) -> dict[str, str | None]:
             if "msg" in data:
                 result["msg"] = data["msg"]
     return result
+
+
+def _iter_exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """遍历异常 cause/context 链，避免重复节点。"""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        yield current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+
+
+def _summarize_root_cause(exc: BaseException) -> str:
+    """提取最底层异常，便于输出可执行诊断。"""
+    chain = list(_iter_exception_chain(exc))
+    root = chain[-1] if chain else exc
+    root_message = str(root).strip()
+    if root_message:
+        return f"{root.__class__.__name__}: {root_message}"
+    return root.__class__.__name__
+
+
+def _is_retryable_initialize_error(exc: BaseException) -> bool:
+    """仅对启动期网络类失败做有限重试，避免掩盖真实配置错误。"""
+    for current in _iter_exception_chain(exc):
+        if current.__class__.__name__ in _RETRYABLE_CCXT_ERROR_NAMES:
+            return True
+        if isinstance(current, (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, ConnectionError)):
+            return True
+    return False
+
+
+def _format_initialize_failure(exc: BaseException, proxy: Optional[str]) -> str:
+    """格式化 markets 初始化失败诊断。"""
+    root_cause = _summarize_root_cause(exc)
+    if proxy:
+        hint = (
+            f"请求路径经过代理 proxy={proxy}；请检查本地代理是否在线、是否支持 HTTPS CONNECT；"
+            "若当前环境允许直连，可将 global.proxy 设为 null 后重试"
+        )
+    else:
+        hint = "请检查 Binance 网络连通性、DNS/防火墙设置后重试"
+    return f"{type(exc).__name__}: {exc} | root_cause={root_cause} | hint={hint}"
 
 
 class ExchangeAdapter:
@@ -137,20 +192,8 @@ class ExchangeAdapter:
             raise RuntimeError("ExchangeAdapter 未初始化，请先调用 initialize()")
         return self._exchange
 
-    async def initialize(self) -> None:
-        """
-        初始化交易所连接
-
-        - 创建 ccxt 实例
-        - 加载 markets
-        - 设置 Hedge 模式
-        """
-        if self._initialized:
-            return
-
-        logger = get_logger()
-
-        # 创建 ccxt 实例
+    def _build_exchange_config(self) -> Dict[str, Any]:
+        """构建 ccxt 配置；每次重试都使用新实例，避免复用失败 session。"""
         exchange_config: Dict[str, Any] = {
             "apiKey": self.api_key,
             "secret": self.api_secret,
@@ -164,36 +207,72 @@ class ExchangeAdapter:
                 "fetchCurrencies": False,
             },
         }
-
-        # 配置代理
         if self.proxy:
             exchange_config["aiohttp_proxy"] = self.proxy
+        return exchange_config
+
+    async def _close_exchange_safely(self, exchange: Optional[ccxt.binanceusdm]) -> None:
+        """关闭失败的 ccxt 实例，避免 aiohttp session 泄漏。"""
+        if exchange is None:
+            return
+        try:
+            await exchange.close()
+        except Exception:
+            pass
+
+    async def initialize(self) -> None:
+        """
+        初始化交易所连接
+
+        - 创建 ccxt 实例
+        - 加载 markets
+        - 设置 Hedge 模式
+        """
+        if self._initialized:
+            return
+
+        logger = get_logger()
+        if self.proxy:
             logger.info(f"使用代理: {self.proxy}")
-
-        self._exchange = ccxt.binanceusdm(exchange_config)  # type: ignore[arg-type]
-
-        # 使用测试网
         if self.testnet:
-            self._exchange.set_sandbox_mode(True)
             logger.info("使用 Binance 测试网")
 
-        # 加载 markets
-        try:
-            await self._exchange.load_markets()
-        except Exception as e:
-            # 失败时务必显式 close()，避免 aiohttp session 泄漏导致进程退出报警
-            try:
-                await self._exchange.close()
-            except Exception:
-                pass
-            self._exchange = None
-            self._initialized = False
-            logger.error(f"加载 markets 失败（已关闭 ccxt session）: {e!r}")
-            raise
-        markets = self._exchange.markets
-        logger.info(f"加载 markets 完成，共 {len(markets) if markets else 0} 个交易对")
+        self._exchange = None
+        self._initialized = False
 
-        self._initialized = True
+        for attempt in range(1, INITIALIZE_MAX_ATTEMPTS + 1):
+            exchange = ccxt.binanceusdm(self._build_exchange_config())  # type: ignore[arg-type]
+            if self.testnet:
+                exchange.set_sandbox_mode(True)
+
+            try:
+                await exchange.load_markets()
+            except Exception as e:
+                await self._close_exchange_safely(exchange)
+                self._exchange = None
+                self._initialized = False
+
+                should_retry = attempt < INITIALIZE_MAX_ATTEMPTS and _is_retryable_initialize_error(e)
+                if should_retry:
+                    logger.warning(
+                        "加载 markets 失败，准备重试 | "
+                        f"attempt={attempt}/{INITIALIZE_MAX_ATTEMPTS} "
+                        f"transport={'proxy' if self.proxy else 'direct'} "
+                        f"root_cause={_summarize_root_cause(e)}"
+                    )
+                    await asyncio.sleep(INITIALIZE_RETRY_BASE_DELAY_S * attempt)
+                    continue
+
+                diagnostic = _format_initialize_failure(e, self.proxy)
+                e.add_note(diagnostic)
+                logger.error(f"加载 markets 失败（已关闭 ccxt session）: {diagnostic}")
+                raise
+
+            self._exchange = exchange
+            markets = self._exchange.markets
+            logger.info(f"加载 markets 完成，共 {len(markets) if markets else 0} 个交易对")
+            self._initialized = True
+            return
 
     async def close(self) -> None:
         """关闭交易所连接"""
