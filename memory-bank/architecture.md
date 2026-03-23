@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式与执行竞态恢复） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式与执行竞态/自恢复安全约束） -->
 <!-- Pos: memory-bank/architecture 总览与执行状态机约束 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -181,7 +181,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 - 下单时设置 `newClientOrderId`（前缀 `<client_order_prefix>-{run_id}-`，其中 `client_order_prefix` 为固定前缀，`run_id` 每次启动自动生成）。退出时只撤销本次运行前缀挂单（优先按 symbol 拉取 openOrders，降低交易所权重），避免误撤手动订单；注意：若进程崩溃/强杀，遗留挂单不会自动清理。
 - 订单 TTL 超时后，撤单成功的订单进入 `COOLDOWN` 并保留订单上下文，直到 `ws_fill_grace_ms` 窗口结束；撤单失败的订单保留在 `WAITING` 并按短 backoff 重试撤单，避免丢失 live order 上下文后重复下单。
-- 若撤单与成交/终态 WS 回执并发，且交易所返回 `-2011 Unknown order sent` / order-not-found，执行引擎按“订单已离场”处理：保留上下文进入 `COOLDOWN` 等待 grace；若发现 `WAITING/CANCELING` 但 `current_order_id` 丢失，则自动自恢复，避免单侧永久卡死。
+- 若撤单与成交/终态 WS 回执并发，且交易所返回 `-2011 Unknown order sent` / order-not-found，执行引擎按“订单已离场”处理：保留上下文进入 `COOLDOWN` 等待 grace；若发现 `WAITING/CANCELING` 但 `current_order_id` 丢失，则自动自恢复。若该侧仍保留最近成交终态上下文，则强制等待 `ws_fill_grace_ms` 以完成持仓对齐，避免用 stale `position_amt` 复用同轮信号重新下单；`panic_close` 也走同一恢复分支，但仅在不存在 recent fill 上下文时允许立刻继续兜底下单。
 - `orderbook_pressure` 的被动 `GTX` 单若收到 `-5022 post only reject`，不会自动回退为 `GTC` taker 单；被动语义保持不变，等待下一轮盘口重评估。
 
 ### 倍数系统（已实现）

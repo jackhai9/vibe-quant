@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断与执行竞态修复）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断与执行竞态/自恢复安全修复）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -36,8 +36,9 @@
 
 - `src/execution/engine.py`：timeout / preempt 撤单路径改为先捕获本次 `order_id`，await 返回后若发现订单上下文已被并发 WS 终态消费，则不再覆盖状态
 - `src/execution/engine.py`：对 `-2011 Unknown order sent` / order-not-found 按“订单已离场”处理，保留上下文进入 `COOLDOWN` grace 窗口，继续接收迟到 fill/cancel 回执
-- `src/execution/engine.py`：新增 `WAITING/CANCELING` 且 `current_order_id` 缺失的自恢复逻辑，避免单侧永久卡死
-- `tests/test_execution.py`：新增 timeout + fill 竞态、preempt + fill 竞态、orphaned `CANCELING` 自恢复回归测试
+- `src/execution/engine.py`：新增 `WAITING/CANCELING` 且 `current_order_id` 缺失的自恢复逻辑；普通 signal 在恢复当轮直接跳过，recent fill 上下文强制等待 `ws_fill_grace_ms`，避免 stale 仓位下单破坏 reduce-only 语义
+- `src/execution/engine.py`：`panic_close` 接入同一 orphan recovery；无 recent fill 时可立即恢复兜底下单，有 recent fill 时先等待持仓对齐
+- `tests/test_execution.py`：新增 timeout + fill 竞态、preempt + fill 竞态、orphaned `CANCELING` 自恢复、zero-cooldown/recent-fill 与 `panic_close` 恢复回归测试
 
 ## Milestone/附加改进：按 symbol 的盘口量平仓模式与 stale/dwell 收口
 

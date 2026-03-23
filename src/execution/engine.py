@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override and timeout/preempt race recovery)
-# Pos: per-side execution state machine with WS/REST fill meta handling and terminal-state recovery
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override and reconcile-safe timeout/preempt/orphan recovery)
+# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, and panic-close-safe orphan repair
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -336,9 +336,8 @@ class ExecutionEngine:
         state = self.get_state(signal.symbol, signal.position_side)
 
         if self._recover_orphaned_live_order_state(state, current_ms, source="on_signal"):
-            if state.state != ExecutionState.IDLE:
-                logger.debug(f"{signal.symbol} {signal.position_side.value} 状态为 {state.state.value}，跳过信号")
-                return None
+            logger.debug(f"{signal.symbol} {signal.position_side.value} orphan 状态已恢复，跳过当前信号等待下一轮")
+            return None
 
         # 只有在 IDLE 状态才处理新信号
         if state.state != ExecutionState.IDLE:
@@ -461,6 +460,15 @@ class ExecutionEngine:
         """强平兜底：不依赖信号，强制按分级规则持续平仓。"""
         logger = get_logger()
         state = self.get_state(symbol, position_side)
+
+        if self._recover_orphaned_live_order_state(
+            state,
+            current_ms,
+            source="on_panic_close",
+            allow_immediate_idle=True,
+        ):
+            if state.state != ExecutionState.IDLE:
+                return None
 
         # 只有在 IDLE 状态才允许发起新的兜底订单
         if state.state != ExecutionState.IDLE:
@@ -1207,6 +1215,17 @@ class ExecutionEngine:
     def _order_context_consumed(state: SideExecutionState, order_id: str) -> bool:
         return state.state != ExecutionState.CANCELING or state.current_order_id != order_id
 
+    def _has_recent_fill_context(
+        self,
+        state: SideExecutionState,
+        current_ms: int,
+    ) -> bool:
+        if not state.last_completed_order_id:
+            return False
+        if state.last_completed_ms <= 0:
+            return False
+        return current_ms - state.last_completed_ms <= self.ws_fill_grace_ms
+
     def _enter_terminal_grace_cooldown(
         self,
         state: SideExecutionState,
@@ -1221,20 +1240,45 @@ class ExecutionEngine:
             self.ws_fill_grace_ms,
         )
 
+    def _enter_recovery_cooldown(
+        self,
+        state: SideExecutionState,
+        current_ms: int,
+        cooldown_ms: int,
+    ) -> None:
+        existing_cooldown = state.current_order_cooldown_ms_override or 0
+        state.current_order_cooldown_ms_override = max(existing_cooldown, cooldown_ms)
+        self._enter_post_order_state(state, current_ms)
+
+    def _enter_idle_after_recovery(self, state: SideExecutionState) -> None:
+        self._clear_current_order_fields(state, preserve_cooldown_override=False)
+        state.state = ExecutionState.IDLE
+        state.current_order_placed_ms = 0
+        state.current_order_cooldown_ms_override = None
+
     def _recover_orphaned_live_order_state(
         self,
         state: SideExecutionState,
         current_ms: int,
         *,
         source: str,
+        allow_immediate_idle: bool = False,
     ) -> bool:
         if state.state not in (ExecutionState.WAITING, ExecutionState.CANCELING):
             return False
         if state.current_order_id:
             return False
+        recent_fill_context = self._has_recent_fill_context(state, current_ms)
         get_logger().warning(
-            f"{state.symbol} {state.position_side.value} 状态异常: {state.state.value} 但无 current_order_id | source={source}"
+            f"{state.symbol} {state.position_side.value} 状态异常: {state.state.value} 但无 current_order_id "
+            f"| source={source} | recent_fill={recent_fill_context}"
         )
+        if recent_fill_context:
+            self._enter_recovery_cooldown(state, current_ms, self.ws_fill_grace_ms)
+            return True
+        if allow_immediate_idle:
+            self._enter_idle_after_recovery(state)
+            return True
         self._enter_post_order_state(state, current_ms)
         return True
 

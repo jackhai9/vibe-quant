@@ -1,6 +1,6 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言与执行反馈校验（含成交率与撤单/成交竞态回归）
-# Pos: ExecutionEngine 测试用例与撤单竞态回归
+# Output: 状态机行为断言与执行反馈校验（含成交率、撤单/成交竞态与 orphan 恢复安全回归）
+# Pos: ExecutionEngine 测试用例与撤单竞态、panic close、自恢复安全回归
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -1423,6 +1423,64 @@ class TestCheckTimeout:
         assert intent is not None
         assert state.state == ExecutionState.PLACING
 
+    @pytest.mark.asyncio
+    async def test_on_signal_orphan_recovery_waits_for_recent_fill_reconcile(self, engine, symbol_rules, market_state):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.CANCELING
+        state.current_order_id = None
+        state.current_order_cooldown_ms_override = 0
+        state.last_completed_order_id = "filled_123"
+        state.last_completed_ms = 995
+
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.PASSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            fixed_lot_mult=1,
+            price_override=Decimal("50000"),
+            cooldown_override_ms=0,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.01"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+
+        assert intent is None
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_cooldown_ms_override == engine.ws_fill_grace_ms
+        assert engine.check_cooldown(
+            "BTC/USDT:USDT",
+            PositionSide.SHORT,
+            current_ms=1000 + engine.ws_fill_grace_ms - 1,
+        ) is False
+        assert engine.check_cooldown(
+            "BTC/USDT:USDT",
+            PositionSide.SHORT,
+            current_ms=1000 + engine.ws_fill_grace_ms,
+        ) is True
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.01"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1001 + engine.ws_fill_grace_ms,
+        )
+
+        assert intent is not None
+        assert state.state == ExecutionState.PLACING
+
 
 class TestModeRotation:
     """执行模式轮转测试"""
@@ -1803,6 +1861,60 @@ class TestPanicClose:
         state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
         assert state.state == ExecutionState.PLACING
         assert state.current_order_is_risk is True
+
+    @pytest.mark.asyncio
+    async def test_on_panic_close_recovers_orphaned_canceling_state_immediately(
+        self,
+        engine,
+        symbol_rules,
+        market_state,
+    ):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.CANCELING
+        state.current_order_id = None
+
+        intent = await engine.on_panic_close(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("0.1"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+            slice_ratio=Decimal("0.02"),
+            reason="panic_close@test",
+        )
+
+        assert intent is not None
+        assert state.state == ExecutionState.PLACING
+        assert state.current_order_is_risk is True
+
+    @pytest.mark.asyncio
+    async def test_on_panic_close_waits_for_recent_fill_reconcile(
+        self,
+        engine,
+        symbol_rules,
+        market_state,
+    ):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.CANCELING
+        state.current_order_id = None
+        state.last_completed_order_id = "filled_123"
+        state.last_completed_ms = 995
+
+        intent = await engine.on_panic_close(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("0.1"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+            slice_ratio=Decimal("0.02"),
+            reason="panic_close@test",
+        )
+
+        assert intent is None
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_cooldown_ms_override == engine.ws_fill_grace_ms
 
     @pytest.mark.asyncio
     async def test_risk_timeout_uses_ttl_override_without_decay(self, engine, mock_cancel_order):
