@@ -436,7 +436,10 @@ risk:
 - **默认值**: `0.015` (1.5%)
 - **说明**: 强平距离预警阈值
 - **计算**: `dist = abs(mark_price - liquidation_price) / mark_price`
-- **触发**: 满足信号条件且 `dist <= threshold` 时，强制切换到 `AGGRESSIVE_LIMIT` 模式
+- **触发**:
+  - `legacy`：满足信号条件且 `dist <= threshold` 时，至少切换到 `AGGRESSIVE_LIMIT`
+  - `orderbook_pressure`：记录风险事件/Telegram 通知，但不把未达阈值的被动单改写成主动单
+- **补充**: `orderbook_pressure` 的真正强制执行兜底由 `panic_close` 负责
 
 ---
 
@@ -662,8 +665,9 @@ symbols:
 - **未启用行为**:
   - 配置了 `pressure_exit` 但 `strategy.mode != "orderbook_pressure"` 时，按“存在但未启用”处理
   - `strategy.mode == "orderbook_pressure"` 但缺少 `pressure_exit` 时，配置校验失败
+  - `strategy.mode == "orderbook_pressure"` 且 `pressure_exit.enabled == false` 时，配置校验失败
 - **字段说明**:
-  - `enabled`: 是否启用盘口量平仓路径
+  - `enabled`: 是否启用盘口量平仓路径；缺省为 `true`。当 `strategy.mode == "orderbook_pressure"` 时不能显式设为 `false`
   - `threshold_qty`: 顶档量阈值；LONG 看 `best_bid_qty`，SHORT 看 `best_ask_qty`
   - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
   - `passive_level`: 主动条件不成立时使用的固定档位；LONG 取 `ask[passive_level]`，SHORT 取 `bid[passive_level]`
@@ -679,6 +683,7 @@ symbols:
     strategy:
       mode: orderbook_pressure   # 启用盘口量模式；不写时默认 legacy
     pressure_exit:
+      enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
       threshold_qty: 100         # LONG 看 best_bid_qty；SHORT 看 best_ask_qty
       sustain_ms: 2000           # 顶档量连续超过阈值至少 2000ms 后才主动吃单
       passive_level: 3           # 主动条件不成立时挂在第 3 档
@@ -692,7 +697,12 @@ symbols:
 - SHORT：`best_ask_qty > threshold_qty` 连续 `sustain_ms` 后，主动下 `BUY @ best_ask`
 - 主动条件未成立时，仅挂 1 笔固定档位的被动单
 - 被动档位不存在或盘口数据不完整时，本轮跳过，不猜价格
+- `bookTicker` 与 `depth10` 任一来源 stale 时，本轮跳过，并重置主动条件 dwell
 - 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
+
+风控补充：
+- `legacy` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`
+- `orderbook_pressure` 在同一条件下只记录风险事件/通知，不改写主动/被动语义；真正强制执行由 `panic_close` 负责
 
 ### 示例：ZEN 永续覆盖配置
 

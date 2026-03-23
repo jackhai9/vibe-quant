@@ -88,11 +88,14 @@ global:
       panic_close: 2
       protective_stop: 3
 
-    # 第一等级：满足触发条件的情况下，距离强平价多少比例时开始 切换到 AGGRESSIVE_LIMIT 模式（更激进的平仓）
+    # 第一等级：距离强平价多少比例时触发软风控
+    # - legacy：满足信号条件时，至少切到 AGGRESSIVE_LIMIT
+    # - orderbook_pressure：仅记录风险事件/通知，不把未达阈值的被动单改成主动单
     # liq_distance_threshold = abs(mark_price - liquidation_price) / mark_price
     liq_distance_threshold: 0.05
 
     # 第二等级：不管是否满足触发条件，距离强平价多少比例时开始 按梯度平仓
+    # 这是所有策略模式共享的最终执行兜底
     # 平仓时先尝试限价，如果超时未成交则使用 AGGRESSIVE_LIMIT
     panic_close:
       enabled: true
@@ -146,6 +149,7 @@ symbols:
   #   strategy:
   #     mode: orderbook_pressure   # 可选：legacy | orderbook_pressure
   #   pressure_exit:
+  #     enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
   #     threshold_qty: 100         # 顶档量阈值：LONG 看 best_bid_qty，SHORT 看 best_ask_qty
   #     sustain_ms: 2000           # 顶档量连续超过阈值至少多久才主动吃单（毫秒）
   #     passive_level: 3           # 主动条件不成立时挂单使用的固定盘口档位（1=一档）

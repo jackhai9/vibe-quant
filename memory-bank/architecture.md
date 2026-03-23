@@ -89,7 +89,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断 | 配置, OrderIntent | OrderResult, Position |
-| **SignalEngine** | 按 symbol 在 `legacy` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell 与来源 freshness；计算 accel/ROI 倍数 | MarketEvent, Position | ExitSignal |
+| **SignalEngine** | 按 symbol 在 `legacy` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell 与来源 freshness；`legacy` 计算 accel/ROI 倍数，`orderbook_pressure` 生成固定数量信号覆盖 | MarketEvent, Position | ExitSignal |
 | **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
@@ -174,7 +174,8 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 直接吃单规则（跳过模式轮转）：
 
 - **improve 信号**：当信号类型为 `long_bid_improve` 或 `short_ask_improve` 时，直接切换到 `AGGRESSIVE_LIMIT` 吃单（价格正在朝有利方向移动，无需等待 maker 成交）
-- **风险触发**：当 `dist_to_liq` 低于风险阈值时，强制切换到 `AGGRESSIVE_LIMIT`
+- **风险触发（legacy）**：当 `dist_to_liq` 低于风险阈值时，至少切换到 `AGGRESSIVE_LIMIT`
+- **风险触发（orderbook_pressure）**：记录 risk 事件/通知，但保持 signal 自带的 `price_override` / `TIF` / 主动-被动语义；真正的强制执行由 `panic_close` 兜底
 
 ### 挂单清理（已实现）
 
@@ -191,7 +192,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 ### 风控与限速（已实现）
 
 - markPrice 数据源：市场 WS 订阅 `@markPrice@1s`，解析为 `MarketEvent.mark_price`；该事件**不参与** stale 判定（stale 仅由 bookTicker/aggTrade 刷新），只用于风控计算
-- 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`，触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
+- 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
+  - `legacy`：触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
+  - `orderbook_pressure`：触发后记录 risk 事件/通知，但不把未达阈值的被动单改成主动单
 - 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduce-only 语义约束，不下发 `reduceOnly`），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
 - 仓位保护性止损（Step 9.3）：为每个”有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销；交叉保证金下若爆仓价方向异常（如 SHORT 的 liq_price < mark_price，因对冲方向导致）则跳过该侧保护止损
 - 外部止损接管（Step 9.3 扩展）：当检测到同侧存在**外部 stop/tp 条件单**（满足 `STOP/TAKE_PROFIT*` 且 `reduceOnly=true` 字段；或 `closePosition=true` 字段 兜底）时，视为外部接管：撤销我方保护止损并暂停维护。

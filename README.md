@@ -7,18 +7,19 @@
 
 Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 
-通过小单分批 + 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
+通过小单分批 + 按 symbol 的策略模式选择（`legacy` / `orderbook_pressure`）+ 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
 
 术语约定：本文档中“reduce-only”指 **reduce-only 语义约束**（`positionSide + side + qty<=position`），不指必须下发的交易所参数 `reduceOnly`。
 
 ## 核心特性
 
 - **Hedge 模式专用**：不强制下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证；支持 `positionSide=LONG/SHORT`
+- **双策略模式**：每个 symbol 可独立选择 `legacy` 或 `orderbook_pressure`；同一 symbol 上两种模式互斥
 - **执行模式轮转**：Maker 挂单优先，超时自动升级为 Aggressive Limit
 - **智能倍数系统**：ROI + 加速度双倍数叠加，动态调整单笔数量
 - **成交率反馈**：根据 maker 成交率动态调整升级阈值
-- **多级风控**：强平距离预警 → 强制分片平仓 → 交易所端保护止损
-- **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream
+- **多级风控**：`legacy` 的软风控执行升级 + 全模式 `panic_close` 强制分片 + 交易所端保护止损
+- **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream；`orderbook_pressure` symbol 额外订阅 `depth10@100ms`
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
 - **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
 - **自动发现持仓**：运行时按账户持仓自动接管，`symbols` 仅用于参数覆盖
@@ -149,6 +150,20 @@ vibe-quant/
 └── memory-bank/             # 设计文档
 ```
 
+## 策略模式
+
+每个 `symbol` 可通过 `symbols.<symbol>.strategy.mode` 选择互斥的信号路径：
+
+| 模式 | 行情来源 | 下单语义 | 数量语义 |
+|------|----------|----------|----------|
+| `legacy` | `aggTrade` + `bookTicker` | 沿用原有 primary / improve 触发与执行模式轮转 | `base_lot_mult × roi_mult × accel_mult` |
+| `orderbook_pressure` | `bookTicker` 的 `B/A` + `depth10@100ms` | 达到顶档量阈值后主动吃一档；未达阈值时仅挂 1 笔固定档位被动单 | `min_qty × lot_mult` |
+
+`orderbook_pressure` 运行补充：
+- 需要同时配置 `strategy.mode: orderbook_pressure` 和 `pressure_exit`
+- `pressure_exit.enabled` 缺省为 `true`；若显式设为 `false`，配置校验会直接拒绝启动
+- `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新，该模式本轮跳过，并重置主动条件 dwell
+
 ## 执行模式
 
 每个 `symbol + positionSide` 维护独立的执行状态机：
@@ -173,6 +188,11 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 | `AGGRESSIVE_LIMIT` | 普通限价（GTC），价格更贴近成交方向 | Maker 连续超时后自动升级 |
 
 补充：`long_bid_improve` / `short_ask_improve` 信号触发时，系统会直接切换到 `AGGRESSIVE_LIMIT` 并在同一轮信号内提交限价单（仍可能因盘口变化未立即成交）。
+
+`orderbook_pressure` 复用同一套执行状态机，但信号会自带 `price_override` / `ttl_override_ms` / `cooldown_override_ms` / `qty_policy`：
+- 主动条件成立：LONG 下 `SELL @ best_bid`，SHORT 下 `BUY @ best_ask`
+- 主动条件未成立：LONG 挂 `ask[passive_level]`，SHORT 挂 `bid[passive_level]`
+- 被动单保持 `GTX` 语义；若收到 `-5022 post only reject`，不会自动降级成 taker 单
 
 ## 倍数系统
 
@@ -204,12 +224,15 @@ ret_window = (price_now / price_window_ago) - 1
 
 | 层级 | 触发条件 | 行为 |
 |------|----------|------|
-| **软风控** | `dist_to_liq` < 阈值 | 强制升级为 Aggressive Limit |
+| **软风控（legacy）** | `dist_to_liq` < 阈值，且已有 `legacy` 信号 | 至少升级为 `AGGRESSIVE_LIMIT` |
+| **软风控（orderbook_pressure）** | `dist_to_liq` < 阈值，且已有 `orderbook_pressure` 信号 | 记录风险事件/通知，但不把未达阈值的被动单改写成主动单 |
 | **强制平仓** | `dist_to_liq` 进入 panic_close 档位 | 绕过信号，按 slice_ratio 强制分片平仓 |
 | **保护止损** | 交易所端 STOP_MARKET | 程序崩溃/断网时最后防线 |
 | **外部接管** | 同侧存在外部 stop/tp（`closePosition=true` 字段 或 `reduceOnly=true` 字段） | 撤销我方保护止损并暂停维护，直到外部单消失 |
 
 `dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
+
+对 `orderbook_pressure` 来说，真正的强制执行兜底是 `panic_close`；`liq_distance_threshold` 不负责改写其主动/被动语义。
 
 ## 开发
 

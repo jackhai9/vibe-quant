@@ -41,7 +41,7 @@
 - `src/execution/engine.py` / `src/main.py`：timeout 撤单成功后统一保留在途订单上下文直到 WS grace 窗口结束；撤单失败时按 backoff 重试；`orderbook_pressure` 被动 `GTX` 拒单保持被动语义，不自动改发 taker 单
 - `tests/test_config.py` / `tests/test_ws_market.py` / `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_main_shutdown.py`：补齐配置、订阅、pressure 信号、执行覆盖与 dwell reset 回归
 - `tests/test_post_only_retry.py`：覆盖 `legacy` 的 post-only reject aggressive retry，以及 `orderbook_pressure` 被动单不降级为 taker 的约束
-- `docs/configuration.md` / `memory-bank/architecture.md`：同步配置、数据真源与策略模式说明
+- `README.md` / `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步配置、数据真源、风险边界与策略模式说明
 
 ## Milestone/附加改进：交易所启动期网络重试与代理诊断
 
