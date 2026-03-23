@@ -14,6 +14,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from src.config import ConfigLoader, AppConfig, MergedSymbolConfig
+from src.config.models import SymbolConfig, StrategyConfig, PressureExitConfig
 
 
 class TestConfigLoader:
@@ -71,6 +72,16 @@ symbols:
     execution:
       maker_price_mode: "custom_ticks"
       maker_n_ticks: 3
+  DASH/USDT:USDT:
+    strategy:
+      mode: orderbook_pressure
+    pressure_exit:
+      threshold_qty: 100
+      sustain_ms: 2000
+      passive_level: 3
+      lot_mult: 5
+      aggressive_recheck_cooldown_ms: 1000
+      passive_ttl_ms: 10000
 """
         with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(content)
@@ -121,7 +132,8 @@ symbols:
         symbols = loader.get_symbols()
         assert "BTC/USDT:USDT" in symbols
         assert "ETH/USDT:USDT" in symbols
-        assert len(symbols) == 2
+        assert "DASH/USDT:USDT" in symbols
+        assert len(symbols) == 3
 
     def test_get_symbol_config_with_override(self, sample_config_yaml, env_vars):
         """测试获取带覆盖的 symbol 配置"""
@@ -154,6 +166,7 @@ symbols:
         # 其他继承 global
         assert eth_config.order_ttl_ms == 1000
         assert eth_config.max_mult == 100
+        assert eth_config.strategy_mode == "legacy"
 
     def test_get_symbol_config_no_override(self, sample_config_yaml, env_vars):
         """测试获取没有覆盖的 symbol 配置"""
@@ -167,6 +180,38 @@ symbols:
         assert unknown_config.max_mult == 100  # global 默认
         assert unknown_config.maker_price_mode == "at_touch"  # global 默认
         assert unknown_config.maker_safety_ticks == 2  # global 默认
+        assert unknown_config.strategy_mode == "legacy"
+        assert unknown_config.pressure_exit_enabled is False
+
+    def test_get_symbol_config_pressure_exit_mode(self, sample_config_yaml, env_vars):
+        """测试盘口量模式按 symbol 启用且 legacy 仍为默认。"""
+        loader = ConfigLoader(sample_config_yaml)
+        loader.load()
+
+        dash_config = loader.get_symbol_config("DASH/USDT:USDT")
+        assert dash_config.strategy_mode == "orderbook_pressure"
+        assert dash_config.pressure_exit_enabled is True
+        assert dash_config.pressure_exit_threshold_qty == Decimal("100")
+        assert dash_config.pressure_exit_sustain_ms == 2000
+        assert dash_config.pressure_exit_passive_level == 3
+        assert dash_config.pressure_exit_lot_mult == 5
+        assert dash_config.pressure_exit_aggressive_recheck_cooldown_ms == 1000
+        assert dash_config.pressure_exit_passive_ttl_ms == 10000
+
+        btc_config = loader.get_symbol_config("BTC/USDT:USDT")
+        assert btc_config.strategy_mode == "legacy"
+        assert btc_config.pressure_exit_enabled is False
+
+    def test_pressure_exit_rejects_mode_orderbook_pressure_with_enabled_false(self):
+        """strategy.mode=orderbook_pressure + pressure_exit.enabled=false 应被拒绝。"""
+        with pytest.raises(ValueError, match="enabled 不能为 false"):
+            SymbolConfig(
+                strategy=StrategyConfig(mode="orderbook_pressure"),
+                pressure_exit=PressureExitConfig(
+                    enabled=False,
+                    threshold_qty=Decimal("100"),
+                ),
+            )
 
     def test_ws_config(self, sample_config_yaml, env_vars):
         """测试 WS 配置合并"""

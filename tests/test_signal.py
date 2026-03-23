@@ -12,7 +12,7 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 from pathlib import Path
 
-from src.signal.engine import SignalEngine
+from src.signal.engine import SignalEngine, PressureSignalConfig
 from src.models import (
     MarketEvent,
     MarketState,
@@ -20,6 +20,9 @@ from src.models import (
     PositionSide,
     ExitSignal,
     SignalReason,
+    StrategyMode,
+    SignalExecutionPreference,
+    QtyPolicy,
 )
 from src.utils.logger import setup_logger
 
@@ -71,6 +74,51 @@ class TestUpdateMarket:
         assert state.best_bid == Decimal("50000")
         assert state.best_ask == Decimal("50001")
         assert state.is_ready is False  # 还没有 trade 数据
+
+    def test_update_with_depth_for_pressure_mode(self):
+        """测试盘口量模式需要 depth 数据才 ready。"""
+        engine = SignalEngine()
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                lot_mult=5,
+                aggressive_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+            ),
+        )
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("120"),
+            event_type="book_ticker",
+        ))
+        assert engine.is_data_ready(symbol) is False
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1010,
+            bid_levels=[
+                (Decimal("10"), Decimal("50")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("30")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("60")),
+                (Decimal("10.2"), Decimal("70")),
+                (Decimal("10.3"), Decimal("80")),
+            ],
+            event_type="depth",
+        ))
+        assert engine.is_data_ready(symbol) is True
 
     def test_update_with_agg_trade(self):
         """测试 aggTrade 更新"""
@@ -287,6 +335,302 @@ class TestMultipliers:
         assert signal is not None
         assert signal.roi == Decimal("0.2")
         assert signal.roi_mult == 6
+
+
+class TestOrderbookPressureSignals:
+    """盘口量平仓模式测试"""
+
+    @pytest.fixture
+    def pressure_engine(self):
+        engine = SignalEngine(min_signal_interval_ms=200)
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                lot_mult=5,
+                aggressive_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+            ),
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+        return engine
+
+    def test_pressure_mode_generates_passive_signal_when_threshold_not_met(self, pressure_engine):
+        position = Position(
+            symbol="DASH/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        signal = pressure_engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=1200)
+
+        assert signal is not None
+        assert signal.reason == SignalReason.SHORT_BID_PRESSURE_PASSIVE
+        assert signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+        assert signal.execution_preference == SignalExecutionPreference.PASSIVE
+        assert signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT
+        assert signal.price_override == Decimal("9.8")
+        assert signal.ttl_override_ms == 10000
+        assert signal.cooldown_override_ms == 0
+        assert signal.fixed_lot_mult == 5
+
+    def test_pressure_mode_requires_sustain_before_aggressive_signal(self, pressure_engine):
+        symbol = "DASH/USDT:USDT"
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("120"),
+            event_type="book_ticker",
+        ))
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=2000) is None
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=3999) is None
+
+        signal = pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=4000)
+        assert signal is not None
+        assert signal.reason == SignalReason.SHORT_ASK_PRESSURE_ACTIVE
+        assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+        assert signal.price_override == Decimal("10.1")
+        assert signal.cooldown_override_ms == 1000
+
+    def test_pressure_mode_resets_dwell_when_threshold_breaks(self, pressure_engine):
+        symbol = "DASH/USDT:USDT"
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("120"),
+            event_type="book_ticker",
+        ))
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=2000) is None
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2500,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("90"),
+            event_type="book_ticker",
+        ))
+        signal = pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=2500)
+        assert signal is not None
+        assert signal.reason == SignalReason.SHORT_BID_PRESSURE_PASSIVE
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=3000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("120"),
+            event_type="book_ticker",
+        ))
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=3000) is None
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=4999) is None
+
+    def test_pressure_mode_detects_stale_book_ticker_even_if_depth_is_fresh(self, pressure_engine):
+        symbol = "DASH/USDT:USDT"
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2600,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+
+        assert pressure_engine.is_strategy_data_stale(symbol, current_ms=2600, stale_data_ms=1000) is True
+
+    def test_pressure_mode_zero_position_clears_dwell(self, pressure_engine):
+        symbol = "DASH/USDT:USDT"
+        active_position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+        flat_position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("0"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        pressure_engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("120"),
+            event_type="book_ticker",
+        ))
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, active_position, current_ms=2000) is None
+        assert pressure_engine._pressure_dwell_start_ms[f"{symbol}:SHORT"] == 2000
+
+        assert pressure_engine.evaluate(symbol, PositionSide.SHORT, flat_position, current_ms=2100) is None
+        assert f"{symbol}:SHORT" not in pressure_engine._pressure_dwell_start_ms
+
+    def test_pressure_mode_logs_when_passive_level_missing(self, monkeypatch):
+        messages: list[str] = []
+
+        class DummyLogger:
+            def debug(self, message: str) -> None:
+                messages.append(message)
+
+        monkeypatch.setattr("src.signal.engine.get_logger", lambda: DummyLogger())
+
+        engine = SignalEngine()
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=5,
+                lot_mult=5,
+                aggressive_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+            ),
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[(Decimal("10.0"), Decimal("30"))],
+            ask_levels=[(Decimal("10.1"), Decimal("20"))],
+            event_type="depth",
+        ))
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        signal = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=1200)
+
+        assert signal is None
+        assert any("passive_level=5" in message for message in messages)
+
+    def test_pressure_mode_skips_when_passive_level_missing(self):
+        engine = SignalEngine()
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=5,
+                lot_mult=5,
+                aggressive_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+            ),
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[(Decimal("10.0"), Decimal("30"))],
+            ask_levels=[(Decimal("10.1"), Decimal("20"))],
+            event_type="depth",
+        ))
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+        signal = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=1200)
+        assert signal is None
 
 
 class TestLongExitConditions:

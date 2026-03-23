@@ -43,6 +43,7 @@ class TestMarketWSClientInit:
         assert client.max_delay_ms == 30000
         assert client.multiplier == 2
         assert client.stale_data_ms == 1500
+        assert client.depth_symbols == []
         assert client._running is False
         assert client._ws is None
 
@@ -52,6 +53,7 @@ class TestMarketWSClientInit:
         client = MarketWSClient(
             symbols=["BTC/USDT:USDT", "ETH/USDT:USDT"],
             on_event=events.append,
+            depth_symbols=["ETH/USDT:USDT"],
             initial_delay_ms=500,
             max_delay_ms=60000,
             multiplier=3,
@@ -63,6 +65,7 @@ class TestMarketWSClientInit:
         assert client.max_delay_ms == 60000
         assert client.multiplier == 3
         assert client.stale_data_ms == 2000
+        assert client.depth_symbols == ["ETH/USDT:USDT"]
 
 
 class TestSymbolConversion:
@@ -109,6 +112,7 @@ class TestStreamURL:
         assert "btcusdt@bookTicker" in url
         assert "btcusdt@aggTrade" in url
         assert "btcusdt@markPrice@1s" in url
+        assert "btcusdt@depth10@100ms" not in url
 
     def test_build_stream_url_multiple_symbols(self):
         """测试多 symbol URL 构建"""
@@ -116,15 +120,18 @@ class TestStreamURL:
         client = MarketWSClient(
             symbols=["BTC/USDT:USDT", "ETH/USDT:USDT"],
             on_event=events.append,
+            depth_symbols=["ETH/USDT:USDT"],
         )
 
         url = client._build_stream_url()
 
         assert url.startswith(WS_BASE_URL)
         assert "btcusdt@bookTicker" in url
+        assert "btcusdt@depth10@100ms" not in url
         assert "btcusdt@aggTrade" in url
         assert "btcusdt@markPrice@1s" in url
         assert "ethusdt@bookTicker" in url
+        assert "ethusdt@depth10@100ms" in url
         assert "ethusdt@aggTrade" in url
         assert "ethusdt@markPrice@1s" in url
 
@@ -157,10 +164,64 @@ class TestParseBookTicker:
         assert event is not None
         assert event.symbol == "BTC/USDT:USDT"
         assert event.best_bid == Decimal("50000.10")
+        assert event.best_bid_qty == Decimal("1.5")
         assert event.best_ask == Decimal("50000.20")
+        assert event.best_ask_qty == Decimal("2.0")
         assert event.last_trade_price is None
         assert event.event_type == "book_ticker"
         assert event.timestamp_ms == 1591097736594
+
+
+class TestParseDepth:
+    """depth10 解析测试"""
+
+    def test_parse_depth_valid(self):
+        events: List[MarketEvent] = []
+        client = MarketWSClient(
+            symbols=["BTC/USDT:USDT"],
+            depth_symbols=["BTC/USDT:USDT"],
+            on_event=events.append,
+        )
+
+        data = {
+            "e": "depthUpdate",
+            "E": 1591097736593,
+            "T": 1591097736594,
+            "s": "BTCUSDT",
+            "b": [["50000.10", "1.5"], ["50000.00", "2.0"]],
+            "a": [["50000.20", "2.5"], ["50000.30", "3.0"]],
+        }
+
+        event = client._parse_depth("btcusdt@depth10@100ms", data)
+
+        assert event is not None
+        assert event.symbol == "BTC/USDT:USDT"
+        assert event.event_type == "depth"
+        assert event.bid_levels == [
+            (Decimal("50000.10"), Decimal("1.5")),
+            (Decimal("50000.00"), Decimal("2.0")),
+        ]
+        assert event.ask_levels == [
+            (Decimal("50000.20"), Decimal("2.5")),
+            (Decimal("50000.30"), Decimal("3.0")),
+        ]
+        assert event.timestamp_ms == 1591097736594
+
+    def test_parse_depth_unsubscribed_symbol(self):
+        events: List[MarketEvent] = []
+        client = MarketWSClient(
+            symbols=["BTC/USDT:USDT"],
+            on_event=events.append,
+        )
+
+        data = {
+            "s": "BTCUSDT",
+            "b": [["50000.10", "1.5"]],
+            "a": [["50000.20", "2.5"]],
+        }
+
+        event = client._parse_depth("btcusdt@depth10@100ms", data)
+        assert event is None
 
     def test_parse_book_ticker_invalid_spread(self):
         """测试无效价差（bid >= ask）"""
@@ -527,6 +588,33 @@ class TestHandleMessage:
         assert len(events) == 1
         assert events[0].event_type == "mark_price"
         assert events[0].mark_price == Decimal("50000.25")
+
+    @pytest.mark.asyncio
+    async def test_handle_message_depth_does_not_refresh_stale_timer(self):
+        """测试 depth 数据不会刷新全局 stale 计时。"""
+        events: List[MarketEvent] = []
+        client = MarketWSClient(
+            symbols=["BTC/USDT:USDT"],
+            depth_symbols=["BTC/USDT:USDT"],
+            on_event=events.append,
+        )
+        client._last_update_ms["BTC/USDT:USDT"] = 1234567890
+
+        message = {
+            "stream": "btcusdt@depth10@100ms",
+            "data": {
+                "s": "BTCUSDT",
+                "b": [["50000.10", "1.5"]],
+                "a": [["50000.20", "2.5"]],
+                "T": 1591097736594,
+            }
+        }
+
+        await client._handle_message(message)
+
+        assert len(events) == 1
+        assert events[0].event_type == "depth"
+        assert client._last_update_ms["BTC/USDT:USDT"] == 1234567890
 
     @pytest.mark.asyncio
     async def test_handle_message_empty_data(self):

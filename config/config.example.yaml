@@ -141,6 +141,18 @@ symbols:
   #   execution:
   #     max_order_notional: 500
   #
+  # 示例：按 symbol 启用盘口量平仓模式
+  # DASH/USDT:USDT:
+  #   strategy:
+  #     mode: orderbook_pressure   # 可选：legacy | orderbook_pressure
+  #   pressure_exit:
+  #     threshold_qty: 100         # 顶档量阈值：LONG 看 best_bid_qty，SHORT 看 best_ask_qty
+  #     sustain_ms: 2000           # 顶档量连续超过阈值至少多久才主动吃单（毫秒）
+  #     passive_level: 3           # 主动条件不成立时挂单使用的固定盘口档位（1=一档）
+  #     lot_mult: 5                # 固定下单量倍率，实际数量 = min_qty × lot_mult
+  #     aggressive_recheck_cooldown_ms: 1000  # 主动单终态后的重检冷却（毫秒）
+  #     passive_ttl_ms: 10000      # 被动单 TTL，超时自动撤单（毫秒）
+  #
   # 示例：统一缩放 accel 档位倍数（不需要逐档配置）
   # SOL/USDT:USDT:
   #   accel:

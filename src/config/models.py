@@ -14,7 +14,7 @@
 
 from decimal import Decimal
 from typing import Dict, List, Optional, Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ============================================================
@@ -224,6 +224,29 @@ class ExecutionConfig(BaseModel):
     )
 
 
+class StrategyConfig(BaseModel):
+    """Symbol 级别策略模式选择"""
+    mode: Literal["legacy", "orderbook_pressure"] = Field(
+        default="legacy",
+        description="symbol 使用的信号策略模式",
+    )
+
+
+class PressureExitConfig(BaseModel):
+    """盘口量平仓模式配置"""
+    enabled: bool = Field(default=True, description="是否启用盘口量平仓模式")
+    threshold_qty: Decimal = Field(gt=Decimal("0"), description="顶档量阈值")
+    sustain_ms: int = Field(default=2000, ge=1, description="顶档量持续阈值(ms)")
+    passive_level: int = Field(default=3, ge=1, le=10, description="被动挂单使用的固定档位")
+    lot_mult: int = Field(default=1, ge=1, description="固定平仓量倍数（minQty × lot_mult）")
+    aggressive_recheck_cooldown_ms: int = Field(
+        default=1000,
+        ge=0,
+        description="主动单终态后的重检冷却(ms)",
+    )
+    passive_ttl_ms: int = Field(default=10000, ge=1, description="被动单 TTL(ms)")
+
+
 # ============================================================
 # Symbol 级别覆盖配置
 # ============================================================
@@ -294,10 +317,21 @@ class SymbolRiskConfig(BaseModel):
 
 class SymbolConfig(BaseModel):
     """单个 symbol 的覆盖配置"""
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    pressure_exit: Optional[PressureExitConfig] = None
     execution: Optional[SymbolExecutionConfig] = None
     accel: Optional[SymbolAccelConfig] = None
     roi: Optional[SymbolRoiConfig] = None
     risk: Optional[SymbolRiskConfig] = None
+
+    @model_validator(mode="after")
+    def validate_strategy_requirements(self) -> "SymbolConfig":
+        if self.strategy.mode == "orderbook_pressure":
+            if self.pressure_exit is None:
+                raise ValueError("strategy.mode=orderbook_pressure 时必须配置 pressure_exit")
+            if not self.pressure_exit.enabled:
+                raise ValueError("strategy.mode=orderbook_pressure 时 pressure_exit.enabled 不能为 false")
+        return self
 
 
 # ============================================================
@@ -336,6 +370,16 @@ class MergedSymbolConfig(BaseModel):
     global 默认值 + symbol 覆盖 = 最终配置
     """
     symbol: str
+
+    # 策略
+    strategy_mode: Literal["legacy", "orderbook_pressure"]
+    pressure_exit_enabled: bool
+    pressure_exit_threshold_qty: Optional[Decimal]
+    pressure_exit_sustain_ms: Optional[int]
+    pressure_exit_passive_level: Optional[int]
+    pressure_exit_lot_mult: Optional[int]
+    pressure_exit_aggressive_recheck_cooldown_ms: Optional[int]
+    pressure_exit_passive_ttl_ms: Optional[int]
 
     # WS
     stale_data_ms: int

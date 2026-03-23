@@ -71,12 +71,34 @@ class ExecutionState(str, Enum):
     COOLDOWN = "COOLDOWN"
 
 
+class StrategyMode(str, Enum):
+    """运行时策略模式"""
+    LEGACY = "legacy"
+    ORDERBOOK_PRESSURE = "orderbook_pressure"
+
+
+class SignalExecutionPreference(str, Enum):
+    """信号期望的执行偏好"""
+    PASSIVE = "passive"
+    AGGRESSIVE = "aggressive"
+
+
+class QtyPolicy(str, Enum):
+    """信号数量策略"""
+    DYNAMIC = "dynamic"
+    FIXED_MIN_QTY_MULT = "fixed_min_qty_mult"
+
+
 class SignalReason(str, Enum):
     """平仓信号触发原因"""
     LONG_PRIMARY = "long_primary"
     LONG_BID_IMPROVE = "long_bid_improve"
     SHORT_PRIMARY = "short_primary"
     SHORT_ASK_IMPROVE = "short_ask_improve"
+    LONG_BID_PRESSURE_ACTIVE = "long_bid_pressure_active"
+    SHORT_ASK_PRESSURE_ACTIVE = "short_ask_pressure_active"
+    LONG_ASK_PRESSURE_PASSIVE = "long_ask_pressure_passive"
+    SHORT_BID_PRESSURE_PASSIVE = "short_bid_pressure_passive"
 
 
 # ============================================================
@@ -89,7 +111,8 @@ class MarketEvent:
     市场数据事件（从 WS 接收）
 
     来源：
-    - bookTicker: best_bid, best_ask
+    - bookTicker: best_bid, best_ask, best_bid_qty, best_ask_qty
+    - depth: bid_levels, ask_levels
     - aggTrade: last_trade_price
     - markPriceUpdate: mark_price
     """
@@ -97,9 +120,13 @@ class MarketEvent:
     timestamp_ms: int
     best_bid: Optional[Decimal] = None
     best_ask: Optional[Decimal] = None
+    best_bid_qty: Optional[Decimal] = None
+    best_ask_qty: Optional[Decimal] = None
+    bid_levels: Optional[list[tuple[Decimal, Decimal]]] = None
+    ask_levels: Optional[list[tuple[Decimal, Decimal]]] = None
     last_trade_price: Optional[Decimal] = None
     mark_price: Optional[Decimal] = None
-    event_type: Literal["book_ticker", "agg_trade", "mark_price"] = "book_ticker"
+    event_type: Literal["book_ticker", "depth", "agg_trade", "mark_price"] = "book_ticker"
 
 
 @dataclass
@@ -113,8 +140,15 @@ class MarketState:
     best_bid: Decimal
     best_ask: Decimal
     last_trade_price: Decimal
+    best_bid_qty: Decimal = Decimal("0")
+    best_ask_qty: Decimal = Decimal("0")
+    bid_levels: list[tuple[Decimal, Decimal]] = field(default_factory=list)
+    ask_levels: list[tuple[Decimal, Decimal]] = field(default_factory=list)
     previous_trade_price: Optional[Decimal] = None
     last_update_ms: int = 0
+    last_book_ticker_ms: int = 0
+    last_depth_update_ms: int = 0
+    last_trade_update_ms: int = 0
     is_ready: bool = False  # 是否有足够数据进行信号判断
 
 
@@ -214,6 +248,13 @@ class ExitSignal:
     best_bid: Decimal
     best_ask: Decimal
     last_trade_price: Decimal
+    strategy_mode: StrategyMode = StrategyMode.LEGACY
+    execution_preference: SignalExecutionPreference = SignalExecutionPreference.PASSIVE
+    qty_policy: QtyPolicy = QtyPolicy.DYNAMIC
+    price_override: Optional[Decimal] = None
+    ttl_override_ms: Optional[int] = None
+    cooldown_override_ms: Optional[int] = None
+    fixed_lot_mult: Optional[int] = None
     roi_mult: int = 1
     accel_mult: int = 1
     roi: Optional[Decimal] = None
@@ -326,6 +367,12 @@ class SideExecutionState:
     current_order_reason: Optional[str] = None
     current_order_is_risk: bool = False
     current_order_filled_qty: Decimal = Decimal("0")
+    current_order_execution_preference: Optional[SignalExecutionPreference] = None
+    current_order_strategy_mode: Optional[StrategyMode] = None
+    current_order_ttl_ms_override: Optional[int] = None
+    current_order_cooldown_ms_override: Optional[int] = None
+    current_order_terminal_grace_until_ms: int = 0
+    current_order_cancel_retry_after_ms: int = 0
 
     # 已完成订单缓存（用于接收迟到的 WS 成交回执）
     last_completed_order_id: Optional[str] = None

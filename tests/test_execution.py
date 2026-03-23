@@ -27,6 +27,9 @@ from src.models import (
     ExecutionState,
     TimeInForce,
     SignalReason,
+    StrategyMode,
+    SignalExecutionPreference,
+    QtyPolicy,
     MarketState,
     SymbolRules,
 )
@@ -239,6 +242,229 @@ class TestStateManagement:
         assert state.state == ExecutionState.IDLE
         assert state.current_order_id is None
         assert state.maker_timeout_count == 0
+
+
+class TestOrderbookPressureExecution:
+    """盘口量模式执行测试"""
+
+    @pytest.mark.asyncio
+    async def test_on_signal_uses_fixed_qty_and_price_override(self, engine, symbol_rules, market_state):
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_ASK_PRESSURE_ACTIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.AGGRESSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=Decimal("50001"),
+            cooldown_override_ms=1000,
+            fixed_lot_mult=5,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.02"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+
+        assert intent is not None
+        assert intent.qty == Decimal("0.005")
+        assert intent.price == Decimal("50001")
+        assert intent.time_in_force == TimeInForce.GTC
+
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        assert state.current_order_execution_preference == SignalExecutionPreference.AGGRESSIVE
+        assert state.current_order_strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+        assert state.current_order_cooldown_ms_override == 1000
+
+    @pytest.mark.asyncio
+    async def test_on_signal_uses_post_only_tif_for_passive_price_override(self, engine, symbol_rules, market_state):
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.PASSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=Decimal("49999.5"),
+            ttl_override_ms=10000,
+            cooldown_override_ms=0,
+            fixed_lot_mult=1,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.02"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+
+        assert intent is not None
+        assert intent.time_in_force == TimeInForce.GTX
+
+    def test_compute_fixed_qty_clamps_to_position(self, engine):
+        qty = engine.compute_fixed_qty(
+            position_amt=Decimal("0.0024"),
+            min_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+            lot_mult=5,
+        )
+        assert qty == Decimal("0.002")
+
+    @pytest.mark.asyncio
+    async def test_filled_order_enters_strategy_cooldown(self, engine, symbol_rules, market_state):
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_ASK_PRESSURE_ACTIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.AGGRESSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=Decimal("50001"),
+            cooldown_override_ms=1000,
+            fixed_lot_mult=1,
+        )
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.01"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+        assert intent is not None
+
+        result = OrderResult(
+            success=True,
+            order_id="filled-1",
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50001"),
+        )
+        await engine.on_order_placed(intent, result, current_ms=1000)
+
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        assert state.state == ExecutionState.COOLDOWN
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, 1999) is False
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, 2000) is True
+
+    @pytest.mark.asyncio
+    async def test_cancel_current_order_for_preempt_preserves_waiting_passive_context(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive-1"
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+        state.current_order_cooldown_ms_override = 0
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1000,
+        )
+
+        assert cancelled is True
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id == "passive-1"
+        assert state.current_order_terminal_grace_until_ms == 6000
+
+    @pytest.mark.asyncio
+    async def test_cancel_current_order_for_preempt_allows_late_fill_update(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive-1"
+        state.current_order_mode = ExecutionMode.MAKER_ONLY
+        state.current_order_reason = SignalReason.SHORT_BID_PRESSURE_PASSIVE.value
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+        state.current_order_strategy_mode = StrategyMode.ORDERBOOK_PRESSURE
+        state.current_order_cooldown_ms_override = 0
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1000,
+        )
+
+        assert cancelled is True
+
+        update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="passive-1",
+            client_order_id="client_123",
+            side=OrderSide.BUY,
+            position_side=PositionSide.SHORT,
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50000"),
+            timestamp_ms=1100,
+        )
+        await engine.on_order_update(update, current_ms=1100)
+
+        assert state.state == ExecutionState.IDLE
+        assert state.current_order_id is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_current_order_for_preempt_backoffs_after_cancel_failure(self, engine, mock_cancel_order):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive-1"
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+
+        mock_cancel_order.return_value = OrderResult(
+            success=False,
+            order_id="passive-1",
+            error_message="rate_limited: cancel_order",
+        )
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1000,
+        )
+        assert cancelled is False
+        assert state.state == ExecutionState.WAITING
+        assert state.current_order_id == "passive-1"
+        assert state.current_order_cancel_retry_after_ms == 1100
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1050,
+        )
+        assert cancelled is False
+        assert mock_cancel_order.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_cancel_current_order_for_preempt_recovers_from_exception(self, engine, mock_cancel_order):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive-1"
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+
+        mock_cancel_order.side_effect = Exception("network timeout")
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1000,
+        )
+        assert cancelled is False
+        assert state.state == ExecutionState.WAITING
+        assert state.current_order_id == "passive-1"
+        assert state.current_order_cancel_retry_after_ms == 1100
 
     def test_get_state_returns_existing(self, engine):
         """测试获取状态（返回已存在）"""
@@ -787,7 +1013,7 @@ class TestOnOrderPlaced:
             current_ms=1000,
         )
 
-        assert state.state == ExecutionState.IDLE
+        assert state.state == ExecutionState.COOLDOWN
         assert state.current_order_id is None
         assert state.pending_fill_log is True
         assert state.last_completed_order_id == "order_123"
@@ -819,7 +1045,7 @@ class TestOnOrderUpdate:
 
         await engine.on_order_update(update, current_ms=1000)
 
-        assert state.state == ExecutionState.IDLE
+        assert state.state == ExecutionState.COOLDOWN
         assert state.current_order_id is None
 
     @pytest.mark.asyncio
@@ -866,7 +1092,9 @@ class TestOnOrderUpdate:
 
         await engine.on_order_update(update, current_ms=1000)
 
-        assert state.state == ExecutionState.IDLE
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id is None
+        assert state.current_order_placed_ms == 1000
 
     @pytest.mark.asyncio
     async def test_order_expired(self, engine):
@@ -963,6 +1191,8 @@ class TestCheckTimeout:
 
         assert state.state == ExecutionState.COOLDOWN
         assert state.current_order_id == "order_123"
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=2100) is False
+        assert state.current_order_id == "order_123"
 
         update = OrderUpdate(
             symbol="BTC/USDT:USDT",
@@ -979,6 +1209,80 @@ class TestCheckTimeout:
 
         assert state.state == ExecutionState.COOLDOWN
         assert state.current_order_id is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_with_zero_strategy_cooldown_keeps_context_until_grace(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive_123"
+        state.current_order_placed_ms = 1000
+        state.current_order_cooldown_ms_override = 0
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+
+        await engine.check_timeout("BTC/USDT:USDT", PositionSide.SHORT, current_ms=2000)
+
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id == "passive_123"
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, current_ms=2000) is False
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, current_ms=6999) is False
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, current_ms=7000) is True
+        assert state.state == ExecutionState.IDLE
+        assert state.current_order_id is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_regular_order_keeps_context_until_grace(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_placed_ms = 1000
+
+        await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
+
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id == "order_123"
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=2100) is False
+        assert state.current_order_id == "order_123"
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=6999) is False
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=7000) is True
+        assert state.state == ExecutionState.IDLE
+        assert state.current_order_id is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_cancel_failure_keeps_waiting_context_and_retries_after_backoff(self, engine, mock_cancel_order):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_placed_ms = 1000
+
+        mock_cancel_order.side_effect = [
+            OrderResult(
+                success=False,
+                order_id="order_123",
+                error_message="rate_limited: cancel_order",
+            ),
+            OrderResult(
+                success=True,
+                order_id="order_123",
+                status=OrderStatus.CANCELED,
+            ),
+        ]
+
+        result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
+        assert result is True
+        assert state.state == ExecutionState.WAITING
+        assert state.current_order_id == "order_123"
+        assert state.current_order_cancel_retry_after_ms == 2100
+
+        result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2050)
+        assert result is False
+        assert mock_cancel_order.await_count == 1
+
+        result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2100)
+        assert result is True
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id == "order_123"
+        assert state.current_order_cancel_retry_after_ms == 0
+        assert mock_cancel_order.await_count == 2
 
     @pytest.mark.asyncio
     async def test_timeout_skip_non_waiting(self, engine):
@@ -1173,8 +1477,9 @@ class TestStateMachine:
 
         assert state.state == ExecutionState.COOLDOWN
 
-        # 4. COOLDOWN -> 冷却结束 -> IDLE
-        engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=2300)
+        # 4. COOLDOWN -> grace 未结束前保持上下文，直到 grace 结束才回到 IDLE
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=2300) is False
+        engine.check_cooldown("BTC/USDT:USDT", PositionSide.LONG, current_ms=7000)
 
         assert state.state == ExecutionState.IDLE
 

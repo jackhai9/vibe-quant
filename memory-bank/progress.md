@@ -26,6 +26,23 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：按 symbol 的盘口量平仓模式与 stale/dwell 收口
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-23
+
+**动机**：为部分 symbol 引入与 `legacy` 互斥的 `orderbook_pressure` 平仓路径，并补齐 `bookTicker/depth10` 双源 freshness、主动条件 dwell reset 与正式文档收口，避免用过期顶档量继续触发主动单。<br>
+**产出**：
+
+- `src/config/models.py` / `src/config/loader.py`：新增 `strategy.mode` 与 `pressure_exit.*` 的 symbol 级配置与合并结果；默认 `legacy`
+- `src/models.py` / `src/ws/market.py`：市场数据结构新增 `best_bid_qty/best_ask_qty`、`bid_levels/ask_levels` 与分源时间戳；仅对命中的 symbol 订阅 `depth10@100ms`
+- `src/signal/engine.py`：新增 `orderbook_pressure` 分支、固定数量/价格/TTL/cooldown 信号覆盖、被动档位缺失日志，以及 `bookTicker/depth10` 双源 stale 判定与 dwell reset
+- `src/execution/engine.py` / `src/main.py`：复用单套执行状态机，支持 signal override；主动信号可抢占被动单；主流程在 stale/零仓位时清理 pressure dwell
+- `src/execution/engine.py` / `src/main.py`：timeout 撤单成功后统一保留在途订单上下文直到 WS grace 窗口结束；撤单失败时按 backoff 重试；`orderbook_pressure` 被动 `GTX` 拒单保持被动语义，不自动改发 taker 单
+- `tests/test_config.py` / `tests/test_ws_market.py` / `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_main_shutdown.py`：补齐配置、订阅、pressure 信号、执行覆盖与 dwell reset 回归
+- `tests/test_post_only_retry.py`：覆盖 `legacy` 的 post-only reject aggressive retry，以及 `orderbook_pressure` 被动单不降级为 taker 的约束
+- `docs/configuration.md` / `memory-bank/architecture.md`：同步配置、数据真源与策略模式说明
+
 ## Milestone/附加改进：交易所启动期网络重试与代理诊断
 
 **状态**：✅ 已完成<br>

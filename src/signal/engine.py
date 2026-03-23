@@ -1,5 +1,5 @@
 # Input: MarketEvent, Position, config
-# Output: ExitSignal
+# Output: ExitSignal and per-symbol runtime gating for legacy/orderbook_pressure
 # Pos: signal evaluation engine
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -12,6 +12,7 @@
 - 实现触发节流（min_signal_interval_ms）
 - 维护滑动窗口回报率（accel）并计算 accel_mult
 - 计算 ROI 并匹配 roi_mult
+- 为 orderbook_pressure 维护 depth/book freshness 与 dwell 状态
 
 输入：
 - MarketEvent
@@ -22,6 +23,7 @@
 """
 
 from collections import deque
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Deque, Dict, Optional, Tuple, List
 
@@ -32,9 +34,22 @@ from src.models import (
     PositionSide,
     ExitSignal,
     SignalReason,
+    StrategyMode,
+    SignalExecutionPreference,
+    QtyPolicy,
 )
 from src.utils.logger import get_logger, log_signal
 from src.utils.helpers import current_time_ms
+
+
+@dataclass
+class PressureSignalConfig:
+    threshold_qty: Decimal
+    sustain_ms: int
+    passive_level: int
+    lot_mult: int
+    aggressive_recheck_cooldown_ms: int
+    passive_ttl_ms: int
 
 
 class SignalEngine:
@@ -55,8 +70,11 @@ class SignalEngine:
         # 追踪是否收到过 bid/ask 和 trade 数据
         self._has_book_data: Dict[str, bool] = {}
         self._has_trade_data: Dict[str, bool] = {}
+        self._has_depth_data: Dict[str, bool] = {}
 
         # per-symbol 参数（允许覆盖）
+        self._symbol_strategy_modes: Dict[str, StrategyMode] = {}
+        self._symbol_pressure_configs: Dict[str, PressureSignalConfig] = {}
         self._symbol_min_signal_interval_ms: Dict[str, int] = {}
         self._symbol_accel_window_ms: Dict[str, int] = {}
         self._symbol_accel_tiers: Dict[str, List[Tuple[Decimal, int]]] = {}
@@ -64,17 +82,26 @@ class SignalEngine:
 
         # trade 价格序列（用于 accel 滑动窗口）
         self._trade_history: Dict[str, Deque[Tuple[int, Decimal]]] = {}
+        self._pressure_dwell_start_ms: Dict[str, int] = {}
+        self._last_pressure_skip_reason: Dict[str, str] = {}
 
     def configure_symbol(
         self,
         symbol: str,
         *,
+        strategy_mode: StrategyMode = StrategyMode.LEGACY,
+        pressure_config: Optional[PressureSignalConfig] = None,
         min_signal_interval_ms: Optional[int] = None,
         accel_window_ms: Optional[int] = None,
         accel_tiers: Optional[List[Tuple[Decimal, int]]] = None,
         roi_tiers: Optional[List[Tuple[Decimal, int]]] = None,
     ) -> None:
         """配置某个 symbol 的节流/倍数档位参数。"""
+        self._symbol_strategy_modes[symbol] = strategy_mode
+        if pressure_config is not None:
+            self._symbol_pressure_configs[symbol] = pressure_config
+        elif symbol in self._symbol_pressure_configs:
+            del self._symbol_pressure_configs[symbol]
         if min_signal_interval_ms is not None:
             self._symbol_min_signal_interval_ms[symbol] = min_signal_interval_ms
         if accel_window_ms is not None:
@@ -107,6 +134,8 @@ class SignalEngine:
                 best_bid=Decimal("0"),
                 best_ask=Decimal("0"),
                 last_trade_price=Decimal("0"),
+                best_bid_qty=Decimal("0"),
+                best_ask_qty=Decimal("0"),
                 previous_trade_price=None,
                 last_update_ms=0,
                 is_ready=False,
@@ -114,6 +143,7 @@ class SignalEngine:
             self._market_states[symbol] = state
             self._has_book_data[symbol] = False
             self._has_trade_data[symbol] = False
+            self._has_depth_data[symbol] = False
 
         # 更新时间戳
         state.last_update_ms = event.timestamp_ms
@@ -124,7 +154,19 @@ class SignalEngine:
                 state.best_bid = event.best_bid
             if event.best_ask is not None:
                 state.best_ask = event.best_ask
+            if event.best_bid_qty is not None:
+                state.best_bid_qty = event.best_bid_qty
+            if event.best_ask_qty is not None:
+                state.best_ask_qty = event.best_ask_qty
+            state.last_book_ticker_ms = event.timestamp_ms
             self._has_book_data[symbol] = True
+        elif event.event_type == "depth":
+            if event.bid_levels is not None:
+                state.bid_levels = list(event.bid_levels)
+            if event.ask_levels is not None:
+                state.ask_levels = list(event.ask_levels)
+            state.last_depth_update_ms = event.timestamp_ms
+            self._has_depth_data[symbol] = True
 
         elif event.event_type == "agg_trade":
             # 更新 trade price，保存上一次价格
@@ -137,18 +179,10 @@ class SignalEngine:
                 if state.last_trade_price > Decimal("0"):
                     state.previous_trade_price = state.last_trade_price
                 state.last_trade_price = event.last_trade_price
+                state.last_trade_update_ms = event.timestamp_ms
                 self._has_trade_data[symbol] = True
 
-        # 检查数据是否就绪
-        # 就绪条件：有 bid/ask 数据 AND 有 trade 数据 AND 有 previous trade price
-        state.is_ready = (
-            self._has_book_data.get(symbol, False)
-            and self._has_trade_data.get(symbol, False)
-            and state.previous_trade_price is not None
-            and state.best_bid > Decimal("0")
-            and state.best_ask > Decimal("0")
-            and state.last_trade_price > Decimal("0")
-        )
+        state.is_ready = self._is_symbol_ready(symbol, state)
 
     def evaluate(
         self,
@@ -172,20 +206,31 @@ class SignalEngine:
         if current_ms is None:
             current_ms = current_time_ms()
 
-        # 检查数据是否就绪
         state = self._market_states.get(symbol)
         if state is None or not state.is_ready:
+            return None
+
+        # 检查仓位是否有效（非零）
+        if abs(position.position_amt) == Decimal("0"):
+            self.reset_pressure_dwell(symbol, position_side, reason="position_flat")
+            self._clear_pressure_skip_reason(f"{symbol}:{position_side.value}")
+            self._clear_pressure_skip_reason(f"{symbol}:freshness")
             return None
 
         # 检查节流
         if self._is_throttled(symbol, position_side, current_ms):
             return None
 
-        # 检查仓位是否有效（非零）
-        if abs(position.position_amt) == Decimal("0"):
-            return None
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        if strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
+            return self._evaluate_orderbook_pressure(
+                symbol=symbol,
+                position_side=position_side,
+                position=position,
+                state=state,
+                current_ms=current_ms,
+            )
 
-        # 根据仓位方向检查退出条件
         reason: Optional[SignalReason] = None
 
         if position_side == PositionSide.LONG:
@@ -239,6 +284,209 @@ class SignalEngine:
             )
 
         return signal
+
+    def _evaluate_orderbook_pressure(
+        self,
+        *,
+        symbol: str,
+        position_side: PositionSide,
+        position: Position,
+        state: MarketState,
+        current_ms: int,
+    ) -> Optional[ExitSignal]:
+        cfg = self._symbol_pressure_configs.get(symbol)
+        if cfg is None:
+            return None
+
+        dwell_key = f"{symbol}:{position_side.value}"
+        active_qty = state.best_bid_qty if position_side == PositionSide.LONG else state.best_ask_qty
+        if active_qty > cfg.threshold_qty:
+            start_ms = self._pressure_dwell_start_ms.get(dwell_key)
+            if start_ms is None:
+                self._pressure_dwell_start_ms[dwell_key] = current_ms
+                return None
+            if current_ms - start_ms < cfg.sustain_ms:
+                return None
+
+            reason = (
+                SignalReason.LONG_BID_PRESSURE_ACTIVE
+                if position_side == PositionSide.LONG
+                else SignalReason.SHORT_ASK_PRESSURE_ACTIVE
+            )
+            self._clear_pressure_skip_reason(dwell_key)
+            self._last_signal_ms[dwell_key] = current_ms
+            signal = ExitSignal(
+                symbol=symbol,
+                position_side=position_side,
+                reason=reason,
+                timestamp_ms=current_ms,
+                best_bid=state.best_bid,
+                best_ask=state.best_ask,
+                last_trade_price=state.last_trade_price if state.last_trade_price > Decimal("0")
+                else (state.best_bid if position_side == PositionSide.LONG else state.best_ask),
+                strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+                execution_preference=SignalExecutionPreference.AGGRESSIVE,
+                qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+                price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
+                ttl_override_ms=None,
+                cooldown_override_ms=cfg.aggressive_recheck_cooldown_ms,
+                fixed_lot_mult=cfg.lot_mult,
+            )
+            self._log_signal_if_changed(dwell_key, signal, state)
+            return signal
+
+        if dwell_key in self._pressure_dwell_start_ms:
+            del self._pressure_dwell_start_ms[dwell_key]
+
+        passive_price = self._resolve_passive_price(state, position_side, cfg.passive_level)
+        if passive_price is None:
+            self._log_pressure_skip_once(
+                dwell_key,
+                reason="passive_level_missing",
+                message=(
+                    f"盘口量模式跳过: {symbol} {position_side.value} "
+                    f"passive_level={cfg.passive_level} 对应档位不存在或数据无效"
+                ),
+            )
+            return None
+
+        reason = (
+            SignalReason.LONG_ASK_PRESSURE_PASSIVE
+            if position_side == PositionSide.LONG
+            else SignalReason.SHORT_BID_PRESSURE_PASSIVE
+        )
+        self._clear_pressure_skip_reason(dwell_key)
+        self._last_signal_ms[dwell_key] = current_ms
+        signal = ExitSignal(
+            symbol=symbol,
+            position_side=position_side,
+            reason=reason,
+            timestamp_ms=current_ms,
+            best_bid=state.best_bid,
+            best_ask=state.best_ask,
+            last_trade_price=state.last_trade_price if state.last_trade_price > Decimal("0")
+            else passive_price,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.PASSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=passive_price,
+            ttl_override_ms=cfg.passive_ttl_ms,
+            cooldown_override_ms=0,
+            fixed_lot_mult=cfg.lot_mult,
+        )
+        self._log_signal_if_changed(dwell_key, signal, state)
+        return signal
+
+    def _resolve_passive_price(
+        self,
+        state: MarketState,
+        position_side: PositionSide,
+        passive_level: int,
+    ) -> Optional[Decimal]:
+        levels = state.ask_levels if position_side == PositionSide.LONG else state.bid_levels
+        index = passive_level - 1
+        if index < 0 or index >= len(levels):
+            return None
+        price, qty = levels[index]
+        if price <= Decimal("0") or qty <= Decimal("0"):
+            return None
+        return price
+
+    def _log_signal_if_changed(self, key: str, signal: ExitSignal, state: MarketState) -> None:
+        signature = (signal.reason, state.best_bid, state.best_ask, signal.last_trade_price)
+        if self._last_logged_signal.get(key) == signature:
+            return
+
+        self._last_logged_signal[key] = signature
+        log_signal(
+            symbol=signal.symbol,
+            side=signal.position_side.value,
+            reason=signal.reason.value,
+            best_bid=state.best_bid,
+            best_ask=state.best_ask,
+            last_trade=signal.last_trade_price,
+            roi_mult=signal.roi_mult,
+            accel_mult=signal.accel_mult,
+            roi=signal.roi,
+            ret_window=signal.ret_window,
+        )
+
+    def _log_pressure_skip_once(self, key: str, *, reason: str, message: str) -> None:
+        if self._last_pressure_skip_reason.get(key) == reason:
+            return
+        self._last_pressure_skip_reason[key] = reason
+        get_logger().debug(message)
+
+    def _clear_pressure_skip_reason(self, key: str) -> None:
+        self._last_pressure_skip_reason.pop(key, None)
+
+    def reset_pressure_dwell(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        reason: Optional[str] = None,
+    ) -> None:
+        if self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY) != StrategyMode.ORDERBOOK_PRESSURE:
+            return
+
+        key = f"{symbol}:{position_side.value}"
+        if key in self._pressure_dwell_start_ms:
+            del self._pressure_dwell_start_ms[key]
+        if reason is not None:
+            self._clear_pressure_skip_reason(key)
+
+    def is_strategy_data_stale(self, symbol: str, current_ms: int, stale_data_ms: int) -> bool:
+        state = self._market_states.get(symbol)
+        if state is None:
+            return True
+
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        if strategy_mode != StrategyMode.ORDERBOOK_PRESSURE:
+            return (current_ms - state.last_update_ms) > stale_data_ms if state.last_update_ms > 0 else True
+
+        book_stale = (
+            state.last_book_ticker_ms <= 0 or current_ms - state.last_book_ticker_ms > stale_data_ms
+        )
+        depth_stale = (
+            state.last_depth_update_ms <= 0 or current_ms - state.last_depth_update_ms > stale_data_ms
+        )
+        if book_stale or depth_stale:
+            stale_parts: list[str] = []
+            if book_stale:
+                stale_parts.append("book_ticker")
+            if depth_stale:
+                stale_parts.append("depth10")
+            self._log_pressure_skip_once(
+                f"{symbol}:freshness",
+                reason="|".join(stale_parts),
+                message=f"盘口量模式跳过: {symbol} 数据陈旧 | stale_sources={','.join(stale_parts)}",
+            )
+            return True
+
+        self._clear_pressure_skip_reason(f"{symbol}:freshness")
+        return False
+
+    def _is_symbol_ready(self, symbol: str, state: MarketState) -> bool:
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        if strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
+            return (
+                self._has_book_data.get(symbol, False)
+                and self._has_depth_data.get(symbol, False)
+                and state.best_bid > Decimal("0")
+                and state.best_ask > Decimal("0")
+                and len(state.bid_levels) > 0
+                and len(state.ask_levels) > 0
+            )
+
+        return (
+            self._has_book_data.get(symbol, False)
+            and self._has_trade_data.get(symbol, False)
+            and state.previous_trade_price is not None
+            and state.best_bid > Decimal("0")
+            and state.best_ask > Decimal("0")
+            and state.last_trade_price > Decimal("0")
+        )
 
     def _check_long_exit(self, state: MarketState) -> Optional[SignalReason]:
         """
@@ -458,8 +706,16 @@ class SignalEngine:
             del self._has_book_data[symbol]
         if symbol in self._has_trade_data:
             del self._has_trade_data[symbol]
+        if symbol in self._has_depth_data:
+            del self._has_depth_data[symbol]
         if symbol in self._trade_history:
             del self._trade_history[symbol]
+        keys_to_remove = [k for k in self._pressure_dwell_start_ms if k.startswith(f"{symbol}:")]
+        for key in keys_to_remove:
+            del self._pressure_dwell_start_ms[key]
+        keys_to_remove = [k for k in self._last_pressure_skip_reason if k.startswith(f"{symbol}:")]
+        for key in keys_to_remove:
+            del self._last_pressure_skip_reason[key]
 
         # 清除相关的节流记录
         keys_to_remove = [k for k in self._last_signal_ms if k.startswith(f"{symbol}:")]

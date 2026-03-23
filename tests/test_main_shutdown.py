@@ -8,6 +8,7 @@ main.py 应用关闭行为 & 命令解析 & 保护止损调度竞态测试
 """
 
 import asyncio
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,7 +16,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.main import Application
-from src.models import AccountUpdateEvent
+from src.models import AccountUpdateEvent, Position, PositionSide
+from src.models import (
+    ExecutionState,
+    ExitSignal,
+    MarketState,
+    OrderResult,
+    SignalExecutionPreference,
+    SignalReason,
+    StrategyMode,
+    QtyPolicy,
+    SymbolRules,
+    RiskFlag,
+)
+from src.execution.engine import ExecutionEngine
 from src.notify.pause_manager import PauseManager
 from src.utils.logger import setup_logger
 
@@ -41,6 +55,253 @@ class DummyWS:
     async def disconnect(self) -> None:
         self.disconnect_called = True
         self._block.set()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_symbol_side_resets_pressure_dwell_on_market_stale():
+    app = Application.__new__(Application)
+    app.signal_engine = MagicMock()
+    app.signal_engine.is_strategy_data_stale.return_value = False
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.ws.stale_data_ms = 1000
+    app._calibrating = False
+    app.pause_manager = MagicMock()
+    app.pause_manager.is_paused.return_value = False
+    app._positions = {
+        "DASH/USDT:USDT": {
+            PositionSide.SHORT: Position(
+                symbol="DASH/USDT:USDT",
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("-5"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            )
+        }
+    }
+    app.market_ws = MagicMock()
+    app.market_ws.is_stale.return_value = True
+
+    await app._evaluate_symbol_side("DASH/USDT:USDT", PositionSide.SHORT)
+
+    app.signal_engine.reset_pressure_dwell.assert_called_once_with(
+        "DASH/USDT:USDT",
+        PositionSide.SHORT,
+        reason="market_stale",
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_symbol_side_resets_pressure_dwell_on_flat_position():
+    app = Application.__new__(Application)
+    app.signal_engine = MagicMock()
+    app.config_loader = MagicMock()
+    app._calibrating = False
+    app.pause_manager = MagicMock()
+    app.pause_manager.is_paused.return_value = False
+    app._positions = {
+        "DASH/USDT:USDT": {
+            PositionSide.SHORT: Position(
+                symbol="DASH/USDT:USDT",
+                position_side=PositionSide.SHORT,
+                position_amt=Decimal("0"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            )
+        }
+    }
+    app.market_ws = MagicMock()
+
+    await app._evaluate_symbol_side("DASH/USDT:USDT", PositionSide.SHORT)
+
+    app.signal_engine.reset_pressure_dwell.assert_called_once_with(
+        "DASH/USDT:USDT",
+        PositionSide.SHORT,
+        reason="position_flat",
+    )
+
+
+def _make_pressure_eval_app(
+    position_side: PositionSide,
+    position_amt: Decimal,
+    signal: ExitSignal,
+    risk_triggered: bool,
+    *,
+    state_preset: ExecutionState = ExecutionState.IDLE,
+    current_passive_order: bool = False,
+):
+    """构造用于 _evaluate_side P1-liq 测试的 Application stub。"""
+    app = Application.__new__(Application)
+    app.signal_engine = MagicMock()
+    app.signal_engine.is_strategy_data_stale.return_value = False
+    app.signal_engine.evaluate.return_value = signal
+    app.signal_engine.get_market_state.return_value = MarketState(
+        symbol=signal.symbol,
+        best_bid=signal.best_bid,
+        best_ask=signal.best_ask,
+        last_trade_price=signal.last_trade_price,
+        previous_trade_price=signal.last_trade_price,
+        last_update_ms=1000,
+        is_ready=True,
+    )
+    app.signal_engine.reset_pressure_dwell = MagicMock()
+
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.ws.stale_data_ms = 1000
+    app.config_loader.config.global_.risk.levels = {}
+    app.config_loader.config.global_.telegram.enabled = False
+
+    sym_cfg = MagicMock()
+    sym_cfg.liq_distance_threshold = Decimal("0.02")
+    sym_cfg.pressure_exit_aggressive_recheck_cooldown_ms = 1000
+    app._symbol_configs = {signal.symbol: sym_cfg}
+
+    app._calibrating = False
+    app.pause_manager = MagicMock()
+    app.pause_manager.is_paused.return_value = False
+    app.telegram_notifier = None
+    app.market_ws = MagicMock()
+    app.market_ws.is_stale.return_value = False
+    app.exchange = MagicMock()
+    app.exchange.fetch_positions = AsyncMock(return_value=[])
+    app.exchange.place_order = AsyncMock(return_value=OrderResult(success=False, error_message="skip"))
+    app._client_order_id_prefix = "test-prefix-"
+    app._order_id_counter = 0
+
+    app._positions = {
+        signal.symbol: {
+            position_side: Position(
+                symbol=signal.symbol,
+                position_side=position_side,
+                position_amt=position_amt,
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+                mark_price=Decimal("10"),
+                liquidation_price=Decimal("9"),
+            )
+        }
+    }
+
+    risk_flag = RiskFlag(
+        symbol=signal.symbol,
+        position_side=position_side,
+        is_triggered=risk_triggered,
+        dist_to_liq=Decimal("0.01"),
+        reason="liq_distance_breach",
+    )
+    app.risk_manager = MagicMock()
+    app.risk_manager.check_risk.return_value = risk_flag
+
+    rules = SymbolRules(
+        symbol=signal.symbol,
+        tick_size=Decimal("0.1"),
+        step_size=Decimal("0.001"),
+        min_qty=Decimal("0.001"),
+        min_notional=Decimal("5"),
+    )
+    app._rules = {signal.symbol: rules}
+
+    engine = ExecutionEngine(
+        place_order=AsyncMock(return_value=OrderResult(success=False, error_message="skip")),
+        cancel_order=AsyncMock(return_value=OrderResult(success=True, order_id="x")),
+    )
+    state = engine.get_state(signal.symbol, position_side)
+    state.state = state_preset
+    if current_passive_order:
+        state.current_order_id = "passive-live"
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+        state.current_order_cooldown_ms_override = 0
+    app.execution_engines = {signal.symbol: engine}
+
+    return app, engine
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_risk_promotes_pressure_passive_to_aggressive_idle():
+    """risk 触发 + pressure PASSIVE + IDLE → on_signal 收到 AGGRESSIVE 信号。"""
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.PASSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("9.8"),
+        ttl_override_ms=10000,
+        cooldown_override_ms=0,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=True,
+    )
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),
+        current_ms=1000,
+    )
+
+    assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+    assert signal.price_override == Decimal("10.1")
+    assert signal.ttl_override_ms is None
+    assert signal.cooldown_override_ms == 1000
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_risk_promotes_pressure_passive_triggers_preempt():
+    """risk 触发 + pressure PASSIVE + WAITING(被动单) → preempt 撤单触发。"""
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.PASSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("9.8"),
+        ttl_override_ms=10000,
+        cooldown_override_ms=0,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=True,
+        state_preset=ExecutionState.WAITING,
+        current_passive_order=True,
+    )
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),
+        current_ms=1000,
+    )
+
+    assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+    state = engine.get_state(symbol, PositionSide.SHORT)
+    assert state.state == ExecutionState.COOLDOWN
+    assert state.current_order_id == "passive-live"
 
 
 @pytest.mark.asyncio

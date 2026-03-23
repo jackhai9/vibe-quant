@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断与按 symbol 策略模式） -->
 <!-- Pos: memory-bank/architecture 总览 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -87,10 +87,10 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | 模块 | 职责 | 输入 | 输出 |
 |------|------|------|------|
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
-| **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s + User Data Stream（含 ACCOUNT_UPDATE/ACCOUNT_CONFIG_UPDATE），断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
+| **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断 | 配置, OrderIntent | OrderResult, Position |
-| **SignalEngine** | 评估平仓触发条件，维护 prev/last trade price；计算 accel/ROI 倍数 | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 状态机管理，下单/撤单/TTL 超时处理（含成交率反馈与 TTL 覆盖） | ExitSignal, 配置 | OrderIntent |
+| **SignalEngine** | 按 symbol 在 `legacy` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell 与来源 freshness；计算 accel/ROI 倍数 | MarketEvent, Position | ExitSignal |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
@@ -111,23 +111,36 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | `OrderStatus` | NEW / PARTIALLY_FILLED / FILLED / CANCELED / REJECTED / EXPIRED |
 | `ExecutionMode` | MAKER_ONLY / AGGRESSIVE_LIMIT |
 | `ExecutionState` | IDLE / PLACING / WAITING / CANCELING / COOLDOWN |
-| `SignalReason` | long_primary / long_bid_improve / short_primary / short_ask_improve |
+| `StrategyMode` | legacy / orderbook_pressure |
+| `SignalExecutionPreference` | passive / aggressive |
+| `QtyPolicy` | dynamic / fixed_min_qty_mult |
+| `SignalReason` | long_primary / long_bid_improve / short_primary / short_ask_improve / pressure_* |
 
 ### 核心数据结构
 | 结构 | 用途 | 关键字段 |
 |------|------|----------|
-| `MarketEvent` | WS 原始事件 | symbol, best_bid/ask, last_trade_price, mark_price, event_type |
-| `MarketState` | 聚合后市场状态 | symbol, best_bid/ask, last/previous_trade_price, is_ready |
+| `MarketEvent` | WS 原始事件 | symbol, best_bid/ask, best_bid_qty/ask_qty, bid_levels/ask_levels, last_trade_price, mark_price, event_type |
+| `MarketState` | 聚合后市场状态 | symbol, best_bid/ask, best_bid_qty/ask_qty, bid_levels/ask_levels, last/previous trade, source timestamps, is_ready |
 | `Position` | 仓位信息 | symbol, position_side, position_amt, entry_price, unrealized_pnl |
 | `PositionUpdate` | 仓位更新事件（WS） | symbol, position_side, position_amt, entry_price, unrealized_pnl |
 | `LeverageUpdate` | 杠杆更新事件（WS） | symbol, leverage, timestamp_ms |
 | `SymbolRules` | 交易规则 | tick_size, step_size, min_qty, min_notional |
-| `ExitSignal` | 平仓信号 | symbol, position_side, reason, timestamp_ms, roi_mult, accel_mult, roi, ret_window |
+| `ExitSignal` | 平仓信号 | symbol, position_side, reason, strategy_mode, execution_preference, qty_policy, price/ttl/cooldown overrides |
 | `OrderIntent` | 下单意图 | symbol, side, position_side, qty, price, reduce_only=True, is_risk, client_order_id |
 | `OrderResult` | 下单结果 | success, order_id, status, filled_qty, avg_price |
 | `OrderUpdate` | 订单更新事件（WS） | order_id, status, filled_qty, is_maker, realized_pnl, fee, fee_asset |
-| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器 |
+| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器, signal override 上下文 |
 | `RiskFlag` | 风险标记 | is_triggered, dist_to_liq, reason |
+
+### 策略模式（已实现）
+
+- `legacy`：沿用原有 trade + bookTicker 信号、ROI/accel 数量体系与模式轮转
+- `orderbook_pressure`：按 symbol 显式启用；同一 symbol 上与 `legacy` 互斥
+  - LONG 观察 `best_bid_qty`，SHORT 观察 `best_ask_qty`
+  - 顶档量连续超过阈值 `sustain_ms` 后，主动吃一档（LONG=`SELL @ best_bid`，SHORT=`BUY @ best_ask`）
+  - 主动条件未成立时，仅保留 1 笔固定档位的被动单（LONG=`ask[passive_level]`，SHORT=`bid[passive_level]`）
+  - 数量固定为 `min_qty × lot_mult`，只按 `step_size` 与剩余仓位收敛，不叠加 `base_lot_mult/roi_mult/accel_mult`
+  - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新时，本轮跳过并重置 dwell
 
 ---
 
@@ -166,7 +179,8 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 ### 挂单清理（已实现）
 
 - 下单时设置 `newClientOrderId`（前缀 `<client_order_prefix>-{run_id}-`，其中 `client_order_prefix` 为固定前缀，`run_id` 每次启动自动生成）。退出时只撤销本次运行前缀挂单（优先按 symbol 拉取 openOrders，降低交易所权重），避免误撤手动订单；注意：若进程崩溃/强杀，遗留挂单不会自动清理。
-- 订单 TTL 超时后进入 `COOLDOWN` 但保留订单上下文，允许迟到的 WS 回执继续更新状态，避免因 WS 丢包导致状态机卡死。
+- 订单 TTL 超时后，撤单成功的订单进入 `COOLDOWN` 并保留订单上下文，直到 `ws_fill_grace_ms` 窗口结束；撤单失败的订单保留在 `WAITING` 并按短 backoff 重试撤单，避免丢失 live order 上下文后重复下单。
+- `orderbook_pressure` 的被动 `GTX` 单若收到 `-5022 post only reject`，不会自动回退为 `GTC` taker 单；被动语义保持不变，等待下一轮盘口重评估。
 
 ### 倍数系统（已实现）
 

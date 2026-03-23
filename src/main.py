@@ -37,7 +37,7 @@ from src.config.models import MergedSymbolConfig
 from src.exchange.adapter import ExchangeAdapter
 from src.ws.market import MarketWSClient
 from src.ws.user_data import UserDataWSClient
-from src.signal.engine import SignalEngine
+from src.signal.engine import SignalEngine, PressureSignalConfig
 from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
@@ -61,6 +61,8 @@ from src.models import (
     ExecutionState,
     ExecutionMode,
     SignalReason,
+    StrategyMode,
+    SignalExecutionPreference,
     TimeInForce,
 )
 from src.utils.logger import (
@@ -1081,6 +1083,11 @@ class Application:
             return intent, result, False
         if state.state not in (ExecutionState.PLACING, ExecutionState.IDLE, ExecutionState.COOLDOWN):
             return intent, result, False
+        if (
+            state.current_order_strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+            and state.current_order_execution_preference == SignalExecutionPreference.PASSIVE
+        ):
+            return intent, result, False
 
         engine.set_mode(intent.symbol, intent.position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="post_only_reject_retry")
         state.current_order_mode = ExecutionMode.AGGRESSIVE_LIMIT
@@ -1597,8 +1604,37 @@ class Application:
             self._rules[symbol] = rules
             self._symbol_configs[symbol] = cfg
 
+            pressure_config: PressureSignalConfig | None = None
+            if cfg.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE.value and cfg.pressure_exit_enabled:
+                threshold_qty = cfg.pressure_exit_threshold_qty
+                sustain_ms = cfg.pressure_exit_sustain_ms
+                passive_level = cfg.pressure_exit_passive_level
+                lot_mult = cfg.pressure_exit_lot_mult
+                aggressive_recheck_cooldown_ms = cfg.pressure_exit_aggressive_recheck_cooldown_ms
+                passive_ttl_ms = cfg.pressure_exit_passive_ttl_ms
+                if (
+                    threshold_qty is None
+                    or sustain_ms is None
+                    or passive_level is None
+                    or lot_mult is None
+                    or aggressive_recheck_cooldown_ms is None
+                    or passive_ttl_ms is None
+                ):
+                    log_error("盘口量策略配置缺失", symbol=symbol)
+                    return False
+                pressure_config = PressureSignalConfig(
+                    threshold_qty=threshold_qty,
+                    sustain_ms=sustain_ms,
+                    passive_level=passive_level,
+                    lot_mult=lot_mult,
+                    aggressive_recheck_cooldown_ms=aggressive_recheck_cooldown_ms,
+                    passive_ttl_ms=passive_ttl_ms,
+                )
+
             self.signal_engine.configure_symbol(
                 symbol,
+                strategy_mode=StrategyMode(cfg.strategy_mode),
+                pressure_config=pressure_config,
                 min_signal_interval_ms=cfg.min_signal_interval_ms,
                 accel_window_ms=cfg.accel_window_ms,
                 accel_tiers=[(t.ret, t.mult) for t in cfg.accel_tiers],
@@ -1657,9 +1693,17 @@ class Application:
 
         ws_config = self.config_loader.config.global_.ws
         proxy = self.config_loader.config.global_.proxy
+        depth_symbols = [
+            symbol
+            for symbol in symbols
+            if self._symbol_configs.get(symbol)
+            and self._symbol_configs[symbol].strategy_mode == StrategyMode.ORDERBOOK_PRESSURE.value
+            and self._symbol_configs[symbol].pressure_exit_enabled
+        ]
 
         self.market_ws = MarketWSClient(
             symbols=symbols,
+            depth_symbols=depth_symbols,
             on_event=self._on_market_event,
             on_reconnect=self._on_ws_reconnect,
             initial_delay_ms=ws_config.reconnect.initial_delay_ms,
@@ -1806,10 +1850,20 @@ class Application:
         for symbol in symbols:
             # 检查数据是否就绪
             if not self.signal_engine.is_data_ready(symbol):
+                self._reset_pressure_dwell_for_symbol(symbol, reason="data_not_ready")
                 continue
 
             # 检查是否有陈旧数据
             if self.market_ws and self.market_ws.is_stale(symbol):
+                self._reset_pressure_dwell_for_symbol(symbol, reason="market_stale")
+                continue
+
+            if self.signal_engine.is_strategy_data_stale(
+                symbol,
+                current_ms,
+                self.config_loader.config.global_.ws.stale_data_ms,
+            ):
+                self._reset_pressure_dwell_for_symbol(symbol, reason="strategy_data_stale")
                 continue
 
             # 获取市场状态
@@ -1861,9 +1915,19 @@ class Application:
 
         position = self._positions.get(symbol, {}).get(position_side)
         if not position or abs(position.position_amt) == Decimal("0"):
+            self._reset_pressure_dwell(symbol, position_side, reason="position_flat")
             return
 
         if self.market_ws and self.market_ws.is_stale(symbol):
+            self._reset_pressure_dwell(symbol, position_side, reason="market_stale")
+            return
+
+        if self.signal_engine.is_strategy_data_stale(
+            symbol,
+            current_time_ms(),
+            self.config_loader.config.global_.ws.stale_data_ms,
+        ):
+            self._reset_pressure_dwell(symbol, position_side, reason="strategy_data_stale")
             return
 
         market_state = self.signal_engine.get_market_state(symbol)
@@ -1998,10 +2062,19 @@ class Application:
         # 获取仓位
         position = self._positions.get(symbol, {}).get(position_side)
         if not position or abs(position.position_amt) == Decimal("0"):
+            self._reset_pressure_dwell(symbol, position_side, reason="position_flat")
             return
 
         # 检查冷却期
         engine.check_cooldown(symbol, position_side, current_ms)
+
+        if self.signal_engine and self.config_loader and self.signal_engine.is_strategy_data_stale(
+            symbol,
+            current_ms,
+            self.config_loader.config.global_.ws.stale_data_ms,
+        ):
+            self._reset_pressure_dwell(symbol, position_side, reason="strategy_data_stale")
+            return
 
         # 评估信号
         signal = self.signal_engine.evaluate(  # type: ignore[union-attr]
@@ -2013,8 +2086,8 @@ class Application:
 
         if signal:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
+            # 对所有策略模式生效；pressure 被动信号在 risk 触发时提升为主动
             if self.risk_manager:
-                # 使用 per-symbol 风控阈值
                 symbol_cfg = self._symbol_configs.get(symbol)
                 symbol_threshold = symbol_cfg.liq_distance_threshold if symbol_cfg else None
                 risk_flag = self.risk_manager.check_risk(position, liq_distance_threshold=symbol_threshold)
@@ -2049,15 +2122,48 @@ class Application:
                                     name=f"risk_trigger:{symbol}:{position_side.value}",
                                 )
 
+                    # pressure 被动信号在 risk 触发时提升为主动吃一档
+                    if (
+                        signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+                        and signal.execution_preference == SignalExecutionPreference.PASSIVE
+                    ):
+                        signal.execution_preference = SignalExecutionPreference.AGGRESSIVE
+                        signal.price_override = (
+                            signal.best_bid if signal.position_side == PositionSide.LONG else signal.best_ask
+                        )
+                        signal.ttl_override_ms = None
+                        p_cfg = symbol_cfg
+                        if p_cfg and p_cfg.pressure_exit_aggressive_recheck_cooldown_ms is not None:
+                            signal.cooldown_override_ms = p_cfg.pressure_exit_aggressive_recheck_cooldown_ms
+
+            # 主动信号抢占被动单
+            state = engine.get_state(symbol, position_side)
+            if (
+                signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+                and state.state == ExecutionState.WAITING
+                and state.current_order_execution_preference == SignalExecutionPreference.PASSIVE
+            ):
+                cancelled = await engine.cancel_current_order_for_preempt(
+                    symbol=symbol,
+                    position_side=position_side,
+                    current_ms=current_ms,
+                )
+                if cancelled:
+                    await self._refresh_position(symbol)
+                return
+
             # 成交率反馈：低成交率直接切到激进限价，影响当前信号下单
-            if engine.fill_rate_feedback_enabled:
+            if engine.fill_rate_feedback_enabled and signal.strategy_mode == StrategyMode.LEGACY:
                 engine.refresh_fill_rate(symbol, position_side, current_ms)
                 state = engine.get_state(symbol, position_side)
                 if state.fill_rate_bucket == "low" and state.mode == ExecutionMode.MAKER_ONLY:
                     engine.set_mode(symbol, position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="fill_rate_low")
 
             # improve 信号直接吃单：价格正在朝有利方向移动，跳过 MAKER_ONLY 直接使用 AGGRESSIVE_LIMIT
-            if signal.reason in (SignalReason.LONG_BID_IMPROVE, SignalReason.SHORT_ASK_IMPROVE):
+            if (
+                signal.strategy_mode == StrategyMode.LEGACY
+                and signal.reason in (SignalReason.LONG_BID_IMPROVE, SignalReason.SHORT_ASK_IMPROVE)
+            ):
                 state = engine.get_state(symbol, position_side)
                 if state.mode != ExecutionMode.AGGRESSIVE_LIMIT:
                     engine.set_mode(symbol, position_side, ExecutionMode.AGGRESSIVE_LIMIT, reason="improve_signal")
@@ -2090,6 +2196,15 @@ class Application:
                 # 更新仓位
                 if result.success:
                     await self._refresh_position(symbol)
+
+    def _reset_pressure_dwell(self, symbol: str, position_side: PositionSide, *, reason: str) -> None:
+        if not self.signal_engine:
+            return
+        self.signal_engine.reset_pressure_dwell(symbol, position_side, reason=reason)
+
+    def _reset_pressure_dwell_for_symbol(self, symbol: str, *, reason: str) -> None:
+        self._reset_pressure_dwell(symbol, PositionSide.LONG, reason=reason)
+        self._reset_pressure_dwell(symbol, PositionSide.SHORT, reason=reason)
 
     async def _refresh_position(self, symbol: str) -> None:
         """刷新单个 symbol 的仓位"""

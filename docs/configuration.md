@@ -1,5 +1,5 @@
 <!-- Input: 配置项与环境变量 -->
-<!-- Output: 配置说明与调优建议（含成交率反馈与自动发现持仓说明） -->
+<!-- Output: 配置说明与调优建议（含成交率反馈、自动发现持仓与按 symbol 策略模式） -->
 <!-- Pos: 文档/配置参数手册 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 配置参数手册
@@ -129,6 +129,10 @@ symbols:
 - **单位**: 毫秒
 - **说明**: 数据陈旧阈值，超过此时间未收到更新则认为数据过期
 - **影响**: 过期数据不会触发平仓信号，防止基于陈旧行情做出错误决策
+- **orderbook_pressure 补充**:
+  - 顶档量来自 `bookTicker` 的 `B/A`
+  - 被动挂单档位来自 `depth10@100ms`
+  - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新，该模式本轮跳过，并重置主动条件 dwell
 - **调优建议**:
   - 正常网络: `1500-2000ms`
   - 不稳定网络: `3000-5000ms`（增加容忍度）
@@ -610,6 +614,16 @@ risk:
 ```yaml
 symbols:
   "SYMBOL/USDT:USDT":
+    strategy:
+      mode: legacy                # 可选：legacy | orderbook_pressure
+    pressure_exit:
+      enabled: true
+      threshold_qty: 100
+      sustain_ms: 2000
+      passive_level: 3
+      lot_mult: 5
+      aggressive_recheck_cooldown_ms: 1000
+      passive_ttl_ms: 10000
     execution:
       order_ttl_ms: 3000          # 覆盖全局配置
       max_order_notional: 500
@@ -632,6 +646,53 @@ symbols:
       protective_stop:
         dist_to_liq: 0.015
 ```
+
+### 策略模式覆盖
+
+#### strategy.mode
+- **类型**: `enum`
+- **可选值**: `"legacy"` | `"orderbook_pressure"`
+- **默认值**: `"legacy"`
+- **说明**:
+  - `legacy`：沿用原有 trade/best bid/ask 触发逻辑、ROI/accel 数量体系与执行模式轮转
+  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `legacy` 互斥，不并行运行
+
+#### pressure_exit
+- **生效条件**: 仅当 `strategy.mode == "orderbook_pressure"` 时参与运行
+- **未启用行为**:
+  - 配置了 `pressure_exit` 但 `strategy.mode != "orderbook_pressure"` 时，按“存在但未启用”处理
+  - `strategy.mode == "orderbook_pressure"` 但缺少 `pressure_exit` 时，配置校验失败
+- **字段说明**:
+  - `enabled`: 是否启用盘口量平仓路径
+  - `threshold_qty`: 顶档量阈值；LONG 看 `best_bid_qty`，SHORT 看 `best_ask_qty`
+  - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
+  - `passive_level`: 主动条件不成立时使用的固定档位；LONG 取 `ask[passive_level]`，SHORT 取 `bid[passive_level]`
+  - `lot_mult`: 固定下单量倍率；最终数量为 `min_qty × lot_mult`，按 `step_size` 规整并 clamp 到剩余仓位
+  - `aggressive_recheck_cooldown_ms`: 主动单终态后的重检冷却
+  - `passive_ttl_ms`: 被动单 TTL；超时撤单后不额外附加策略冷却
+
+### 示例：按 symbol 启用盘口量模式
+
+```yaml
+symbols:
+  "DASH/USDT:USDT":
+    strategy:
+      mode: orderbook_pressure   # 启用盘口量模式；不写时默认 legacy
+    pressure_exit:
+      threshold_qty: 100         # LONG 看 best_bid_qty；SHORT 看 best_ask_qty
+      sustain_ms: 2000           # 顶档量连续超过阈值至少 2000ms 后才主动吃单
+      passive_level: 3           # 主动条件不成立时挂在第 3 档
+      lot_mult: 5                # 固定片大小 = min_qty × 5
+      aggressive_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
+      passive_ttl_ms: 10000      # 被动单 10000ms 未成交则自动撤单
+```
+
+运行时语义：
+- LONG：`best_bid_qty > threshold_qty` 连续 `sustain_ms` 后，主动下 `SELL @ best_bid`
+- SHORT：`best_ask_qty > threshold_qty` 连续 `sustain_ms` 后，主动下 `BUY @ best_ask`
+- 主动条件未成立时，仅挂 1 笔固定档位的被动单
+- 被动档位不存在或盘口数据不完整时，本轮跳过，不猜价格
+- 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
 
 ### 示例：ZEN 永续覆盖配置
 

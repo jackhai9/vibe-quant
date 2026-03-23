@@ -42,6 +42,9 @@ from src.models import (
     SideExecutionState,
     MarketState,
     SymbolRules,
+    StrategyMode,
+    SignalExecutionPreference,
+    QtyPolicy,
 )
 from src.utils.logger import (
     get_logger,
@@ -343,45 +346,33 @@ class ExecutionEngine:
             return None
 
         # 计算下单数量
-        qty = self.compute_qty(
-            position_amt=position_amt,
-            min_qty=rules.min_qty,
-            step_size=rules.step_size,
-            last_trade_price=market_state.last_trade_price,
-            roi_mult=signal.roi_mult,
-            accel_mult=signal.accel_mult,
-        )
+        if signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT:
+            qty = self.compute_fixed_qty(
+                position_amt=position_amt,
+                min_qty=rules.min_qty,
+                step_size=rules.step_size,
+                lot_mult=signal.fixed_lot_mult or 1,
+            )
+        else:
+            qty = self.compute_qty(
+                position_amt=position_amt,
+                min_qty=rules.min_qty,
+                step_size=rules.step_size,
+                last_trade_price=market_state.last_trade_price,
+                roi_mult=signal.roi_mult,
+                accel_mult=signal.accel_mult,
+            )
 
         if qty <= Decimal("0"):
             logger.debug(f"{signal.symbol} {signal.position_side.value} 计算数量为 0")
             return None
 
-        # 根据执行模式计算价格与 TIF
-        if state.mode == ExecutionMode.MAKER_ONLY:
-            price = self.build_maker_price(
-                position_side=signal.position_side,
-                best_bid=market_state.best_bid,
-                best_ask=market_state.best_ask,
-                tick_size=rules.tick_size,
-            )
-            time_in_force = TimeInForce.GTX  # Post-only for maker
-        elif state.mode == ExecutionMode.AGGRESSIVE_LIMIT:
-            price = self.build_aggressive_limit_price(
-                position_side=signal.position_side,
-                best_bid=market_state.best_bid,
-                best_ask=market_state.best_ask,
-                tick_size=rules.tick_size,
-            )
-            time_in_force = TimeInForce.GTC
-        else:
-            # 默认回退到 maker
-            price = self.build_maker_price(
-                position_side=signal.position_side,
-                best_bid=market_state.best_bid,
-                best_ask=market_state.best_ask,
-                tick_size=rules.tick_size,
-            )
-            time_in_force = TimeInForce.GTX
+        price, time_in_force = self._resolve_signal_price_and_tif(
+            signal=signal,
+            rules=rules,
+            market_state=market_state,
+            state=state,
+        )
 
         # 确定下单方向
         # LONG 平仓 -> SELL, SHORT 平仓 -> BUY
@@ -405,6 +396,11 @@ class ExecutionEngine:
         state.current_order_reason = signal.reason.value
         state.current_order_is_risk = False
         state.current_order_filled_qty = Decimal("0")
+        state.current_order_execution_preference = signal.execution_preference
+        state.current_order_strategy_mode = signal.strategy_mode
+        state.current_order_ttl_ms_override = signal.ttl_override_ms
+        state.current_order_cooldown_ms_override = signal.cooldown_override_ms
+        state.current_order_cancel_retry_after_ms = 0
 
         logger.debug(
             f"创建下单意图: {signal.symbol} {side.value} {qty} @ {price} "
@@ -524,6 +520,11 @@ class ExecutionEngine:
         state.current_order_reason = reason
         state.current_order_is_risk = True
         state.current_order_filled_qty = Decimal("0")
+        state.current_order_execution_preference = SignalExecutionPreference.AGGRESSIVE
+        state.current_order_strategy_mode = StrategyMode.LEGACY
+        state.current_order_ttl_ms_override = None
+        state.current_order_cooldown_ms_override = None
+        state.current_order_cancel_retry_after_ms = 0
 
         return intent
 
@@ -589,13 +590,7 @@ class ExecutionEngine:
         else:
             # 下单失败，回到 IDLE 状态
             # 下单失败进入短暂冷却，避免连续触发导致刷屏/触发限速
-            state.state = ExecutionState.COOLDOWN
-            state.current_order_id = None
-            state.current_order_placed_ms = current_ms
-            state.current_order_mode = None
-            state.current_order_reason = None
-            state.current_order_is_risk = False
-            state.current_order_filled_qty = Decimal("0")
+            self._enter_post_order_state(state, current_ms)
             # -5022 Post Only rejected 属于“可预期”的交易所拒单，已由 ExchangeAdapter 以结构化日志记录，避免重复刷屏
             if result.error_code == "-5022":
                 return
@@ -757,7 +752,7 @@ class ExecutionEngine:
         elif update.status == OrderStatus.CANCELED:
             await self._handle_canceled(update.symbol, update.position_side, current_ms)
         elif update.status == OrderStatus.REJECTED:
-            await self._handle_rejected(update.symbol, update.position_side)
+            await self._handle_rejected(update.symbol, update.position_side, current_ms)
         elif update.status == OrderStatus.EXPIRED:
             await self._handle_expired(update.symbol, update.position_side, current_ms)
         elif update.status == OrderStatus.PARTIALLY_FILLED:
@@ -870,14 +865,7 @@ class ExecutionEngine:
             if self.aggr_fills_to_deescalate > 0 and state.aggr_fill_count >= self.aggr_fills_to_deescalate:
                 self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="aggr_fill_deescalate")
 
-        # 回到 IDLE 状态
-        state.state = ExecutionState.IDLE
-        state.current_order_id = None
-        state.current_order_placed_ms = 0
-        state.current_order_mode = None
-        state.current_order_reason = None
-        state.current_order_is_risk = False
-        state.current_order_filled_qty = Decimal("0")
+        self._enter_post_order_state(state, current_ms)
 
     async def _handle_canceled(
         self,
@@ -896,19 +884,13 @@ class ExecutionEngine:
             reason=f"timeout_{position_side.value}",
         )
 
-        # 进入 COOLDOWN 状态
-        state.state = ExecutionState.COOLDOWN
-        state.current_order_id = None
-        state.current_order_placed_ms = current_ms  # 用作冷却开始时间
-        state.current_order_mode = None
-        state.current_order_reason = None
-        state.current_order_is_risk = False
-        state.current_order_filled_qty = Decimal("0")
+        self._enter_post_order_state(state, current_ms)
 
     async def _handle_rejected(
         self,
         symbol: str,
         position_side: PositionSide,
+        current_ms: int,
     ) -> None:
         """处理订单拒绝（例如 GTX 被拒）"""
         state = self.get_state(symbol, position_side)
@@ -917,14 +899,7 @@ class ExecutionEngine:
 
         get_logger().warning(f"订单被拒绝: {symbol} {position_side.value}")
 
-        # 回到 IDLE 状态
-        state.state = ExecutionState.IDLE
-        state.current_order_id = None
-        state.current_order_placed_ms = 0
-        state.current_order_mode = None
-        state.current_order_reason = None
-        state.current_order_is_risk = False
-        state.current_order_filled_qty = Decimal("0")
+        self._enter_post_order_state(state, current_ms)
 
     async def _handle_expired(
         self,
@@ -939,14 +914,7 @@ class ExecutionEngine:
 
         get_logger().info(f"订单过期: {symbol} {position_side.value}")
 
-        # 进入 COOLDOWN 状态
-        state.state = ExecutionState.COOLDOWN
-        state.current_order_id = None
-        state.current_order_placed_ms = current_ms
-        state.current_order_mode = None
-        state.current_order_reason = None
-        state.current_order_is_risk = False
-        state.current_order_filled_qty = Decimal("0")
+        self._enter_post_order_state(state, current_ms)
 
     async def check_timeout(self, symbol: str, position_side: PositionSide, current_ms: int) -> bool:
         """
@@ -975,9 +943,13 @@ class ExecutionEngine:
         # 只在 WAITING 状态检查超时
         if state.state != ExecutionState.WAITING:
             return False
+        if current_ms < state.current_order_cancel_retry_after_ms:
+            return False
 
         order_mode = state.current_order_mode or state.mode
-        if state.ttl_ms_override is not None:
+        if state.current_order_ttl_ms_override is not None:
+            ttl_ms = state.current_order_ttl_ms_override
+        elif state.ttl_ms_override is not None:
             ttl_ms = state.ttl_ms_override
         elif order_mode == ExecutionMode.MAKER_ONLY and state.fill_rate_ttl_override is not None:
             ttl_ms = state.fill_rate_ttl_override
@@ -1027,6 +999,12 @@ class ExecutionEngine:
             elif had_fill and state.mode != ExecutionMode.MAKER_ONLY:
                 self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="partial_fill_deescalate")
 
+        cooldown_ms = (
+            state.current_order_cooldown_ms_override
+            if state.current_order_cooldown_ms_override is not None
+            else self.repost_cooldown_ms
+        )
+
         # 发起撤单请求
         if state.current_order_id:
             try:
@@ -1035,14 +1013,23 @@ class ExecutionEngine:
                     get_logger().warning(
                         f"撤单请求失败: {symbol} {state.current_order_id} - {result.error_message}"
                     )
+                    state.state = ExecutionState.WAITING
+                    state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+                    return True
                 # 进入冷却期但保留订单上下文，确保后续 WS 回执仍可被处理
                 state.state = ExecutionState.COOLDOWN
                 state.current_order_placed_ms = current_ms
+                state.current_order_cancel_retry_after_ms = 0
+                state.current_order_terminal_grace_until_ms = current_ms + max(
+                    cooldown_ms,
+                    self.ws_fill_grace_ms,
+                )
             except Exception as e:
                 get_logger().warning(f"撤单请求失败: {symbol} {state.current_order_id} - {e}")
-                # 即使撤单请求失败，也进入 COOLDOWN（等待下次重试）
-                state.state = ExecutionState.COOLDOWN
-                state.current_order_placed_ms = current_ms
+                # 撤单请求失败时保留 WAITING，上下文不丢失，并在短 backoff 后重试
+                state.state = ExecutionState.WAITING
+                state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+                return True
 
         return True
 
@@ -1064,14 +1051,145 @@ class ExecutionEngine:
             return False
 
         elapsed = current_ms - state.current_order_placed_ms
-        if elapsed < self.repost_cooldown_ms:
+        cooldown_ms = (
+            state.current_order_cooldown_ms_override
+            if state.current_order_cooldown_ms_override is not None
+            else self.repost_cooldown_ms
+        )
+        if elapsed < cooldown_ms:
             return False
+
+        if state.current_order_id:
+            if current_ms < state.current_order_terminal_grace_until_ms:
+                return False
+            self._clear_current_order_fields(state, preserve_cooldown_override=False)
 
         # 冷却结束，回到 IDLE
         state.state = ExecutionState.IDLE
         state.current_order_placed_ms = 0
+        state.current_order_cooldown_ms_override = None
 
         return True
+
+    async def cancel_current_order_for_preempt(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        current_ms: int,
+        reason: str = "aggressive_preempt",
+    ) -> bool:
+        """在主动信号出现时，撤掉当前等待中的被动单。"""
+        state = self.get_state(symbol, position_side)
+        if state.state != ExecutionState.WAITING or not state.current_order_id:
+            return False
+        if state.current_order_execution_preference != SignalExecutionPreference.PASSIVE:
+            return False
+        if current_ms < state.current_order_cancel_retry_after_ms:
+            return False
+
+        order_id = state.current_order_id
+        state.state = ExecutionState.CANCELING
+        try:
+            result = await self.cancel_order(symbol, order_id)
+        except Exception as e:
+            state.state = ExecutionState.WAITING
+            state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+            get_logger().warning(f"主动信号抢占撤单异常: {symbol} {position_side.value} {order_id} - {e}")
+            return False
+        if not result.success:
+            state.state = ExecutionState.WAITING
+            state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+            get_logger().warning(f"主动信号抢占撤单失败: {symbol} {position_side.value} {order_id} - {result.error_message}")
+            return False
+
+        log_order_cancel(symbol=symbol, order_id=order_id, reason=reason)
+        state.state = ExecutionState.COOLDOWN
+        state.current_order_placed_ms = current_ms
+        state.current_order_terminal_grace_until_ms = current_ms + self.ws_fill_grace_ms
+        state.current_order_cancel_retry_after_ms = 0
+        return True
+
+    def _resolve_signal_price_and_tif(
+        self,
+        *,
+        signal: ExitSignal,
+        rules: SymbolRules,
+        market_state: MarketState,
+        state: SideExecutionState,
+    ) -> tuple[Decimal, TimeInForce]:
+        if signal.price_override is not None:
+            tif = (
+                TimeInForce.GTX
+                if signal.execution_preference == SignalExecutionPreference.PASSIVE
+                else TimeInForce.GTC
+            )
+            return signal.price_override, tif
+
+        if state.mode == ExecutionMode.MAKER_ONLY:
+            return (
+                self.build_maker_price(
+                    position_side=signal.position_side,
+                    best_bid=market_state.best_bid,
+                    best_ask=market_state.best_ask,
+                    tick_size=rules.tick_size,
+                ),
+                TimeInForce.GTX,
+            )
+        if state.mode == ExecutionMode.AGGRESSIVE_LIMIT:
+            return (
+                self.build_aggressive_limit_price(
+                    position_side=signal.position_side,
+                    best_bid=market_state.best_bid,
+                    best_ask=market_state.best_ask,
+                    tick_size=rules.tick_size,
+                ),
+                TimeInForce.GTC,
+            )
+
+        return (
+            self.build_maker_price(
+                position_side=signal.position_side,
+                best_bid=market_state.best_bid,
+                best_ask=market_state.best_ask,
+                tick_size=rules.tick_size,
+            ),
+            TimeInForce.GTX,
+        )
+
+    def _clear_current_order_fields(
+        self,
+        state: SideExecutionState,
+        *,
+        preserve_cooldown_override: bool,
+    ) -> None:
+        state.current_order_id = None
+        state.current_order_mode = None
+        state.current_order_reason = None
+        state.current_order_is_risk = False
+        state.current_order_filled_qty = Decimal("0")
+        state.current_order_execution_preference = None
+        state.current_order_strategy_mode = None
+        state.current_order_ttl_ms_override = None
+        state.current_order_terminal_grace_until_ms = 0
+        state.current_order_cancel_retry_after_ms = 0
+        if not preserve_cooldown_override:
+            state.current_order_cooldown_ms_override = None
+
+    def _enter_post_order_state(self, state: SideExecutionState, current_ms: int) -> None:
+        cooldown_ms = (
+            state.current_order_cooldown_ms_override
+            if state.current_order_cooldown_ms_override is not None
+            else self.repost_cooldown_ms
+        )
+        self._clear_current_order_fields(state, preserve_cooldown_override=True)
+        if cooldown_ms > 0:
+            state.state = ExecutionState.COOLDOWN
+            state.current_order_placed_ms = current_ms
+            return
+
+        state.state = ExecutionState.IDLE
+        state.current_order_placed_ms = 0
+        state.current_order_cooldown_ms_override = None
 
     def build_maker_price(
         self,
@@ -1244,6 +1362,26 @@ class ExecutionEngine:
         if qty < min_qty:
             return Decimal("0")
 
+        return qty
+
+    def compute_fixed_qty(
+        self,
+        *,
+        position_amt: Decimal,
+        min_qty: Decimal,
+        step_size: Decimal,
+        lot_mult: int,
+    ) -> Decimal:
+        """按 min_qty × lot_mult 计算固定片大小，只受仓位与步进约束。"""
+        abs_position = abs(position_amt)
+        if abs_position < min_qty:
+            return Decimal("0")
+
+        fixed_mult = max(int(lot_mult), 1)
+        qty = min(min_qty * fixed_mult, abs_position)
+        qty = round_to_step(qty, step_size)
+        if qty < min_qty:
+            return Decimal("0")
         return qty
 
     def is_position_done(self, position_amt: Decimal, min_qty: Decimal, step_size: Decimal) -> bool:

@@ -8,14 +8,15 @@
 
 职责：
 - 连接 Binance Futures WS
-- 订阅 bookTicker（best bid/ask）
+- 订阅 bookTicker（best bid/ask + qty）
+- 订阅 depth10（固定档位盘口）
 - 订阅 aggTrade（last trade）
 - 断线自动重连（指数退避）
 - 将 WS 消息转换为 MarketEvent
 - 数据陈旧检测
 
 输入：
-- 配置（symbol 列表、重连参数）
+- 配置（symbol 列表、depth symbol 列表、重连参数）
 
 输出：
 - MarketEvent（通过回调）
@@ -56,6 +57,7 @@ class MarketWSClient:
         self,
         symbols: List[str],
         on_event: Callable[[MarketEvent], None],
+        depth_symbols: Optional[List[str]] = None,
         on_reconnect: Optional[Callable[[str], None]] = None,
         initial_delay_ms: int = 1000,
         max_delay_ms: int = 30000,
@@ -68,6 +70,7 @@ class MarketWSClient:
 
         Args:
             symbols: 订阅的 symbol 列表（ccxt 格式，如 "BTC/USDT:USDT"）
+            depth_symbols: 需要额外订阅 depth10 的 symbol 列表
             on_event: 收到 MarketEvent 时的回调
             on_reconnect: WS 重连成功回调（用于触发上层 REST 校准）
             initial_delay_ms: 重连初始延迟
@@ -77,6 +80,7 @@ class MarketWSClient:
             proxy: HTTP 代理地址，如 "http://127.0.0.1:7890"
         """
         self.symbols = symbols
+        self.depth_symbols = sorted(set(depth_symbols or []))
         self.on_event = on_event
         self.on_reconnect = on_reconnect
         self.initial_delay_ms = initial_delay_ms
@@ -113,6 +117,8 @@ class MarketWSClient:
             # 转换 ccxt 格式到 WS 格式
             ws_symbol = self._symbol_to_ws(symbol)
             streams.append(f"{ws_symbol}@bookTicker")
+            if symbol in self.depth_symbols:
+                streams.append(f"{ws_symbol}@depth10@100ms")
             streams.append(f"{ws_symbol}@aggTrade")
             streams.append(f"{ws_symbol}@markPrice@1s")
 
@@ -282,6 +288,8 @@ class MarketWSClient:
         # 解析事件
         if "@bookTicker" in stream:
             event = self._parse_book_ticker(payload)
+        elif "@depth10" in stream:
+            event = self._parse_depth(stream, payload)
         elif "@aggTrade" in stream:
             event = self._parse_agg_trade(payload)
         elif "@markPrice" in stream:
@@ -290,7 +298,7 @@ class MarketWSClient:
             return
 
         if event:
-            # 更新最后更新时间（stale 仅由 bookTicker/aggTrade 刷新；markPrice 不参与）
+            # 更新最后更新时间（stale 仅由 bookTicker/aggTrade 刷新；depth/markPrice 不参与）
             if event.event_type in ("book_ticker", "agg_trade"):
                 self._last_update_ms[event.symbol] = event.timestamp_ms
             elif event.event_type == "mark_price":
@@ -324,7 +332,9 @@ class MarketWSClient:
                 return None
 
             best_bid = Decimal(str(data.get("b", "0")))
+            best_bid_qty = Decimal(str(data.get("B", "0")))
             best_ask = Decimal(str(data.get("a", "0")))
+            best_ask_qty = Decimal(str(data.get("A", "0")))
             timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
 
             # 验证 bid <= ask（bid > ask 为异常数据，bid == ask 在低流动性市场可能出现）
@@ -337,6 +347,8 @@ class MarketWSClient:
                 timestamp_ms=timestamp_ms,
                 best_bid=best_bid,
                 best_ask=best_ask,
+                best_bid_qty=best_bid_qty,
+                best_ask_qty=best_ask_qty,
                 last_trade_price=None,
                 event_type="book_ticker",
             )
@@ -344,6 +356,49 @@ class MarketWSClient:
         except Exception as e:
             log_error(f"解析 bookTicker 失败: {e}")
             return None
+
+    def _parse_depth(self, stream: str, data: Dict[str, Any]) -> Optional[MarketEvent]:
+        """解析 partial depth 消息（固定前 10 档）。"""
+        try:
+            ws_symbol = data.get("s", "")
+            if not ws_symbol and "@depth10" in stream:
+                ws_symbol = stream.split("@", 1)[0].upper()
+            symbol = self._ws_to_symbol(ws_symbol)
+
+            if symbol not in self.depth_symbols:
+                return None
+
+            bids_raw = data.get("b", []) or []
+            asks_raw = data.get("a", []) or []
+            bid_levels = self._parse_levels(bids_raw)
+            ask_levels = self._parse_levels(asks_raw)
+            timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
+
+            if not bid_levels and not ask_levels:
+                return None
+
+            return MarketEvent(
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                bid_levels=bid_levels,
+                ask_levels=ask_levels,
+                event_type="depth",
+            )
+        except Exception as e:
+            log_error(f"解析 depth10 失败: {e}")
+            return None
+
+    def _parse_levels(self, raw_levels: Any) -> list[tuple[Decimal, Decimal]]:
+        levels: list[tuple[Decimal, Decimal]] = []
+        for level in raw_levels:
+            if not isinstance(level, (list, tuple)) or len(level) < 2:
+                continue
+            price = Decimal(str(level[0]))
+            qty = Decimal(str(level[1]))
+            if price <= Decimal("0") or qty < Decimal("0"):
+                continue
+            levels.append((price, qty))
+        return levels
 
     def _parse_agg_trade(self, data: Dict[str, Any]) -> Optional[MarketEvent]:
         """

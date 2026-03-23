@@ -155,10 +155,29 @@ class ConfigLoader:
         g_rate = global_cfg.rate_limit
 
         # 获取 symbol 覆盖（如果存在）
+        strategy_cfg = symbol_cfg.strategy if symbol_cfg and symbol_cfg.strategy else None
+        pressure_cfg = symbol_cfg.pressure_exit if symbol_cfg and symbol_cfg.pressure_exit else None
         s_exec = symbol_cfg.execution if symbol_cfg and symbol_cfg.execution else None
         s_accel = symbol_cfg.accel if symbol_cfg and symbol_cfg.accel else None
         s_roi = symbol_cfg.roi if symbol_cfg and symbol_cfg.roi else None
         s_risk = symbol_cfg.risk if symbol_cfg and symbol_cfg.risk else None
+
+        strategy_mode = _get_override(strategy_cfg, "mode", "legacy")
+        pressure_exit_enabled = bool(
+            strategy_mode == "orderbook_pressure"
+            and pressure_cfg
+            and pressure_cfg.enabled
+        )
+        pressure_exit_threshold_qty = _get_override(pressure_cfg, "threshold_qty", None)
+        pressure_exit_sustain_ms = _get_override(pressure_cfg, "sustain_ms", None)
+        pressure_exit_passive_level = _get_override(pressure_cfg, "passive_level", None)
+        pressure_exit_lot_mult = _get_override(pressure_cfg, "lot_mult", None)
+        pressure_exit_aggressive_recheck_cooldown_ms = _get_override(
+            pressure_cfg,
+            "aggressive_recheck_cooldown_ms",
+            None,
+        )
+        pressure_exit_passive_ttl_ms = _get_override(pressure_cfg, "passive_ttl_ms", None)
 
         # 合并执行配置
         order_ttl_ms = _get_override(s_exec, "order_ttl_ms", g_exec.order_ttl_ms)
@@ -222,6 +241,15 @@ class ConfigLoader:
 
         return MergedSymbolConfig(
             symbol=symbol,
+            # 策略
+            strategy_mode=strategy_mode,
+            pressure_exit_enabled=pressure_exit_enabled,
+            pressure_exit_threshold_qty=pressure_exit_threshold_qty,
+            pressure_exit_sustain_ms=pressure_exit_sustain_ms,
+            pressure_exit_passive_level=pressure_exit_passive_level,
+            pressure_exit_lot_mult=pressure_exit_lot_mult,
+            pressure_exit_aggressive_recheck_cooldown_ms=pressure_exit_aggressive_recheck_cooldown_ms,
+            pressure_exit_passive_ttl_ms=pressure_exit_passive_ttl_ms,
             # WS
             stale_data_ms=g_ws.stale_data_ms,
             reconnect_initial_delay_ms=g_ws.reconnect.initial_delay_ms,

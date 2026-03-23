@@ -24,6 +24,8 @@ from src.models import (
     OrderSide,
     OrderStatus,
     PositionSide,
+    SignalExecutionPreference,
+    StrategyMode,
     SymbolRules,
     TimeInForce,
 )
@@ -102,3 +104,65 @@ async def test_post_only_reject_retries_with_aggressive_limit():
     assert engine.get_state("BTC/USDT:USDT", PositionSide.LONG).mode == ExecutionMode.AGGRESSIVE_LIMIT
     exchange = cast(DummyExchange, app.exchange)
     exchange.place_order.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pressure_passive_post_only_reject_does_not_retry_as_taker():
+    app = Application(Path("config/config.yaml"))
+    app._init_run_identity()
+
+    exchange_result = OrderResult(success=True, order_id="abc", status=OrderStatus.NEW)
+    app.exchange = DummyExchange(exchange_result)  # type: ignore[assignment]
+
+    engine = ExecutionEngine(
+        place_order=AsyncMock(),
+        cancel_order=AsyncMock(),
+    )
+    state = engine.get_state("DASH/USDT:USDT", PositionSide.SHORT)
+    state.mode = ExecutionMode.MAKER_ONLY
+    state.state = ExecutionState.PLACING
+    state.current_order_strategy_mode = StrategyMode.ORDERBOOK_PRESSURE
+    state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+
+    rules = SymbolRules(
+        symbol="DASH/USDT:USDT",
+        tick_size=Decimal("0.1"),
+        step_size=Decimal("0.001"),
+        min_qty=Decimal("0.001"),
+        min_notional=Decimal("5"),
+    )
+    market_state = MarketState(
+        symbol="DASH/USDT:USDT",
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10.0"),
+        previous_trade_price=Decimal("9.9"),
+        last_update_ms=1000,
+        is_ready=True,
+    )
+
+    intent = OrderIntent(
+        symbol="DASH/USDT:USDT",
+        side=OrderSide.BUY,
+        position_side=PositionSide.SHORT,
+        qty=Decimal("0.01"),
+        price=Decimal("9.8"),
+        time_in_force=TimeInForce.GTX,
+        reduce_only=True,
+    )
+    result = OrderResult(success=False, error_code="-5022", error_message="post only rejected")
+
+    retry_intent, retry_result, retried = await app._maybe_retry_post_only_reject(
+        engine=engine,
+        intent=intent,
+        result=result,
+        rules=rules,
+        market_state=market_state,
+    )
+
+    assert retried is False
+    assert retry_intent is intent
+    assert retry_result is result
+    assert engine.get_state("DASH/USDT:USDT", PositionSide.SHORT).mode == ExecutionMode.MAKER_ONLY
+    exchange = cast(DummyExchange, app.exchange)
+    exchange.place_order.assert_not_called()
