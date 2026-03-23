@@ -226,8 +226,8 @@ class ExecutionConfig(BaseModel):
 
 class StrategyConfig(BaseModel):
     """Symbol 级别策略模式选择"""
-    mode: Literal["legacy", "orderbook_pressure"] = Field(
-        default="legacy",
+    mode: Literal["orderbook_price", "orderbook_pressure"] = Field(
+        default="orderbook_price",
         description="symbol 使用的信号策略模式",
     )
 
@@ -372,7 +372,7 @@ class MergedSymbolConfig(BaseModel):
     symbol: str
 
     # 策略
-    strategy_mode: Literal["legacy", "orderbook_pressure"]
+    strategy_mode: Literal["orderbook_price", "orderbook_pressure"]
     pressure_exit_enabled: bool
     pressure_exit_threshold_qty: Optional[Decimal]
     pressure_exit_sustain_ms: Optional[int]

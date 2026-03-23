@@ -162,7 +162,7 @@ class ConfigLoader:
         s_roi = symbol_cfg.roi if symbol_cfg and symbol_cfg.roi else None
         s_risk = symbol_cfg.risk if symbol_cfg and symbol_cfg.risk else None
 
-        strategy_mode = _get_override(strategy_cfg, "mode", "legacy")
+        strategy_mode = _get_override(strategy_cfg, "mode", "orderbook_price")
         pressure_exit_enabled = bool(
             strategy_mode == "orderbook_pressure"
             and pressure_cfg

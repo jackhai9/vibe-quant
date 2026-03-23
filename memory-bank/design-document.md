@@ -214,7 +214,7 @@ maker 订单要求：
 - `dist = abs(mark_price - liquidation_price) / mark_price`
 - 若 `dist <= liq_distance_threshold`：
   - Telegram：风险兜底触发
-  - `legacy`：至少切到 `AGGRESSIVE_LIMIT`
+  - `orderbook_price`：至少切到 `AGGRESSIVE_LIMIT`
   - `orderbook_pressure`：只记录/告警，不改写主动/被动语义
   - 不进入 `MARKET` 执行模式（常规执行仍采用 LIMIT；另有 `panic_close` 与保护性止损兜底）
 
@@ -267,7 +267,7 @@ maker 订单要求：
 - `ConfigManager`：全局默认 + symbol 覆盖，支持热更新（可选）
 - `ExchangeAdapter`（ccxt）：fetch markets/positions/balance，下单撤单封装
 - `WSClient`：订阅 trade + best bid/ask + markPrice；`orderbook_pressure` symbol 额外订阅 `depth10@100ms`
-- `SignalEngine`：按 symbol 选择 `legacy` / `orderbook_pressure` 条件判断；`legacy` 计算滑动窗口 ret/倍数，`orderbook_pressure` 评估盘口量阈值与固定档位挂单
+- `SignalEngine`：按 symbol 选择 `orderbook_price` / `orderbook_pressure` 条件判断；`orderbook_price` 计算滑动窗口 ret/倍数，`orderbook_pressure` 评估盘口量阈值与固定档位挂单
 - `ExecutionEngine`：per-side 状态机、模式轮转、下单撤单
 - `RiskManager`：强平距离兜底、数据陈旧保护、限速
 - `Logger`：按天滚动
@@ -383,7 +383,7 @@ symbols:
 
 ## 11. 伪代码（简化）
 
-以下伪代码聚焦 `legacy` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
+以下伪代码聚焦 `orderbook_price` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
 
 ```python
 def build_maker_price(side, best_bid, best_ask, tick, mode, n_ticks):

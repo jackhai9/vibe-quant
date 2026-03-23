@@ -1,5 +1,5 @@
 # Input: MarketEvent, Position, config
-# Output: ExitSignal and per-symbol runtime gating for legacy/orderbook_pressure
+# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure
 # Pos: signal evaluation engine
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -89,7 +89,7 @@ class SignalEngine:
         self,
         symbol: str,
         *,
-        strategy_mode: StrategyMode = StrategyMode.LEGACY,
+        strategy_mode: StrategyMode = StrategyMode.ORDERBOOK_PRICE,
         pressure_config: Optional[PressureSignalConfig] = None,
         min_signal_interval_ms: Optional[int] = None,
         accel_window_ms: Optional[int] = None,
@@ -221,7 +221,7 @@ class SignalEngine:
         if self._is_throttled(symbol, position_side, current_ms):
             return None
 
-        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.ORDERBOOK_PRICE)
         if strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
             return self._evaluate_orderbook_pressure(
                 symbol=symbol,
@@ -427,7 +427,7 @@ class SignalEngine:
         *,
         reason: Optional[str] = None,
     ) -> None:
-        if self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY) != StrategyMode.ORDERBOOK_PRESSURE:
+        if self._symbol_strategy_modes.get(symbol, StrategyMode.ORDERBOOK_PRICE) != StrategyMode.ORDERBOOK_PRESSURE:
             return
 
         key = f"{symbol}:{position_side.value}"
@@ -441,7 +441,7 @@ class SignalEngine:
         if state is None:
             return True
 
-        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.ORDERBOOK_PRICE)
         if strategy_mode != StrategyMode.ORDERBOOK_PRESSURE:
             return (current_ms - state.last_update_ms) > stale_data_ms if state.last_update_ms > 0 else True
 
@@ -468,7 +468,7 @@ class SignalEngine:
         return False
 
     def _is_symbol_ready(self, symbol: str, state: MarketState) -> bool:
-        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.LEGACY)
+        strategy_mode = self._symbol_strategy_modes.get(symbol, StrategyMode.ORDERBOOK_PRICE)
         if strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
             return (
                 self._has_book_data.get(symbol, False)

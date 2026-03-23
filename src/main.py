@@ -2086,7 +2086,7 @@ class Application:
 
         if signal:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
-            # legacy：切换执行模式到 AGGRESSIVE_LIMIT
+            # orderbook_price：切换执行模式到 AGGRESSIVE_LIMIT
             # orderbook_pressure：仅做日志/告警，不改写信号的主动/被动语义（panic_close 兜底）
             if self.risk_manager:
                 symbol_cfg = self._symbol_configs.get(symbol)
@@ -2140,7 +2140,7 @@ class Application:
                 return
 
             # 成交率反馈：低成交率直接切到激进限价，影响当前信号下单
-            if engine.fill_rate_feedback_enabled and signal.strategy_mode == StrategyMode.LEGACY:
+            if engine.fill_rate_feedback_enabled and signal.strategy_mode == StrategyMode.ORDERBOOK_PRICE:
                 engine.refresh_fill_rate(symbol, position_side, current_ms)
                 state = engine.get_state(symbol, position_side)
                 if state.fill_rate_bucket == "low" and state.mode == ExecutionMode.MAKER_ONLY:
@@ -2148,7 +2148,7 @@ class Application:
 
             # improve 信号直接吃单：价格正在朝有利方向移动，跳过 MAKER_ONLY 直接使用 AGGRESSIVE_LIMIT
             if (
-                signal.strategy_mode == StrategyMode.LEGACY
+                signal.strategy_mode == StrategyMode.ORDERBOOK_PRICE
                 and signal.reason in (SignalReason.LONG_BID_IMPROVE, SignalReason.SHORT_ASK_IMPROVE)
             ):
                 state = engine.get_state(symbol, position_side)

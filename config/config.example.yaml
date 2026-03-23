@@ -89,7 +89,7 @@ global:
       protective_stop: 3
 
     # 第一等级：距离强平价多少比例时触发软风控
-    # - legacy：满足信号条件时，至少切到 AGGRESSIVE_LIMIT
+    # - orderbook_price：满足信号条件时，至少切到 AGGRESSIVE_LIMIT
     # - orderbook_pressure：仅记录风险事件/通知，不把未达阈值的被动单改成主动单
     # liq_distance_threshold = abs(mark_price - liquidation_price) / mark_price
     liq_distance_threshold: 0.05
@@ -147,7 +147,7 @@ symbols:
   # 示例：按 symbol 启用盘口量平仓模式
   # DASH/USDT:USDT:
   #   strategy:
-  #     mode: orderbook_pressure   # 可选：legacy | orderbook_pressure
+  #     mode: orderbook_pressure   # 可选：orderbook_price | orderbook_pressure
   #   pressure_exit:
   #     enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
   #     threshold_qty: 100         # 顶档量阈值：LONG 看 best_bid_qty，SHORT 看 best_ask_qty

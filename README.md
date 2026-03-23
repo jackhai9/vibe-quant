@@ -7,18 +7,18 @@
 
 Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 
-通过小单分批 + 按 symbol 的策略模式选择（`legacy` / `orderbook_pressure`）+ 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
+通过小单分批 + 按 symbol 的策略模式选择（`orderbook_price` / `orderbook_pressure`）+ 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
 
 术语约定：本文档中“reduce-only”指 **reduce-only 语义约束**（`positionSide + side + qty<=position`），不指必须下发的交易所参数 `reduceOnly`。
 
 ## 核心特性
 
 - **Hedge 模式专用**：不强制下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证；支持 `positionSide=LONG/SHORT`
-- **双策略模式**：每个 symbol 可独立选择 `legacy` 或 `orderbook_pressure`；同一 symbol 上两种模式互斥
+- **双策略模式**：每个 symbol 可独立选择 `orderbook_price` 或 `orderbook_pressure`；同一 symbol 上两种模式互斥
 - **执行模式轮转**：Maker 挂单优先，超时自动升级为 Aggressive Limit
 - **智能倍数系统**：ROI + 加速度双倍数叠加，动态调整单笔数量
 - **成交率反馈**：根据 maker 成交率动态调整升级阈值
-- **多级风控**：`legacy` 的软风控执行升级 + 全模式 `panic_close` 强制分片 + 交易所端保护止损
+- **多级风控**：`orderbook_price` 的软风控执行升级 + 全模式 `panic_close` 强制分片 + 交易所端保护止损
 - **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream；`orderbook_pressure` symbol 额外订阅 `depth10@100ms`
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
 - **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
@@ -156,7 +156,7 @@ vibe-quant/
 
 | 模式 | 行情来源 | 下单语义 | 数量语义 |
 |------|----------|----------|----------|
-| `legacy` | `aggTrade` + `bookTicker` | 沿用原有 primary / improve 触发与执行模式轮转 | `base_lot_mult × roi_mult × accel_mult` |
+| `orderbook_price` | `aggTrade` + `bookTicker` | 沿用原有 primary / improve 触发与执行模式轮转 | `base_lot_mult × roi_mult × accel_mult` |
 | `orderbook_pressure` | `bookTicker` 的 `B/A` + `depth10@100ms` | 达到顶档量阈值后主动吃一档；未达阈值时仅挂 1 笔固定档位被动单 | `min_qty × lot_mult` |
 
 `orderbook_pressure` 运行补充：
@@ -224,7 +224,7 @@ ret_window = (price_now / price_window_ago) - 1
 
 | 层级 | 触发条件 | 行为 |
 |------|----------|------|
-| **软风控（legacy）** | `dist_to_liq` < 阈值，且已有 `legacy` 信号 | 至少升级为 `AGGRESSIVE_LIMIT` |
+| **软风控（orderbook_price）** | `dist_to_liq` < 阈值，且已有 `orderbook_price` 信号 | 至少升级为 `AGGRESSIVE_LIMIT` |
 | **软风控（orderbook_pressure）** | `dist_to_liq` < 阈值，且已有 `orderbook_pressure` 信号 | 记录风险事件/通知，但不把未达阈值的被动单改写成主动单 |
 | **强制平仓** | `dist_to_liq` 进入 panic_close 档位 | 绕过信号，按 slice_ratio 强制分片平仓 |
 | **保护止损** | 交易所端 STOP_MARKET | 程序崩溃/断网时最后防线 |

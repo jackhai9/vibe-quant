@@ -437,7 +437,7 @@ risk:
 - **说明**: 强平距离预警阈值
 - **计算**: `dist = abs(mark_price - liquidation_price) / mark_price`
 - **触发**:
-  - `legacy`：满足信号条件且 `dist <= threshold` 时，至少切换到 `AGGRESSIVE_LIMIT`
+  - `orderbook_price`：满足信号条件且 `dist <= threshold` 时，至少切换到 `AGGRESSIVE_LIMIT`
   - `orderbook_pressure`：记录风险事件/Telegram 通知，但不把未达阈值的被动单改写成主动单
 - **补充**: `orderbook_pressure` 的真正强制执行兜底由 `panic_close` 负责
 
@@ -618,7 +618,7 @@ risk:
 symbols:
   "SYMBOL/USDT:USDT":
     strategy:
-      mode: legacy                # 可选：legacy | orderbook_pressure
+      mode: orderbook_pressure    # 可选：orderbook_price | orderbook_pressure
     pressure_exit:
       enabled: true
       threshold_qty: 100
@@ -654,11 +654,11 @@ symbols:
 
 #### strategy.mode
 - **类型**: `enum`
-- **可选值**: `"legacy"` | `"orderbook_pressure"`
-- **默认值**: `"legacy"`
+- **可选值**: `"orderbook_price"` | `"orderbook_pressure"`
+- **默认值**: `"orderbook_price"`
 - **说明**:
-  - `legacy`：沿用原有 trade/best bid/ask 触发逻辑、ROI/accel 数量体系与执行模式轮转
-  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `legacy` 互斥，不并行运行
+  - `orderbook_price`：沿用原有 trade/best bid/ask 触发逻辑、ROI/accel 数量体系与执行模式轮转
+  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `orderbook_price` 互斥，不并行运行
 
 #### pressure_exit
 - **生效条件**: 仅当 `strategy.mode == "orderbook_pressure"` 时参与运行
@@ -681,7 +681,7 @@ symbols:
 symbols:
   "DASH/USDT:USDT":
     strategy:
-      mode: orderbook_pressure   # 启用盘口量模式；不写时默认 legacy
+      mode: orderbook_pressure   # 启用盘口量模式；不写时默认 orderbook_price
     pressure_exit:
       enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
       threshold_qty: 100         # LONG 看 best_bid_qty；SHORT 看 best_ask_qty
@@ -701,7 +701,7 @@ symbols:
 - 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
 
 风控补充：
-- `legacy` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`
+- `orderbook_price` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`
 - `orderbook_pressure` 在同一条件下只记录风险事件/通知，不改写主动/被动语义；真正强制执行由 `panic_close` 负责
 
 ### 示例：ZEN 永续覆盖配置

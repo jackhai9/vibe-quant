@@ -73,7 +73,7 @@ class ExecutionState(str, Enum):
 
 class StrategyMode(str, Enum):
     """运行时策略模式"""
-    LEGACY = "legacy"
+    ORDERBOOK_PRICE = "orderbook_price"
     ORDERBOOK_PRESSURE = "orderbook_pressure"
 
 
@@ -248,7 +248,7 @@ class ExitSignal:
     best_bid: Decimal
     best_ask: Decimal
     last_trade_price: Decimal
-    strategy_mode: StrategyMode = StrategyMode.LEGACY
+    strategy_mode: StrategyMode = StrategyMode.ORDERBOOK_PRICE
     execution_preference: SignalExecutionPreference = SignalExecutionPreference.PASSIVE
     qty_policy: QtyPolicy = QtyPolicy.DYNAMIC
     price_override: Optional[Decimal] = None

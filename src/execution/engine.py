@@ -521,7 +521,7 @@ class ExecutionEngine:
         state.current_order_is_risk = True
         state.current_order_filled_qty = Decimal("0")
         state.current_order_execution_preference = SignalExecutionPreference.AGGRESSIVE
-        state.current_order_strategy_mode = StrategyMode.LEGACY
+        state.current_order_strategy_mode = StrategyMode.ORDERBOOK_PRICE
         state.current_order_ttl_ms_override = None
         state.current_order_cooldown_ms_override = None
         state.current_order_cancel_retry_after_ms = 0

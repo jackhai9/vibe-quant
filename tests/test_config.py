@@ -166,7 +166,7 @@ symbols:
         # 其他继承 global
         assert eth_config.order_ttl_ms == 1000
         assert eth_config.max_mult == 100
-        assert eth_config.strategy_mode == "legacy"
+        assert eth_config.strategy_mode == "orderbook_price"
 
     def test_get_symbol_config_no_override(self, sample_config_yaml, env_vars):
         """测试获取没有覆盖的 symbol 配置"""
@@ -180,11 +180,11 @@ symbols:
         assert unknown_config.max_mult == 100  # global 默认
         assert unknown_config.maker_price_mode == "at_touch"  # global 默认
         assert unknown_config.maker_safety_ticks == 2  # global 默认
-        assert unknown_config.strategy_mode == "legacy"
+        assert unknown_config.strategy_mode == "orderbook_price"
         assert unknown_config.pressure_exit_enabled is False
 
     def test_get_symbol_config_pressure_exit_mode(self, sample_config_yaml, env_vars):
-        """测试盘口量模式按 symbol 启用且 legacy 仍为默认。"""
+        """测试盘口量模式按 symbol 启用且 orderbook_price 仍为默认。"""
         loader = ConfigLoader(sample_config_yaml)
         loader.load()
 
@@ -199,7 +199,7 @@ symbols:
         assert dash_config.pressure_exit_passive_ttl_ms == 10000
 
         btc_config = loader.get_symbol_config("BTC/USDT:USDT")
-        assert btc_config.strategy_mode == "legacy"
+        assert btc_config.strategy_mode == "orderbook_price"
         assert btc_config.pressure_exit_enabled is False
 
     def test_pressure_exit_rejects_mode_orderbook_pressure_with_enabled_false(self):
