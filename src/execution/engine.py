@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override)
-# Pos: per-side execution state machine with WS/REST fill meta handling
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override and timeout/preempt race recovery)
+# Pos: per-side execution state machine with WS/REST fill meta handling and terminal-state recovery
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -334,6 +334,11 @@ class ExecutionEngine:
         """
         logger = get_logger()
         state = self.get_state(signal.symbol, signal.position_side)
+
+        if self._recover_orphaned_live_order_state(state, current_ms, source="on_signal"):
+            if state.state != ExecutionState.IDLE:
+                logger.debug(f"{signal.symbol} {signal.position_side.value} 状态为 {state.state.value}，跳过信号")
+                return None
 
         # 只有在 IDLE 状态才处理新信号
         if state.state != ExecutionState.IDLE:
@@ -930,6 +935,8 @@ class ExecutionEngine:
         """
         state = self.get_state(symbol, position_side)
         await self._flush_pending_fill_if_expired(state, current_ms)
+        if self._recover_orphaned_live_order_state(state, current_ms, source="check_timeout"):
+            return True
         if not state.pending_fill_log and state.last_completed_order_id:
             if current_ms - state.last_completed_ms > self.ws_fill_grace_ms:
                 state.last_completed_order_id = None
@@ -960,6 +967,10 @@ class ExecutionEngine:
             return False
 
         had_fill = state.current_order_filled_qty > Decimal("0")
+        order_id = state.current_order_id
+        if not order_id:
+            self._recover_orphaned_live_order_state(state, current_ms, source="check_timeout_missing_order")
+            return True
 
         # 更新状态为 CANCELING
         state.state = ExecutionState.CANCELING
@@ -980,7 +991,7 @@ class ExecutionEngine:
         log_order_timeout(
             symbol=symbol,
             side=position_side.value,
-            order_id=state.current_order_id or "",
+            order_id=order_id,
             timeout_count=timeout_count,
         )
 
@@ -1006,30 +1017,29 @@ class ExecutionEngine:
         )
 
         # 发起撤单请求
-        if state.current_order_id:
-            try:
-                result = await self.cancel_order(symbol, state.current_order_id)
-                if not result.success:
-                    get_logger().warning(
-                        f"撤单请求失败: {symbol} {state.current_order_id} - {result.error_message}"
-                    )
-                    state.state = ExecutionState.WAITING
-                    state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+        try:
+            result = await self.cancel_order(symbol, order_id)
+            if self._order_context_consumed(state, order_id):
+                return True
+            if not result.success:
+                if self._is_missing_order_error(result.error_message):
+                    get_logger().debug(f"撤单返回订单不存在，按终态处理: {symbol} {position_side.value} {order_id}")
+                    self._enter_terminal_grace_cooldown(state, current_ms, cooldown_ms)
                     return True
-                # 进入冷却期但保留订单上下文，确保后续 WS 回执仍可被处理
-                state.state = ExecutionState.COOLDOWN
-                state.current_order_placed_ms = current_ms
-                state.current_order_cancel_retry_after_ms = 0
-                state.current_order_terminal_grace_until_ms = current_ms + max(
-                    cooldown_ms,
-                    self.ws_fill_grace_ms,
-                )
-            except Exception as e:
-                get_logger().warning(f"撤单请求失败: {symbol} {state.current_order_id} - {e}")
-                # 撤单请求失败时保留 WAITING，上下文不丢失，并在短 backoff 后重试
+                get_logger().warning(f"撤单请求失败: {symbol} {order_id} - {result.error_message}")
                 state.state = ExecutionState.WAITING
                 state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
                 return True
+            # 进入冷却期但保留订单上下文，确保后续 WS 回执仍可被处理
+            self._enter_terminal_grace_cooldown(state, current_ms, cooldown_ms)
+        except Exception as e:
+            if self._order_context_consumed(state, order_id):
+                return True
+            get_logger().warning(f"撤单请求失败: {symbol} {order_id} - {e}")
+            # 撤单请求失败时保留 WAITING，上下文不丢失，并在短 backoff 后重试
+            state.state = ExecutionState.WAITING
+            state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
+            return True
 
         return True
 
@@ -1092,21 +1102,28 @@ class ExecutionEngine:
         try:
             result = await self.cancel_order(symbol, order_id)
         except Exception as e:
+            if self._order_context_consumed(state, order_id):
+                return True
             state.state = ExecutionState.WAITING
             state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
             get_logger().warning(f"主动信号抢占撤单异常: {symbol} {position_side.value} {order_id} - {e}")
             return False
+        if self._order_context_consumed(state, order_id):
+            return True
         if not result.success:
+            if self._is_missing_order_error(result.error_message):
+                get_logger().debug(
+                    f"主动信号抢占撤单返回订单不存在，按终态处理: {symbol} {position_side.value} {order_id}"
+                )
+                self._enter_terminal_grace_cooldown(state, current_ms, state.current_order_cooldown_ms_override or 0)
+                return True
             state.state = ExecutionState.WAITING
             state.current_order_cancel_retry_after_ms = current_ms + self.repost_cooldown_ms
             get_logger().warning(f"主动信号抢占撤单失败: {symbol} {position_side.value} {order_id} - {result.error_message}")
             return False
 
         log_order_cancel(symbol=symbol, order_id=order_id, reason=reason)
-        state.state = ExecutionState.COOLDOWN
-        state.current_order_placed_ms = current_ms
-        state.current_order_terminal_grace_until_ms = current_ms + self.ws_fill_grace_ms
-        state.current_order_cancel_retry_after_ms = 0
+        self._enter_terminal_grace_cooldown(state, current_ms, state.current_order_cooldown_ms_override or 0)
         return True
 
     def _resolve_signal_price_and_tif(
@@ -1174,6 +1191,52 @@ class ExecutionEngine:
         state.current_order_cancel_retry_after_ms = 0
         if not preserve_cooldown_override:
             state.current_order_cooldown_ms_override = None
+
+    @staticmethod
+    def _is_missing_order_error(error_message: Optional[str]) -> bool:
+        if not error_message:
+            return False
+        lowered = error_message.lower()
+        return (
+            "unknown order sent" in lowered
+            or "ordernotfound" in lowered
+            or "order not found" in lowered
+        )
+
+    @staticmethod
+    def _order_context_consumed(state: SideExecutionState, order_id: str) -> bool:
+        return state.state != ExecutionState.CANCELING or state.current_order_id != order_id
+
+    def _enter_terminal_grace_cooldown(
+        self,
+        state: SideExecutionState,
+        current_ms: int,
+        cooldown_ms: int,
+    ) -> None:
+        state.state = ExecutionState.COOLDOWN
+        state.current_order_placed_ms = current_ms
+        state.current_order_cancel_retry_after_ms = 0
+        state.current_order_terminal_grace_until_ms = current_ms + max(
+            cooldown_ms,
+            self.ws_fill_grace_ms,
+        )
+
+    def _recover_orphaned_live_order_state(
+        self,
+        state: SideExecutionState,
+        current_ms: int,
+        *,
+        source: str,
+    ) -> bool:
+        if state.state not in (ExecutionState.WAITING, ExecutionState.CANCELING):
+            return False
+        if state.current_order_id:
+            return False
+        get_logger().warning(
+            f"{state.symbol} {state.position_side.value} 状态异常: {state.state.value} 但无 current_order_id | source={source}"
+        )
+        self._enter_post_order_state(state, current_ms)
+        return True
 
     def _enter_post_order_state(self, state: SideExecutionState, current_ms: int) -> None:
         cooldown_ms = (

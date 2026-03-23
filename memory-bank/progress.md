@@ -1,6 +1,6 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断）-->
-<!-- Pos: memory-bank/progress 维护日志与变更记录 -->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断与执行竞态修复）-->
+<!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
 
@@ -25,6 +25,19 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：修复执行引擎撤单竞态导致单侧卡死
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-23
+
+**动机**：当 timeout / aggressive preempt 的撤单请求与同一订单的成交回执并发到达时，交易所可能返回 `-2011 Unknown order sent`；若 WS 终态先清掉 `current_order_id`，旧逻辑会把状态重新写回 `WAITING`，下一轮再落入“`WAITING` 但无订单号 -> `CANCELING`”的坏状态，导致某个 `symbol + side` 长时间只跳过信号、不再执行。<br>
+**产出**：
+
+- `src/execution/engine.py`：timeout / preempt 撤单路径改为先捕获本次 `order_id`，await 返回后若发现订单上下文已被并发 WS 终态消费，则不再覆盖状态
+- `src/execution/engine.py`：对 `-2011 Unknown order sent` / order-not-found 按“订单已离场”处理，保留上下文进入 `COOLDOWN` grace 窗口，继续接收迟到 fill/cancel 回执
+- `src/execution/engine.py`：新增 `WAITING/CANCELING` 且 `current_order_id` 缺失的自恢复逻辑，避免单侧永久卡死
+- `tests/test_execution.py`：新增 timeout + fill 竞态、preempt + fill 竞态、orphaned `CANCELING` 自恢复回归测试
 
 ## Milestone/附加改进：按 symbol 的盘口量平仓模式与 stale/dwell 收口
 

@@ -1,6 +1,6 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言与执行反馈校验（含成交率）
-# Pos: ExecutionEngine 测试用例
+# Output: 状态机行为断言与执行反馈校验（含成交率与撤单/成交竞态回归）
+# Pos: ExecutionEngine 测试用例与撤单竞态回归
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -415,6 +415,49 @@ class TestOrderbookPressureExecution:
 
         assert state.state == ExecutionState.IDLE
         assert state.current_order_id is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_current_order_for_preempt_handles_order_missing_after_concurrent_fill(self, engine, mock_cancel_order):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "passive-1"
+        state.current_order_mode = ExecutionMode.MAKER_ONLY
+        state.current_order_reason = SignalReason.SHORT_BID_PRESSURE_PASSIVE.value
+        state.current_order_execution_preference = SignalExecutionPreference.PASSIVE
+        state.current_order_strategy_mode = StrategyMode.ORDERBOOK_PRESSURE
+        state.current_order_cooldown_ms_override = 0
+
+        async def cancel_side_effect(symbol: str, order_id: str) -> OrderResult:
+            update = OrderUpdate(
+                symbol=symbol,
+                order_id=order_id,
+                client_order_id="client_123",
+                side=OrderSide.BUY,
+                position_side=PositionSide.SHORT,
+                status=OrderStatus.FILLED,
+                filled_qty=Decimal("0.001"),
+                avg_price=Decimal("50000"),
+                timestamp_ms=1100,
+            )
+            await engine.on_order_update(update, current_ms=1100)
+            return OrderResult(
+                success=False,
+                order_id=order_id,
+                error_message='binanceusdm {"code":-2011,"msg":"Unknown order sent."}',
+            )
+
+        mock_cancel_order.side_effect = cancel_side_effect
+
+        cancelled = await engine.cancel_current_order_for_preempt(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            current_ms=1000,
+        )
+
+        assert cancelled is True
+        assert state.state == ExecutionState.IDLE
+        assert state.current_order_id is None
+        assert state.current_order_cancel_retry_after_ms == 0
 
     @pytest.mark.asyncio
     async def test_cancel_current_order_for_preempt_backoffs_after_cancel_failure(self, engine, mock_cancel_order):
@@ -1248,6 +1291,48 @@ class TestCheckTimeout:
         assert state.current_order_id is None
 
     @pytest.mark.asyncio
+    async def test_timeout_order_missing_after_concurrent_fill_does_not_revert_to_waiting(
+        self,
+        engine,
+        mock_cancel_order,
+    ):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_placed_ms = 1000
+        state.current_order_mode = ExecutionMode.MAKER_ONLY
+        state.current_order_reason = SignalReason.LONG_PRIMARY.value
+
+        async def cancel_side_effect(symbol: str, order_id: str) -> OrderResult:
+            update = OrderUpdate(
+                symbol=symbol,
+                order_id=order_id,
+                client_order_id="client_123",
+                side=OrderSide.SELL,
+                position_side=PositionSide.LONG,
+                status=OrderStatus.FILLED,
+                filled_qty=Decimal("0.001"),
+                avg_price=Decimal("50000"),
+                timestamp_ms=2001,
+                is_maker=True,
+            )
+            await engine.on_order_update(update, current_ms=2001)
+            return OrderResult(
+                success=False,
+                order_id=order_id,
+                error_message='binanceusdm {"code":-2011,"msg":"Unknown order sent."}',
+            )
+
+        mock_cancel_order.side_effect = cancel_side_effect
+
+        result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
+
+        assert result is True
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.current_order_id is None
+        assert state.current_order_cancel_retry_after_ms == 0
+
+    @pytest.mark.asyncio
     async def test_timeout_cancel_failure_keeps_waiting_context_and_retries_after_backoff(self, engine, mock_cancel_order):
         state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
         state.state = ExecutionState.WAITING
@@ -1293,6 +1378,50 @@ class TestCheckTimeout:
         result = await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=2000)
 
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_on_signal_recovers_orphaned_canceling_state(self, engine, symbol_rules, market_state):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.CANCELING
+        state.current_order_id = None
+
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_PRIMARY,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRICE,
+            execution_preference=SignalExecutionPreference.AGGRESSIVE,
+            qty_policy=QtyPolicy.DYNAMIC,
+            roi_mult=1,
+            accel_mult=1,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.01"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+
+        assert intent is None
+        assert state.state == ExecutionState.COOLDOWN
+        assert engine.check_cooldown("BTC/USDT:USDT", PositionSide.SHORT, current_ms=1100) is True
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.01"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1200,
+        )
+
+        assert intent is not None
+        assert state.state == ExecutionState.PLACING
 
 
 class TestModeRotation:
