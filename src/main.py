@@ -2086,7 +2086,8 @@ class Application:
 
         if signal:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
-            # 对所有策略模式生效；pressure 被动信号在 risk 触发时提升为主动
+            # legacy：切换执行模式到 AGGRESSIVE_LIMIT
+            # orderbook_pressure：仅做日志/告警，不改写信号的主动/被动语义（panic_close 兜底）
             if self.risk_manager:
                 symbol_cfg = self._symbol_configs.get(symbol)
                 symbol_threshold = symbol_cfg.liq_distance_threshold if symbol_cfg else None
@@ -2121,20 +2122,6 @@ class Application:
                                     ),
                                     name=f"risk_trigger:{symbol}:{position_side.value}",
                                 )
-
-                    # pressure 被动信号在 risk 触发时提升为主动吃一档
-                    if (
-                        signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
-                        and signal.execution_preference == SignalExecutionPreference.PASSIVE
-                    ):
-                        signal.execution_preference = SignalExecutionPreference.AGGRESSIVE
-                        signal.price_override = (
-                            signal.best_bid if signal.position_side == PositionSide.LONG else signal.best_ask
-                        )
-                        signal.ttl_override_ms = None
-                        p_cfg = symbol_cfg
-                        if p_cfg and p_cfg.pressure_exit_aggressive_recheck_cooldown_ms is not None:
-                            signal.cooldown_override_ms = p_cfg.pressure_exit_aggressive_recheck_cooldown_ms
 
             # 主动信号抢占被动单
             state = engine.get_state(symbol, position_side)

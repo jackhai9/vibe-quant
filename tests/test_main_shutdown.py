@@ -167,7 +167,6 @@ def _make_pressure_eval_app(
     app.exchange.fetch_positions = AsyncMock(return_value=[])
     app.exchange.place_order = AsyncMock(return_value=OrderResult(success=False, error_message="skip"))
     app._client_order_id_prefix = "test-prefix-"
-    app._order_id_counter = 0
 
     app._positions = {
         signal.symbol: {
@@ -219,8 +218,8 @@ def _make_pressure_eval_app(
 
 
 @pytest.mark.asyncio
-async def test_evaluate_side_risk_promotes_pressure_passive_to_aggressive_idle():
-    """risk 触发 + pressure PASSIVE + IDLE → on_signal 收到 AGGRESSIVE 信号。"""
+async def test_evaluate_side_risk_does_not_promote_pressure_passive_signal():
+    """risk 触发 + pressure PASSIVE → 信号保持 PASSIVE，不被改写为 AGGRESSIVE。"""
     symbol = "DASH/USDT:USDT"
     signal = ExitSignal(
         symbol=symbol,
@@ -250,19 +249,20 @@ async def test_evaluate_side_risk_promotes_pressure_passive_to_aggressive_idle()
         position_side=PositionSide.SHORT,
         engine=engine,
         rules=app._rules[symbol],
-        market_state=app.signal_engine.get_market_state(symbol),
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
         current_ms=1000,
     )
 
-    assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
-    assert signal.price_override == Decimal("10.1")
-    assert signal.ttl_override_ms is None
-    assert signal.cooldown_override_ms == 1000
+    # 信号保持 PASSIVE，soft-risk 不改写 pressure 的主动/被动语义
+    assert signal.execution_preference == SignalExecutionPreference.PASSIVE
+    assert signal.price_override == Decimal("9.8")
+    assert signal.ttl_override_ms == 10000
+    assert signal.cooldown_override_ms == 0
 
 
 @pytest.mark.asyncio
-async def test_evaluate_side_risk_promotes_pressure_passive_triggers_preempt():
-    """risk 触发 + pressure PASSIVE + WAITING(被动单) → preempt 撤单触发。"""
+async def test_evaluate_side_risk_does_not_trigger_preempt_for_pressure_passive():
+    """risk 触发 + pressure PASSIVE + WAITING(被动单) → 不触发 preempt 撤单。"""
     symbol = "DASH/USDT:USDT"
     signal = ExitSignal(
         symbol=symbol,
@@ -294,13 +294,15 @@ async def test_evaluate_side_risk_promotes_pressure_passive_triggers_preempt():
         position_side=PositionSide.SHORT,
         engine=engine,
         rules=app._rules[symbol],
-        market_state=app.signal_engine.get_market_state(symbol),
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
         current_ms=1000,
     )
 
-    assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+    # 信号仍然是 PASSIVE，不触发 preempt
+    assert signal.execution_preference == SignalExecutionPreference.PASSIVE
     state = engine.get_state(symbol, PositionSide.SHORT)
-    assert state.state == ExecutionState.COOLDOWN
+    # 被动单未被撤，仍在 WAITING
+    assert state.state == ExecutionState.WAITING
     assert state.current_order_id == "passive-live"
 
 
