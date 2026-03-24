@@ -1,6 +1,6 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts, account events, and execution feedback
-# Pos: core data contracts, events, and per-side execution state
+# Output: shared enums and dataclasses for module contracts, account events, execution feedback, and reduce-only block state
+# Pos: core data contracts, events, per-side execution state, and same-side open-order block metadata
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -344,6 +344,29 @@ class AlgoOrderUpdate:
     close_position: Optional[bool] = None  # WS 字段 o.cp，If Close-All
     reduce_only: Optional[bool] = None  # WS 字段 o.R
 
+
+@dataclass
+class ReduceOnlyBlockInfo:
+    """
+    `-4118 ReduceOnly Order Failed` 的同侧挂单占仓确认结果。
+
+    语义：
+    - `position_amt` 保留当前仓位原始符号（SHORT 为负）
+    - `tradable_position_amt` 为按 step/minQty 规整后的本轮可平数量
+    - `blocking_*` 只统计同 symbol + 同 positionSide + 同平仓方向的普通挂单剩余量
+    """
+    symbol: str
+    position_side: PositionSide
+    position_amt: Decimal
+    tradable_position_amt: Decimal
+    blocking_qty: Decimal
+    blocking_order_count: int
+    own_blocking_qty: Decimal = Decimal("0")
+    own_blocking_order_count: int = 0
+    external_blocking_qty: Decimal = Decimal("0")
+    external_blocking_order_count: int = 0
+
+
 # ============================================================
 # 执行状态
 # ============================================================
@@ -409,6 +432,10 @@ class SideExecutionState:
     fill_rate: Optional[Decimal] = None
     fill_rate_bucket: Optional[str] = None
     fill_rate_ttl_override: Optional[int] = None
+
+    # `-4118` 后的“同侧平仓挂单已占满可交易仓位”锁存
+    reduce_only_block: Optional[ReduceOnlyBlockInfo] = None
+    reduce_only_block_recheck_after_ms: int = 0
 
 
 # ============================================================

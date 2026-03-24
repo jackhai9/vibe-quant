@@ -1,5 +1,5 @@
 # Input: API keys, config, order intents
-# Output: market/position data, order results, filter-based rules, structured error parsing, and init retry diagnostics
+# Output: market/position data, order results, filter-based rules, structured error parsing, init retry diagnostics, and same-side open-order coverage inspection
 # Pos: exchange adapter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -42,6 +42,7 @@ from src.models import (
     SymbolRules,
     OrderIntent,
     OrderResult,
+    ReduceOnlyBlockInfo,
 )
 from src.utils import round_to_tick, round_to_step, round_up_to_step
 from src.utils.helpers import ws_stream_to_symbol
@@ -826,6 +827,135 @@ class ExchangeAdapter:
 
         # 转换为 dict 列表
         return [cast(Dict[str, Any], order) for order in orders]
+
+    @staticmethod
+    def _extract_order_client_order_id(order: Dict[str, Any]) -> Optional[str]:
+        """从 ccxt 订单结构中提取 clientOrderId。"""
+        client_order_id = order.get("clientOrderId")
+        if client_order_id:
+            return str(client_order_id)
+        info = order.get("info")
+        if isinstance(info, dict) and info.get("clientOrderId"):
+            return str(info["clientOrderId"])
+        return None
+
+    @staticmethod
+    def _extract_order_position_side(order: Dict[str, Any]) -> Optional[PositionSide]:
+        """从 ccxt 订单结构中提取 Hedge `positionSide`。"""
+        raw_value = order.get("positionSide")
+        if raw_value is None:
+            info = order.get("info")
+            if isinstance(info, dict):
+                raw_value = info.get("positionSide")
+        if raw_value is None:
+            return None
+        normalized = str(raw_value).upper()
+        if normalized == PositionSide.LONG.value:
+            return PositionSide.LONG
+        if normalized == PositionSide.SHORT.value:
+            return PositionSide.SHORT
+        return None
+
+    def _extract_open_order_remaining_qty(self, order: Dict[str, Any]) -> Decimal:
+        """提取普通挂单剩余量，兼容 ccxt 顶层字段与 Binance raw info。"""
+        remaining = self._safe_decimal(order.get("remaining"), default=Decimal("-1"))
+        if remaining >= Decimal("0"):
+            return remaining
+
+        amount = self._safe_decimal(order.get("amount"), default=Decimal("-1"))
+        if amount >= Decimal("0"):
+            filled = self._safe_decimal(order.get("filled"), default=Decimal("0"))
+            return max(amount - filled, Decimal("0"))
+
+        info = order.get("info")
+        if isinstance(info, dict):
+            orig_qty = self._safe_decimal(info.get("origQty"), default=Decimal("-1"))
+            if orig_qty >= Decimal("0"):
+                executed_qty = self._safe_decimal(info.get("executedQty"), default=Decimal("0"))
+                return max(orig_qty - executed_qty, Decimal("0"))
+
+        return Decimal("0")
+
+    async def inspect_reduce_only_block(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+        *,
+        client_order_id_prefix: Optional[str] = None,
+    ) -> Optional[ReduceOnlyBlockInfo]:
+        """
+        检查 `-4118` 是否由同侧普通平仓挂单占满剩余仓位导致。
+
+        只检查：
+        - 同 symbol
+        - 同 Hedge `positionSide`
+        - 同平仓方向（LONG->SELL, SHORT->BUY）
+        - 普通 open orders 的剩余量
+        """
+        self._ensure_initialized()
+
+        positions = await self.fetch_positions(symbol)
+        position = next((pos for pos in positions if pos.position_side == position_side), None)
+        if position is None or position.position_amt == Decimal("0"):
+            return None
+
+        tradable_position_amt = self.get_tradable_qty(symbol, position.position_amt)
+        if tradable_position_amt <= Decimal("0"):
+            return None
+
+        close_side = OrderSide.SELL if position_side == PositionSide.LONG else OrderSide.BUY
+        open_orders = await self.fetch_open_orders(symbol)
+
+        blocking_qty = Decimal("0")
+        blocking_order_count = 0
+        own_blocking_qty = Decimal("0")
+        own_blocking_order_count = 0
+        external_blocking_qty = Decimal("0")
+        external_blocking_order_count = 0
+
+        for order in open_orders:
+            if self._extract_order_position_side(order) != position_side:
+                continue
+
+            raw_side = str(order.get("side", "")).upper()
+            if raw_side != close_side.value:
+                continue
+
+            remaining_qty = self._extract_open_order_remaining_qty(order)
+            if remaining_qty <= Decimal("0"):
+                continue
+
+            blocking_qty += remaining_qty
+            blocking_order_count += 1
+
+            client_order_id = self._extract_order_client_order_id(order)
+            is_own = bool(
+                client_order_id_prefix
+                and client_order_id
+                and client_order_id.startswith(client_order_id_prefix)
+            )
+            if is_own:
+                own_blocking_qty += remaining_qty
+                own_blocking_order_count += 1
+            else:
+                external_blocking_qty += remaining_qty
+                external_blocking_order_count += 1
+
+        if blocking_qty < tradable_position_amt:
+            return None
+
+        return ReduceOnlyBlockInfo(
+            symbol=symbol,
+            position_side=position_side,
+            position_amt=position.position_amt,
+            tradable_position_amt=tradable_position_amt,
+            blocking_qty=blocking_qty,
+            blocking_order_count=blocking_order_count,
+            own_blocking_qty=own_blocking_qty,
+            own_blocking_order_count=own_blocking_order_count,
+            external_blocking_qty=external_blocking_qty,
+            external_blocking_order_count=external_blocking_order_count,
+        )
 
     async def fetch_open_orders_raw(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """

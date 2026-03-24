@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断与执行竞态/自恢复安全修复）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复与 -4118 挂单占仓收口）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -25,6 +25,21 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：收口 `-4118` 同侧挂单占仓导致的无效重试
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-24
+
+**动机**：当 Binance 官网手动挂出的同侧平仓单，或本程序/其他实例遗留的同侧普通平仓单，已经覆盖剩余可交易仓位时，本程序继续发新的平仓单会被交易所用 `-4118 ReduceOnly Order Failed` 拒绝；旧逻辑只会进入短冷却后再次重试，导致同一侧持续刷错。<br>
+**产出**：
+
+- `src/exchange/adapter.py`：新增 `inspect_reduce_only_block()`，在 `-4118` 后刷新同 symbol 的 positions 与普通 open orders，只统计同 `positionSide` + 同平仓方向的挂单剩余量，并区分本程序与外部挂单覆盖量
+- `src/models.py`：新增 `ReduceOnlyBlockInfo`；`SideExecutionState` 增加 `reduce_only_block` 与复核时间戳
+- `src/execution/engine.py`：下单失败遇到 `-4118` 时触发复核；若确认剩余可交易仓位已被挂单覆盖，则锁存该侧并输出结构化日志；锁存期间 signal / panic close 会跳过重试，直到仓位归零或覆盖释放
+- `src/main.py`：把运行时 `client_order_id_prefix` 传给执行引擎的复核回调，用于区分“本程序挂单”和“外部挂单”
+- `tests/test_exchange.py` / `tests/test_execution.py`：补充同侧挂单覆盖识别、`-4118` 锁存、复核后恢复下单回归测试
+- `memory-bank/architecture.md`：同步记录 `-4118` 的复核与锁存行为
 
 ## Milestone/附加改进：修复执行引擎撤单竞态导致单侧卡死
 

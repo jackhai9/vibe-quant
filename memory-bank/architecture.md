@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式与执行竞态/自恢复安全约束） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式、执行竞态/自恢复安全约束与 -4118 挂单占仓锁存） -->
 <!-- Pos: memory-bank/architecture 总览与执行状态机约束 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -88,9 +88,9 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 |------|------|------|------|
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
-| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断 | 配置, OrderIntent | OrderResult, Position |
+| **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断；在 `-4118` 后复核同侧普通平仓挂单是否已覆盖剩余可交易仓位 | 配置, OrderIntent | OrderResult, Position |
 | **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell 与来源 freshness；`orderbook_price` 计算 accel/ROI 倍数，`orderbook_pressure` 生成固定数量信号覆盖 | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界 | ExitSignal, 配置 | OrderIntent |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
@@ -127,9 +127,10 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | `SymbolRules` | 交易规则 | tick_size, step_size, min_qty, min_notional |
 | `ExitSignal` | 平仓信号 | symbol, position_side, reason, strategy_mode, execution_preference, qty_policy, price/ttl/cooldown overrides |
 | `OrderIntent` | 下单意图 | symbol, side, position_side, qty, price, reduce_only=True, is_risk, client_order_id |
-| `OrderResult` | 下单结果 | success, order_id, status, filled_qty, avg_price |
+| `OrderResult` | 下单结果 | success, order_id, status, filled_qty, avg_price, error_code, error_message |
 | `OrderUpdate` | 订单更新事件（WS） | order_id, status, filled_qty, is_maker, realized_pnl, fee, fee_asset |
-| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器, signal override 上下文 |
+| `ReduceOnlyBlockInfo` | `-4118` 复核结果 | position_amt, tradable_position_amt, blocking_qty, own/external_blocking_* |
+| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器, signal override 上下文, reduce_only_block |
 | `RiskFlag` | 风险标记 | is_triggered, dist_to_liq, reason |
 
 ### 策略模式（已实现）
@@ -182,6 +183,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - 下单时设置 `newClientOrderId`（前缀 `<client_order_prefix>-{run_id}-`，其中 `client_order_prefix` 为固定前缀，`run_id` 每次启动自动生成）。退出时只撤销本次运行前缀挂单（优先按 symbol 拉取 openOrders，降低交易所权重），避免误撤手动订单；注意：若进程崩溃/强杀，遗留挂单不会自动清理。
 - 订单 TTL 超时后，撤单成功的订单进入 `COOLDOWN` 并保留订单上下文，直到 `ws_fill_grace_ms` 窗口结束；撤单失败的订单保留在 `WAITING` 并按短 backoff 重试撤单，避免丢失 live order 上下文后重复下单。
 - 若撤单与成交/终态 WS 回执并发，且交易所返回 `-2011 Unknown order sent` / order-not-found，执行引擎按“订单已离场”处理：保留上下文进入 `COOLDOWN` 等待 grace；若发现 `WAITING/CANCELING` 但 `current_order_id` 丢失，则自动自恢复。若该侧仍保留最近成交终态上下文，则强制等待 `ws_fill_grace_ms` 以完成持仓对齐，避免用 stale `position_amt` 复用同轮信号重新下单；`panic_close` 也走同一恢复分支，但仅在不存在 recent fill 上下文时允许立刻继续兜底下单。
+- 若普通平仓单收到 `-4118 ReduceOnly Order Failed`，执行引擎会立即让 `ExchangeAdapter` 复核同 symbol + 同 `positionSide` + 同平仓方向的普通挂单剩余量；当这些挂单已覆盖当前 `tradable_position_amt` 时，锁存 `reduce_only_block`，后续 signal / panic close 在复核窗口内直接跳过，直到仓位归零或挂单覆盖释放后再恢复。
 - `orderbook_pressure` 的被动 `GTX` 单若收到 `-5022 post only reject`，不会自动回退为 `GTC` taker 单；被动语义保持不变，等待下一轮盘口重评估。
 
 ### 倍数系统（已实现）
@@ -304,24 +306,24 @@ vibe-quant/
     ├── test_signal.py        # 信号引擎测试（18 用例）
     ├── test_pause_manager.py # PauseManager 测试（29 用例）
     ├── test_telegram_bot.py  # TelegramBot 测试（14 用例）
-    └── test_execution.py     # 执行引擎测试（41 用例）
+    └── test_execution.py     # 执行引擎测试（83 用例）
 ```
 
 ### 文件详细说明
 
 | 文件 | 行数 | 说明 |
 |------|------|------|
-| `src/models.py` | 340 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
-| `src/main.py` | 2559 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
+| `src/models.py` | 454 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
+| `src/main.py` | 2866 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
 | `src/config/loader.py` | 270 | ConfigLoader 类，YAML 加载 + 环境变量 + global/symbol 合并 |
 | `src/config/models.py` | 312 | pydantic 配置模型，支持类型验证和默认值 |
 | `src/utils/logger.py` | 483 | loguru 日志配置，按天滚动 + 结构化事件日志 |
 | `src/utils/helpers.py` | 159 | round_to_tick/round_up_to_tick/round_to_step/round_up_to_step/current_time_ms/symbol 转换 |
-| `src/exchange/adapter.py` | 820 | ExchangeAdapter 类，ccxt 封装（markets/positions/下单/撤单/规整函数） |
+| `src/exchange/adapter.py` | 1200 | ExchangeAdapter 类，ccxt 封装（markets/positions/下单/撤单/规整函数） |
 | `src/ws/market.py` | 477 | MarketWSClient 类，bookTicker/aggTrade/markPrice@1s 解析，指数退避重连，陈旧检测，重连回调 |
 | `src/ws/user_data.py` | 744 | UserDataWSClient 类，listenKey 管理 + ORDER_TRADE_UPDATE/ALGO_UPDATE/ACCOUNT_UPDATE 解析，指数退避重连，重连回调 |
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
-| `src/execution/engine.py` | 882 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
+| `src/execution/engine.py` | 1688 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
 | `src/risk/protective_stop.py` | 848 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |

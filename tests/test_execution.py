@@ -1,5 +1,5 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言与执行反馈校验（含成交率、撤单/成交竞态与 orphan 恢复安全回归）
+# Output: 状态机行为断言与执行反馈校验（含成交率、撤单/成交竞态、orphan 恢复与 reduce-only 挂单占仓回归）
 # Pos: ExecutionEngine 测试用例与撤单竞态、panic close、自恢复安全回归
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -32,6 +32,7 @@ from src.models import (
     QtyPolicy,
     MarketState,
     SymbolRules,
+    ReduceOnlyBlockInfo,
 )
 from src.utils.logger import setup_logger
 
@@ -105,6 +106,21 @@ def market_state():
         previous_trade_price=Decimal("50000"),
         last_update_ms=1000,
         is_ready=True,
+    )
+
+
+def make_reduce_only_block_info() -> ReduceOnlyBlockInfo:
+    return ReduceOnlyBlockInfo(
+        symbol="BTC/USDT:USDT",
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-0.003"),
+        tradable_position_amt=Decimal("0.003"),
+        blocking_qty=Decimal("0.003"),
+        blocking_order_count=2,
+        own_blocking_qty=Decimal("0.001"),
+        own_blocking_order_count=1,
+        external_blocking_qty=Decimal("0.002"),
+        external_blocking_order_count=1,
     )
 
 
@@ -1062,6 +1078,124 @@ class TestOnOrderPlaced:
         assert state.last_completed_order_id == "order_123"
         assert state.last_completed_filled_qty == Decimal("0.001")
         assert state.last_completed_avg_price == Decimal("50000")
+
+    @pytest.mark.asyncio
+    async def test_order_placed_4118_latches_reduce_only_block(self, mock_place_order, mock_cancel_order):
+        inspect_reduce_only_block = AsyncMock(return_value=make_reduce_only_block_info())
+        engine = ExecutionEngine(
+            place_order=mock_place_order,
+            cancel_order=mock_cancel_order,
+            inspect_reduce_only_block=inspect_reduce_only_block,
+        )
+
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.state = ExecutionState.PLACING
+
+        result = OrderResult(
+            success=False,
+            error_code="-4118",
+            error_message="ReduceOnly Order Failed",
+        )
+        intent = OrderIntent(
+            symbol="BTC/USDT:USDT",
+            side=OrderSide.BUY,
+            position_side=PositionSide.SHORT,
+            qty=Decimal("0.001"),
+            price=Decimal("50000"),
+        )
+
+        await engine.on_order_placed(intent=intent, result=result, current_ms=1000)
+
+        assert state.state == ExecutionState.COOLDOWN
+        assert state.reduce_only_block is not None
+        assert state.reduce_only_block.blocking_qty == Decimal("0.003")
+        inspect_reduce_only_block.assert_awaited_once_with("BTC/USDT:USDT", PositionSide.SHORT)
+
+
+class TestReduceOnlyBlock:
+    """`-4118` 挂单占仓锁存测试。"""
+
+    @pytest.mark.asyncio
+    async def test_on_signal_skips_while_reduce_only_block_active_before_recheck(
+        self,
+        mock_place_order,
+        mock_cancel_order,
+        symbol_rules,
+        market_state,
+    ):
+        inspect_reduce_only_block = AsyncMock()
+        engine = ExecutionEngine(
+            place_order=mock_place_order,
+            cancel_order=mock_cancel_order,
+            inspect_reduce_only_block=inspect_reduce_only_block,
+        )
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.reduce_only_block = make_reduce_only_block_info()
+        state.reduce_only_block_recheck_after_ms = 2000
+
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_PRIMARY,
+            timestamp_ms=1000,
+            best_bid=market_state.best_bid,
+            best_ask=market_state.best_ask,
+            last_trade_price=market_state.last_trade_price,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.003"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1500,
+        )
+
+        assert intent is None
+        assert state.state == ExecutionState.IDLE
+        inspect_reduce_only_block.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_on_signal_rechecks_reduce_only_block_and_resumes_after_release(
+        self,
+        mock_place_order,
+        mock_cancel_order,
+        symbol_rules,
+        market_state,
+    ):
+        inspect_reduce_only_block = AsyncMock(return_value=None)
+        engine = ExecutionEngine(
+            place_order=mock_place_order,
+            cancel_order=mock_cancel_order,
+            inspect_reduce_only_block=inspect_reduce_only_block,
+        )
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        state.reduce_only_block = make_reduce_only_block_info()
+        state.reduce_only_block_recheck_after_ms = 1000
+
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_PRIMARY,
+            timestamp_ms=1000,
+            best_bid=market_state.best_bid,
+            best_ask=market_state.best_ask,
+            last_trade_price=market_state.last_trade_price,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("-0.003"),
+            rules=symbol_rules,
+            market_state=market_state,
+            current_ms=1500,
+        )
+
+        assert intent is not None
+        assert intent.side == OrderSide.BUY
+        assert state.reduce_only_block is None
+        assert state.state == ExecutionState.PLACING
+        inspect_reduce_only_block.assert_awaited_once_with("BTC/USDT:USDT", PositionSide.SHORT)
 
 
 class TestOnOrderUpdate:

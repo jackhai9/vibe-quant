@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, and pause/resume control
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, and reduce-only block verification wiring
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -64,6 +64,7 @@ from src.models import (
     StrategyMode,
     SignalExecutionPreference,
     TimeInForce,
+    ReduceOnlyBlockInfo,
 )
 from src.utils.logger import (
     setup_logger,
@@ -1063,6 +1064,20 @@ class Application:
 
         return await self.exchange.place_order(intent)
 
+    async def _inspect_reduce_only_block(
+        self,
+        symbol: str,
+        position_side: PositionSide,
+    ) -> Optional[ReduceOnlyBlockInfo]:
+        """复核 `-4118` 是否由同侧普通平仓挂单占满剩余仓位导致。"""
+        if not self.exchange:
+            return None
+        return await self.exchange.inspect_reduce_only_block(
+            symbol,
+            position_side,
+            client_order_id_prefix=self._client_order_id_prefix,
+        )
+
     async def _maybe_retry_post_only_reject(
         self,
         *,
@@ -1646,6 +1661,7 @@ class Application:
                 cancel_order=self._cancel_order,
                 on_fill=self._on_engine_fill,
                 fetch_order_trade_meta=self.exchange.fetch_order_trade_meta,
+                inspect_reduce_only_block=self._inspect_reduce_only_block,
                 order_ttl_ms=cfg.order_ttl_ms,
                 repost_cooldown_ms=cfg.repost_cooldown_ms,
                 base_lot_mult=cfg.base_lot_mult,

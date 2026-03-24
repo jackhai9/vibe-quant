@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override and reconcile-safe timeout/preempt/orphan recovery)
-# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, and panic-close-safe orphan repair
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, and reduce-only block latching)
+# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, and same-side close-order block handling
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -45,6 +45,7 @@ from src.models import (
     StrategyMode,
     SignalExecutionPreference,
     QtyPolicy,
+    ReduceOnlyBlockInfo,
 )
 from src.utils.logger import (
     get_logger,
@@ -87,6 +88,9 @@ class ExecutionEngine:
                 Awaitable[tuple[Optional[bool], Optional[Decimal], Optional[Decimal], Optional[str]]],
             ]
         ] = None,
+        inspect_reduce_only_block: Optional[
+            Callable[[str, PositionSide], Awaitable[Optional[ReduceOnlyBlockInfo]]]
+        ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
         base_lot_mult: int = 1,
@@ -104,6 +108,7 @@ class ExecutionEngine:
         fill_rate_low_threshold: Decimal = Decimal("0.25"),
         fill_rate_high_threshold: Decimal = Decimal("0.75"),
         fill_rate_log_windows_min: Optional[list[Decimal]] = None,
+        reduce_only_block_recheck_ms: int = 3000,
     ):
         """
         初始化执行引擎
@@ -113,6 +118,7 @@ class ExecutionEngine:
             cancel_order: 撤单函数
             on_fill: 成交通知回调（不得阻塞主链路）
             fetch_order_trade_meta: 查询订单 maker 状态/已实现盈亏/手续费（用于 WS 超时时回退查询）
+            inspect_reduce_only_block: 复核 `-4118` 是否由同侧普通平仓挂单占满仓位导致
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
             base_lot_mult: 基础片大小倍数
@@ -130,11 +136,13 @@ class ExecutionEngine:
             fill_rate_low_threshold: 低成交率阈值
             fill_rate_high_threshold: 高成交率阈值
             fill_rate_log_windows_min: 成交率日志窗口列表(分钟)
+            reduce_only_block_recheck_ms: `-4118` 挂单占仓确认后的复核间隔
         """
         self.place_order = place_order
         self.cancel_order = cancel_order
         self._on_fill = on_fill
         self._fetch_order_trade_meta = fetch_order_trade_meta
+        self._inspect_reduce_only_block = inspect_reduce_only_block
         self.order_ttl_ms = order_ttl_ms
         self.repost_cooldown_ms = repost_cooldown_ms
         self.base_lot_mult = base_lot_mult
@@ -154,6 +162,9 @@ class ExecutionEngine:
         self.fill_rate_window_ms = self._minutes_to_ms(fill_rate_window_min)
         self.fill_rate_low_threshold = fill_rate_low_threshold
         self.fill_rate_high_threshold = fill_rate_high_threshold
+        if reduce_only_block_recheck_ms <= 0:
+            raise ValueError("reduce_only_block_recheck_ms must be > 0")
+        self.reduce_only_block_recheck_ms = reduce_only_block_recheck_ms
         log_windows = [w for w in (fill_rate_log_windows_min or []) if w and w > 0]
         if log_windows:
             max_window_ms = max(self._minutes_to_ms(w) for w in log_windows)
@@ -301,6 +312,118 @@ class ExecutionEngine:
             state.recent_maker_fills.popleft()
 
     @staticmethod
+    def _reduce_only_block_source(block_info: ReduceOnlyBlockInfo) -> str:
+        own = block_info.own_blocking_order_count > 0
+        external = block_info.external_blocking_order_count > 0
+        if own and external:
+            return "mixed"
+        if external:
+            return "external"
+        if own:
+            return "own"
+        return "unknown"
+
+    def _set_reduce_only_block(
+        self,
+        state: SideExecutionState,
+        block_info: ReduceOnlyBlockInfo,
+        current_ms: int,
+        *,
+        error_code: Optional[str] = None,
+        emit_log: bool,
+    ) -> None:
+        state.reduce_only_block = block_info
+        state.reduce_only_block_recheck_after_ms = current_ms + self.reduce_only_block_recheck_ms
+        if not emit_log:
+            return
+
+        log_event(
+            "reject",
+            level="warning",
+            symbol=block_info.symbol,
+            side=block_info.position_side.value,
+            reason="reduce_only_blocked_by_open_orders",
+            source=self._reduce_only_block_source(block_info),
+            error_code=error_code,
+            position_amt=block_info.position_amt,
+            tradable_qty=block_info.tradable_position_amt,
+            blocking_qty=block_info.blocking_qty,
+            blocking_orders=block_info.blocking_order_count,
+            own_blocking_qty=block_info.own_blocking_qty,
+            own_blocking_orders=block_info.own_blocking_order_count,
+            external_blocking_qty=block_info.external_blocking_qty,
+            external_blocking_orders=block_info.external_blocking_order_count,
+            recheck_after_ms=self.reduce_only_block_recheck_ms,
+        )
+
+    def _clear_reduce_only_block(self, state: SideExecutionState, *, reason: str) -> None:
+        block_info = state.reduce_only_block
+        if block_info is None:
+            return
+        state.reduce_only_block = None
+        state.reduce_only_block_recheck_after_ms = 0
+        log_event(
+            "reject",
+            level="info",
+            symbol=state.symbol,
+            side=state.position_side.value,
+            reason=reason,
+            position_amt=block_info.position_amt,
+            tradable_qty=block_info.tradable_position_amt,
+            blocking_qty=block_info.blocking_qty,
+            blocking_orders=block_info.blocking_order_count,
+        )
+
+    async def _should_skip_for_reduce_only_block(
+        self,
+        state: SideExecutionState,
+        *,
+        position_amt: Decimal,
+        min_qty: Decimal,
+        step_size: Decimal,
+        current_ms: int,
+        source: str,
+    ) -> bool:
+        block_info = state.reduce_only_block
+        if block_info is None:
+            return False
+
+        logger = get_logger()
+        if self.is_position_done(position_amt, min_qty, step_size):
+            self._clear_reduce_only_block(state, reason="reduce_only_block_position_done")
+            return True
+
+        if current_ms < state.reduce_only_block_recheck_after_ms:
+            logger.debug(
+                f"{state.symbol} {state.position_side.value} 已锁存 reduce-only 挂单占仓，"
+                f"source={source} next_recheck_ms={state.reduce_only_block_recheck_after_ms}"
+            )
+            return True
+
+        if self._inspect_reduce_only_block is None:
+            state.reduce_only_block = None
+            state.reduce_only_block_recheck_after_ms = 0
+            return False
+
+        try:
+            latest_block_info = await self._inspect_reduce_only_block(state.symbol, state.position_side)
+        except Exception as e:
+            state.reduce_only_block_recheck_after_ms = current_ms + self.reduce_only_block_recheck_ms
+            logger.warning(f"复核 reduce-only 挂单占仓失败: {state.symbol} {state.position_side.value} - {e}")
+            return True
+
+        if latest_block_info is None:
+            self._clear_reduce_only_block(state, reason="reduce_only_block_released")
+            return False
+
+        self._set_reduce_only_block(state, latest_block_info, current_ms, emit_log=False)
+        logger.debug(
+            f"{state.symbol} {state.position_side.value} reduce-only 挂单占仓仍存在，"
+            f"tradable={latest_block_info.tradable_position_amt} blocking={latest_block_info.blocking_qty}"
+        )
+        return True
+
+    @staticmethod
     def _count_since(values, cutoff: int) -> int:
         for idx, ts in enumerate(values):
             if ts >= cutoff:
@@ -342,6 +465,16 @@ class ExecutionEngine:
         # 只有在 IDLE 状态才处理新信号
         if state.state != ExecutionState.IDLE:
             logger.debug(f"{signal.symbol} {signal.position_side.value} 状态为 {state.state.value}，跳过信号")
+            return None
+
+        if await self._should_skip_for_reduce_only_block(
+            state,
+            position_amt=position_amt,
+            min_qty=rules.min_qty,
+            step_size=rules.step_size,
+            current_ms=current_ms,
+            source="signal",
+        ):
             return None
 
         # 检查仓位是否已完成
@@ -472,6 +605,16 @@ class ExecutionEngine:
 
         # 只有在 IDLE 状态才允许发起新的兜底订单
         if state.state != ExecutionState.IDLE:
+            return None
+
+        if await self._should_skip_for_reduce_only_block(
+            state,
+            position_amt=position_amt,
+            min_qty=rules.min_qty,
+            step_size=rules.step_size,
+            current_ms=current_ms,
+            source="panic_close",
+        ):
             return None
 
         # 检查仓位是否已完成
@@ -607,6 +750,23 @@ class ExecutionEngine:
             # -5022 Post Only rejected 属于“可预期”的交易所拒单，已由 ExchangeAdapter 以结构化日志记录，避免重复刷屏
             if result.error_code == "-5022":
                 return
+            if result.error_code == "-4118" and self._inspect_reduce_only_block is not None:
+                try:
+                    block_info = await self._inspect_reduce_only_block(intent.symbol, intent.position_side)
+                except Exception as e:
+                    get_logger().warning(
+                        f"复核 reduce-only 挂单占仓失败: {intent.symbol} {intent.position_side.value} - {e}"
+                    )
+                else:
+                    if block_info is not None:
+                        self._set_reduce_only_block(
+                            state,
+                            block_info,
+                            current_ms,
+                            error_code=result.error_code,
+                            emit_log=True,
+                        )
+                        return
             get_logger().warning(f"下单失败: {intent.symbol} {intent.position_side.value} - {result.error_message}")
 
     def _should_accept_late_fill(

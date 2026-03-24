@@ -1,5 +1,5 @@
 # Input: 被测模块与 pytest 夹具
-# Output: pytest 断言结果（含初始化重试与代理诊断）
+# Output: pytest 断言结果（含初始化重试、代理诊断与 reduce-only 挂单占仓识别）
 # Pos: 测试用例
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -25,6 +25,7 @@ from src.models import (
     SymbolRules,
     OrderIntent,
     OrderResult,
+    ReduceOnlyBlockInfo,
 )
 from src.utils.logger import setup_logger
 
@@ -257,6 +258,130 @@ class TestRoundingFunctions:
         # 0.0005 < 0.001 (min_qty), 返回 0
         result = adapter.get_tradable_qty("BTC/USDT:USDT", Decimal("0.0005"))
         assert result == Decimal("0")
+
+
+class TestReduceOnlyBlockInspection:
+    """`-4118` 同侧挂单占仓识别测试。"""
+
+    @pytest.fixture
+    def initialized_adapter(self):
+        adapter = ExchangeAdapter("key", "secret")
+        adapter._initialized = True
+        adapter._exchange = MagicMock()
+        adapter._rules = {
+            "DASH/USDT:USDT": SymbolRules(
+                symbol="DASH/USDT:USDT",
+                tick_size=Decimal("0.001"),
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("5"),
+            )
+        }
+        return adapter
+
+    @pytest.fixture
+    def adapter_with_rules(self):
+        adapter = ExchangeAdapter("key", "secret")
+        adapter._rules = {
+            "BTC/USDT:USDT": SymbolRules(
+                symbol="BTC/USDT:USDT",
+                tick_size=Decimal("0.1"),
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("5"),
+            ),
+            "ETH/USDT:USDT": SymbolRules(
+                symbol="ETH/USDT:USDT",
+                tick_size=Decimal("0.01"),
+                step_size=Decimal("0.01"),
+                min_qty=Decimal("0.01"),
+                min_notional=Decimal("5"),
+            ),
+        }
+        return adapter
+
+    @staticmethod
+    def _make_position(position_amt: Decimal) -> Position:
+        return Position(
+            symbol="DASH/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            position_amt=position_amt,
+            entry_price=Decimal("20"),
+            unrealized_pnl=Decimal("0"),
+            leverage=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_inspect_reduce_only_block_detects_covering_orders(self, initialized_adapter):
+        adapter = initialized_adapter
+        adapter.fetch_positions = AsyncMock(return_value=[self._make_position(Decimal("-0.003"))])
+        adapter.fetch_open_orders = AsyncMock(
+            return_value=[
+                {
+                    "side": "buy",
+                    "remaining": Decimal("0.002"),
+                    "info": {
+                        "positionSide": "SHORT",
+                        "clientOrderId": "manual-close-1",
+                    },
+                },
+                {
+                    "side": "BUY",
+                    "remaining": "0.001",
+                    "positionSide": "SHORT",
+                    "clientOrderId": "vq-run-1",
+                },
+            ]
+        )
+
+        block_info = await adapter.inspect_reduce_only_block(
+            "DASH/USDT:USDT",
+            PositionSide.SHORT,
+            client_order_id_prefix="vq-",
+        )
+
+        assert isinstance(block_info, ReduceOnlyBlockInfo)
+        assert block_info is not None
+        assert block_info.position_amt == Decimal("-0.003")
+        assert block_info.tradable_position_amt == Decimal("0.003")
+        assert block_info.blocking_qty == Decimal("0.003")
+        assert block_info.blocking_order_count == 2
+        assert block_info.own_blocking_qty == Decimal("0.001")
+        assert block_info.own_blocking_order_count == 1
+        assert block_info.external_blocking_qty == Decimal("0.002")
+        assert block_info.external_blocking_order_count == 1
+
+    @pytest.mark.asyncio
+    async def test_inspect_reduce_only_block_ignores_wrong_side_and_undercovered_qty(self, initialized_adapter):
+        adapter = initialized_adapter
+        adapter.fetch_positions = AsyncMock(return_value=[self._make_position(Decimal("-0.003"))])
+        adapter.fetch_open_orders = AsyncMock(
+            return_value=[
+                {
+                    "side": "buy",
+                    "remaining": Decimal("0.001"),
+                    "info": {"positionSide": "LONG"},
+                },
+                {
+                    "side": "sell",
+                    "remaining": Decimal("0.003"),
+                    "info": {"positionSide": "SHORT"},
+                },
+                {
+                    "side": "buy",
+                    "remaining": Decimal("0.001"),
+                    "info": {"positionSide": "SHORT"},
+                },
+            ]
+        )
+
+        block_info = await adapter.inspect_reduce_only_block(
+            "DASH/USDT:USDT",
+            PositionSide.SHORT,
+            client_order_id_prefix="vq-",
+        )
+
+        assert block_info is None
 
     def test_get_rules(self, adapter_with_rules):
         """测试获取规则"""
