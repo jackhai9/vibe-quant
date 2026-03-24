@@ -59,7 +59,7 @@ class TestRiskDistance:
         flag = rm.check_risk(_pos(mark_price=Decimal("100"), liquidation_price=Decimal("99")))
         assert flag.dist_to_liq == Decimal("0.01")
         assert flag.is_triggered is True
-        assert flag.reason == "liq_distance_breach"
+        assert flag.reason == "liq_distance"
 
 
 class TestGlobalRateLimit:

@@ -412,13 +412,13 @@ roi = unrealized_pnl / initial_margin
 
 - **类型**: `Dict[str, int]`
 - **默认值**（内置）:
-  - `liq_distance_breach: 1`
+  - `liq_distance: 1`
   - `panic_close: 2`
   - `protective_stop: 3`
 - **说明**:
   - key 为风险阶段/类型（`risk_stage`），value 为等级数字（`risk_level`）。
   - 当前日志里会在 `[RISK]` 事件附带 `risk_stage`/`risk_level`：
-    - `risk_stage=liq_distance_breach`（清算距离触发）
+    - `risk_stage=liq_distance`（清算距离触发）
     - `risk_stage=panic_close`（恐慌平仓）
     - `risk_stage=protective_stop`（保护性止损）
 
@@ -426,7 +426,7 @@ roi = unrealized_pnl / initial_margin
 ```yaml
 risk:
   levels:
-    liq_distance_breach: 1
+    liq_distance: 1
     panic_close: 2
     protective_stop: 3
 ```
@@ -535,7 +535,7 @@ tiers:
 ```yaml
 risk:
   levels:
-    liq_distance_breach: 1
+    liq_distance: 1
     panic_close: 2
     protective_stop: 3
   protective_stop:
@@ -639,7 +639,7 @@ symbols:
     risk:
       # 可选：覆盖等级映射（只影响日志展示）
       # levels:
-      #   liq_distance_breach: 1
+      #   liq_distance: 1
       #   panic_close: 2
       #   protective_stop: 3
       liq_distance_threshold: 0.02

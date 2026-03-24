@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复与 -4118 挂单占仓收口）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、一级风控日志降噪与 -4118 挂单占仓收口）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -25,6 +25,20 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：收口 `liq_distance` 风险日志刷屏与模式抖动
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-24
+
+**动机**：当 `dist_to_liq` 长时间停留在一级风控阈值内时，旧逻辑会在 aggressive 单成交/超时后立刻降回 `MAKER_ONLY`，下一轮信号又因 `risk_trigger` 切回 `AGGRESSIVE_LIMIT`。结果是同一风险状态被反复打成 `[RISK]` warning，并伴随 `AGGRESSIVE_LIMIT ↔ MAKER_ONLY` 模式抖动。<br>
+**产出**：
+
+- `src/models.py`：`SideExecutionState` 增加 `liq_distance_active` / `liq_distance_reason`，用于锁存单侧一级风控状态
+- `src/main.py`：`_evaluate_side()` 改为在风险“进入”时记录一次 warning、在风险“解除”时记录一次 recovery info，并只在进入时发送 Telegram 风险通知
+- `src/execution/engine.py`：当一级风控仍为 active 时，禁止 `AGGRESSIVE_LIMIT` 因 aggressive fill / partial fill / timeout 自动降回 `MAKER_ONLY`
+- `tests/test_execution.py` / `tests/test_main_shutdown.py`：补充一级风控持续时保持 aggressive 模式、风险日志只在进入/恢复时输出的回归测试
+- `memory-bank/architecture.md`：同步记录一级风控日志/模式保持行为
 
 ## Milestone/附加改进：收口 `-4118` 同侧挂单占仓导致的无效重试
 

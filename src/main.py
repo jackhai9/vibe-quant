@@ -1,5 +1,5 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, and reduce-only block verification wiring
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, and liq-distance risk log/mode coordination
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -65,6 +65,7 @@ from src.models import (
     SignalExecutionPreference,
     TimeInForce,
     ReduceOnlyBlockInfo,
+    RiskFlag,
 )
 from src.utils.logger import (
     setup_logger,
@@ -2092,6 +2093,58 @@ class Application:
             self._reset_pressure_dwell(symbol, position_side, reason="strategy_data_stale")
             return
 
+        state = engine.get_state(symbol, position_side)
+        risk_flag: RiskFlag | None = None
+        dist_display: str | None = None
+        risk_stage: str | None = None
+        risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
+        if self.risk_manager:
+            symbol_cfg = self._symbol_configs.get(symbol)
+            symbol_threshold = symbol_cfg.liq_distance_threshold if symbol_cfg else None
+            risk_flag = self.risk_manager.check_risk(position, liq_distance_threshold=symbol_threshold)
+            if risk_flag.dist_to_liq is not None:
+                dist_display = format_decimal(risk_flag.dist_to_liq, precision=4)
+
+            if risk_flag.is_triggered and risk_flag.dist_to_liq is not None:
+                risk_stage = risk_flag.reason or "liq_distance"
+                if (not state.liq_distance_active) or state.liq_distance_reason != risk_stage:
+                    state.liq_distance_active = True
+                    state.liq_distance_reason = risk_stage
+                    log_event(
+                        "risk",
+                        symbol=symbol,
+                        side=position_side.value,
+                        mode=ExecutionMode.AGGRESSIVE_LIMIT.value,
+                        risk_stage=risk_stage,
+                        risk_level=risk_levels.get(risk_stage),
+                        reason=risk_flag.reason,
+                        dist_to_liq=dist_display,
+                    )
+                    if self.config_loader and self.telegram_notifier:
+                        telegram_cfg = self.config_loader.config.global_.telegram
+                        if telegram_cfg.enabled and telegram_cfg.events.on_risk_trigger:
+                            self._schedule_telegram(
+                                self.telegram_notifier.notify_risk_trigger(
+                                    symbol=symbol,
+                                    position_side=position_side.value,
+                                    dist_to_liq=dist_display or str(risk_flag.dist_to_liq),
+                                ),
+                                name=f"risk_trigger:{symbol}:{position_side.value}",
+                            )
+            elif state.liq_distance_active:
+                log_event(
+                    "risk",
+                    level="info",
+                    symbol=symbol,
+                    side=position_side.value,
+                    risk_stage="liq_distance_recovered",
+                    reason="liq_distance_recovered",
+                    prev_risk_stage=state.liq_distance_reason,
+                    dist_to_liq=dist_display,
+                )
+                state.liq_distance_active = False
+                state.liq_distance_reason = None
+
         # 评估信号
         signal = self.signal_engine.evaluate(  # type: ignore[union-attr]
             symbol=symbol,
@@ -2104,40 +2157,10 @@ class Application:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
             # orderbook_price：切换执行模式到 AGGRESSIVE_LIMIT
             # orderbook_pressure：仅做日志/告警，不改写信号的主动/被动语义（panic_close 兜底）
-            if self.risk_manager:
-                symbol_cfg = self._symbol_configs.get(symbol)
-                symbol_threshold = symbol_cfg.liq_distance_threshold if symbol_cfg else None
-                risk_flag = self.risk_manager.check_risk(position, liq_distance_threshold=symbol_threshold)
-                if risk_flag.is_triggered and risk_flag.dist_to_liq is not None:
-                    target_mode = ExecutionMode.AGGRESSIVE_LIMIT
-
-                    state = engine.get_state(symbol, position_side)
-                    if state.mode != target_mode:
-                        engine.set_mode(symbol, position_side, target_mode, reason="risk_trigger")
-                        dist_display = format_decimal(risk_flag.dist_to_liq, precision=4)
-                        risk_stage = risk_flag.reason or "liq_distance_breach"
-                        risk_levels = self.config_loader.config.global_.risk.levels if self.config_loader else {}
-                        log_event(
-                            "risk",
-                            symbol=symbol,
-                            side=position_side.value,
-                            mode=target_mode.value,
-                            risk_stage=risk_stage,
-                            risk_level=risk_levels.get(risk_stage),
-                            reason=risk_flag.reason,
-                            dist_to_liq=dist_display,
-                        )
-                        if self.config_loader and self.telegram_notifier:
-                            telegram_cfg = self.config_loader.config.global_.telegram
-                            if telegram_cfg.enabled and telegram_cfg.events.on_risk_trigger:
-                                self._schedule_telegram(
-                                    self.telegram_notifier.notify_risk_trigger(
-                                        symbol=symbol,
-                                        position_side=position_side.value,
-                                        dist_to_liq=dist_display or str(risk_flag.dist_to_liq),
-                                    ),
-                                    name=f"risk_trigger:{symbol}:{position_side.value}",
-                                )
+            if risk_flag and risk_flag.is_triggered and risk_flag.dist_to_liq is not None:
+                target_mode = ExecutionMode.AGGRESSIVE_LIMIT
+                if state.mode != target_mode:
+                    engine.set_mode(symbol, position_side, target_mode, reason="risk_trigger")
 
             # 主动信号抢占被动单
             state = engine.get_state(symbol, position_side)

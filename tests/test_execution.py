@@ -2137,3 +2137,73 @@ class TestPanicClose:
         await engine.on_order_update(update, current_ms=100)
 
         assert state.mode == ExecutionMode.MAKER_ONLY
+
+    @pytest.mark.asyncio
+    async def test_partial_fill_keeps_aggressive_under_liq_distance(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.liq_distance_active = True
+        state.liq_distance_reason = "liq_distance"
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.current_order_placed_ms = 0
+
+        update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="order_123",
+            client_order_id="client_123",
+            side=OrderSide.SELL,
+            position_side=PositionSide.LONG,
+            status=OrderStatus.PARTIALLY_FILLED,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50000"),
+            timestamp_ms=100,
+        )
+        await engine.on_order_update(update, current_ms=100)
+
+        assert state.mode == ExecutionMode.AGGRESSIVE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_filled_order_keeps_aggressive_under_liq_distance(self, engine):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.liq_distance_active = True
+        state.liq_distance_reason = "liq_distance"
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.current_order_placed_ms = 0
+        state.current_order_reason = SignalReason.LONG_PRIMARY.value
+
+        update = OrderUpdate(
+            symbol="BTC/USDT:USDT",
+            order_id="order_123",
+            client_order_id="client_123",
+            side=OrderSide.SELL,
+            position_side=PositionSide.LONG,
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("0.001"),
+            avg_price=Decimal("50000"),
+            timestamp_ms=100,
+        )
+        await engine.on_order_update(update, current_ms=100)
+
+        assert state.mode == ExecutionMode.AGGRESSIVE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_timeout_keeps_aggressive_under_liq_distance(self, engine, mock_cancel_order):
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.LONG)
+        state.mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.liq_distance_active = True
+        state.liq_distance_reason = "liq_distance"
+        state.state = ExecutionState.WAITING
+        state.current_order_id = "order_123"
+        state.current_order_mode = ExecutionMode.AGGRESSIVE_LIMIT
+        state.current_order_placed_ms = 0
+
+        await engine.check_timeout("BTC/USDT:USDT", PositionSide.LONG, current_ms=1000)
+
+        assert state.mode == ExecutionMode.AGGRESSIVE_LIMIT
+        assert state.state == ExecutionState.COOLDOWN
+        mock_cancel_order.assert_called_once()

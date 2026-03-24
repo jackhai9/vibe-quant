@@ -18,7 +18,7 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 - **执行模式轮转**：Maker 挂单优先，超时自动升级为 Aggressive Limit
 - **智能倍数系统**：ROI + 加速度双倍数叠加，动态调整单笔数量
 - **成交率反馈**：根据 maker 成交率动态调整升级阈值
-- **多级风控**：`orderbook_price` 的软风控执行升级 + 全模式 `panic_close` 强制分片 + 交易所端保护止损
+- **多级风控**：`orderbook_price` 的一级风控执行升级 + 全模式 `panic_close` 强制分片 + 交易所端保护止损
 - **实时数据**：WebSocket 订阅 bookTicker / aggTrade / markPrice / User Data Stream；`orderbook_pressure` symbol 额外订阅 `depth10@100ms`
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
 - **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
@@ -224,8 +224,8 @@ ret_window = (price_now / price_window_ago) - 1
 
 | 层级 | 触发条件 | 行为 |
 |------|----------|------|
-| **软风控（orderbook_price）** | `dist_to_liq` < 阈值，且已有 `orderbook_price` 信号 | 至少升级为 `AGGRESSIVE_LIMIT` |
-| **软风控（orderbook_pressure）** | `dist_to_liq` < 阈值，且已有 `orderbook_pressure` 信号 | 记录风险事件/通知，但不把未达阈值的被动单改写成主动单 |
+| **一级风控（orderbook_price）** | `dist_to_liq` < 阈值，且已有 `orderbook_price` 信号 | 至少升级为 `AGGRESSIVE_LIMIT` |
+| **一级风控（orderbook_pressure）** | `dist_to_liq` < 阈值，且已有 `orderbook_pressure` 信号 | 记录风险事件/通知，但不把未达阈值的被动单改写成主动单 |
 | **强制平仓** | `dist_to_liq` 进入 panic_close 档位 | 绕过信号，按 slice_ratio 强制分片平仓 |
 | **保护止损** | 交易所端 STOP_MARKET | 程序崩溃/断网时最后防线 |
 | **外部接管** | 同侧存在外部 stop/tp（`closePosition=true` 字段 或 `reduceOnly=true` 字段） | 撤销我方保护止损并暂停维护，直到外部单消失 |

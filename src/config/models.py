@@ -121,7 +121,7 @@ class RiskConfig(BaseModel):
     """风控配置"""
     levels: Dict[str, int] = Field(
         default_factory=lambda: {
-            "liq_distance_breach": 1,
+            "liq_distance": 1,
             "panic_close": 2,
             "protective_stop": 3,
         },
@@ -136,6 +136,10 @@ class RiskConfig(BaseModel):
     )
     panic_close: PanicCloseConfig = Field(default_factory=PanicCloseConfig)
     protective_stop: ProtectiveStopConfig = Field(default_factory=ProtectiveStopConfig)
+
+    @model_validator(mode="after")
+    def normalize_levels(self) -> "RiskConfig":
+        return self
 
 
 class RateLimitConfig(BaseModel):
@@ -313,6 +317,10 @@ class SymbolRiskConfig(BaseModel):
     liq_distance_threshold: Optional[Decimal] = Field(default=None, gt=Decimal("0"), le=Decimal("1"))
     panic_close: Optional[SymbolPanicCloseConfig] = None
     protective_stop: Optional[SymbolProtectiveStopConfig] = None
+
+    @model_validator(mode="after")
+    def normalize_levels(self) -> "SymbolRiskConfig":
+        return self
 
 
 class SymbolConfig(BaseModel):

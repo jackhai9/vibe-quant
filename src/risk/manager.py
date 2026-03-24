@@ -119,7 +119,7 @@ class RiskManager:
 
         dist_to_liq = abs(mark_price - liquidation_price) / mark_price
         is_triggered = dist_to_liq <= threshold
-        reason = "liq_distance_breach" if is_triggered else None
+        reason = "liq_distance" if is_triggered else None
 
         return RiskFlag(
             symbol=position.symbol,

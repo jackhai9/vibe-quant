@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式、执行竞态/自恢复安全约束与 -4118 挂单占仓锁存） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式、执行竞态/自恢复安全约束、一级风控日志降噪与 -4118 挂单占仓锁存） -->
 <!-- Pos: memory-bank/architecture 总览与执行状态机约束 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -90,7 +90,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断；在 `-4118` 后复核同侧普通平仓挂单是否已覆盖剩余可交易仓位 | 配置, OrderIntent | OrderResult, Position |
 | **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell 与来源 freshness；`orderbook_price` 计算 accel/ROI 倍数，`orderbook_pressure` 生成固定数量信号覆盖 | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试 | ExitSignal, 配置 | OrderIntent |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
@@ -130,7 +130,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | `OrderResult` | 下单结果 | success, order_id, status, filled_qty, avg_price, error_code, error_message |
 | `OrderUpdate` | 订单更新事件（WS） | order_id, status, filled_qty, is_maker, realized_pnl, fee, fee_asset |
 | `ReduceOnlyBlockInfo` | `-4118` 复核结果 | position_amt, tradable_position_amt, blocking_qty, own/external_blocking_* |
-| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器, signal override 上下文, reduce_only_block |
+| `SideExecutionState` | 执行状态机 | state, mode, current_order_id, maker/aggr 计数器, signal override 上下文, liq_distance_active, reduce_only_block |
 | `RiskFlag` | 风险标记 | is_triggered, dist_to_liq, reason |
 
 ### 策略模式（已实现）
@@ -171,6 +171,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - `MAKER_ONLY` 连续超时 `>= maker_timeouts_to_escalate` → 切到 `AGGRESSIVE_LIMIT`
 - `AGGRESSIVE_LIMIT` 成交次数 `>= aggr_fills_to_deescalate` → 切回 `MAKER_ONLY`
 - `AGGRESSIVE_LIMIT` 连续超时 `>= aggr_timeouts_to_deescalate` → 切回 `MAKER_ONLY`
+- 若 `liq_distance` 等一级风控仍处于触发态，则暂停上述 `AGGRESSIVE_LIMIT → MAKER_ONLY` 的自动降级，直到风险解除
 
 直接吃单规则（跳过模式轮转）：
 
@@ -195,8 +196,10 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 ### 风控与限速（已实现）
 
 - markPrice 数据源：市场 WS 订阅 `@markPrice@1s`，解析为 `MarketEvent.mark_price`；该事件**不参与** stale 判定（stale 仅由 bookTicker/aggTrade 刷新），只用于风控计算
-- 软风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
+- 一级风控（Step 9.1）：`dist_to_liq = abs(mark_price - liquidation_price) / mark_price`
   - `orderbook_price`：触发后强制至少切到 `AGGRESSIVE_LIMIT`（不进入 `MARKET` 执行模式）
+    - 同一 `symbol + positionSide + risk_stage` 只在“进入风险区”时记录一次 `[RISK]` warning，并在风险解除时记录一次 recovery info；持续风险期间不重复刷 warning/Telegram
+    - 风险持续期间，执行引擎保持 `AGGRESSIVE_LIMIT`，不因 aggressive fill/timeout 自动降回 `MAKER_ONLY`
   - `orderbook_pressure`：触发后记录 risk 事件/通知，但不把未达阈值的被动单改成主动单
 - 强制风控（panic_close）：当 `dist_to_liq` 落入 `global.risk.panic_close.tiers` 任一档位时，绕过信号/节流，按 `slice_ratio` 强制分片下单（reduce-only 语义约束，不下发 `reduceOnly`），maker 连续超时达到 `maker_timeouts_to_escalate` 升级为 `AGGRESSIVE_LIMIT`；TTL 固定为 `execution.order_ttl_ms × ttl_percent`
 - 仓位保护性止损（Step 9.3）：为每个”有持仓”的 `symbol + positionSide` 维护交易所端 `STOP_MARKET closePosition` 条件单（`MARK_PRICE` 触发），stopPrice 基于 `liquidation_price` 与 `dist_to_liq` 阈值反推；clientOrderId 使用稳定前缀以支持重启后续管，仓位归零时自动撤销；交叉保证金下若爆仓价方向异常（如 SHORT 的 liq_price < mark_price，因对冲方向导致）则跳过该侧保护止损

@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, and reduce-only block latching)
-# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, and same-side close-order block handling
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, and liq-distance-aware mode holding)
+# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, and liq-distance-aware mode holding
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -310,6 +310,11 @@ class ExecutionEngine:
             state.recent_maker_submits.popleft()
         while state.recent_maker_fills and state.recent_maker_fills[0] < retain_cutoff:
             state.recent_maker_fills.popleft()
+
+    @staticmethod
+    def _should_hold_aggressive_mode(state: SideExecutionState) -> bool:
+        """一级风控触发时维持 AGGRESSIVE_LIMIT，避免 maker/aggressive 来回抖动。"""
+        return state.liq_distance_active
 
     @staticmethod
     def _reduce_only_block_source(block_info: ReduceOnlyBlockInfo) -> str:
@@ -954,7 +959,7 @@ class ExecutionEngine:
                 elif order_mode == ExecutionMode.AGGRESSIVE_LIMIT:
                     state.aggr_timeout_count = 0
                     # 有成交说明价格合理：后续优先回到 maker
-                    if state.mode != ExecutionMode.MAKER_ONLY:
+                    if state.mode != ExecutionMode.MAKER_ONLY and not self._should_hold_aggressive_mode(state):
                         self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="partial_fill_deescalate")
 
     async def _handle_filled(
@@ -1035,7 +1040,11 @@ class ExecutionEngine:
         elif executed_mode == ExecutionMode.AGGRESSIVE_LIMIT:
             state.aggr_timeout_count = 0
             state.aggr_fill_count += 1
-            if self.aggr_fills_to_deescalate > 0 and state.aggr_fill_count >= self.aggr_fills_to_deescalate:
+            if (
+                self.aggr_fills_to_deescalate > 0
+                and state.aggr_fill_count >= self.aggr_fills_to_deescalate
+                and not self._should_hold_aggressive_mode(state)
+            ):
                 self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="aggr_fill_deescalate")
 
         self._enter_post_order_state(state, current_ms)
@@ -1172,10 +1181,14 @@ class ExecutionEngine:
             if maker_escalate > 0 and state.maker_timeout_count >= maker_escalate:
                 self._set_mode(state, ExecutionMode.AGGRESSIVE_LIMIT, reason="maker_timeout_escalate")
         elif order_mode == ExecutionMode.AGGRESSIVE_LIMIT:
-            if self.aggr_timeouts_to_deescalate > 0 and state.aggr_timeout_count >= self.aggr_timeouts_to_deescalate:
+            if (
+                self.aggr_timeouts_to_deescalate > 0
+                and state.aggr_timeout_count >= self.aggr_timeouts_to_deescalate
+                and not self._should_hold_aggressive_mode(state)
+            ):
                 self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="aggr_timeout_deescalate")
             # 风控兜底：若出现过成交（部分成交），下一轮优先回到 maker
-            elif had_fill and state.mode != ExecutionMode.MAKER_ONLY:
+            elif had_fill and state.mode != ExecutionMode.MAKER_ONLY and not self._should_hold_aggressive_mode(state):
                 self._set_mode(state, ExecutionMode.MAKER_ONLY, reason="partial_fill_deescalate")
 
         cooldown_ms = (

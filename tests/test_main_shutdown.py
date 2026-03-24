@@ -18,6 +18,7 @@ import pytest
 from src.main import Application
 from src.models import AccountUpdateEvent, Position, PositionSide
 from src.models import (
+    ExecutionMode,
     ExecutionState,
     ExitSignal,
     MarketState,
@@ -188,7 +189,7 @@ def _make_pressure_eval_app(
         position_side=position_side,
         is_triggered=risk_triggered,
         dist_to_liq=Decimal("0.01"),
-        reason="liq_distance_breach",
+        reason="liq_distance",
     )
     app.risk_manager = MagicMock()
     app.risk_manager.check_risk.return_value = risk_flag
@@ -253,7 +254,7 @@ async def test_evaluate_side_risk_does_not_promote_pressure_passive_signal():
         current_ms=1000,
     )
 
-    # 信号保持 PASSIVE，soft-risk 不改写 pressure 的主动/被动语义
+    # 信号保持 PASSIVE，一级风控 不改写 pressure 的主动/被动语义
     assert signal.execution_preference == SignalExecutionPreference.PASSIVE
     assert signal.price_override == Decimal("9.8")
     assert signal.ttl_override_ms == 10000
@@ -304,6 +305,121 @@ async def test_evaluate_side_risk_does_not_trigger_preempt_for_pressure_passive(
     # 被动单未被撤，仍在 WAITING
     assert state.state == ExecutionState.WAITING
     assert state.current_order_id == "passive-live"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_liq_distance_logs_only_on_entry():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_PRIMARY,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=True,
+    )
+    engine.on_signal = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    state = engine.get_state(symbol, PositionSide.SHORT)
+
+    with patch("src.main.log_event") as log_event_mock:
+        await app._evaluate_side(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            engine=engine,
+            rules=app._rules[symbol],
+            market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+            current_ms=1000,
+        )
+
+        risk_calls = [
+            call for call in log_event_mock.call_args_list
+            if call.args and call.args[0] == "risk" and call.kwargs.get("reason") == "liq_distance"
+        ]
+        assert len(risk_calls) == 1
+        assert state.liq_distance_active is True
+
+        log_event_mock.reset_mock()
+        state.mode = ExecutionMode.MAKER_ONLY
+
+        await app._evaluate_side(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            engine=engine,
+            rules=app._rules[symbol],
+            market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+            current_ms=1100,
+        )
+
+        risk_calls = [
+            call for call in log_event_mock.call_args_list
+            if call.args and call.args[0] == "risk" and call.kwargs.get("reason") == "liq_distance"
+        ]
+        assert len(risk_calls) == 0
+        assert state.mode == ExecutionMode.AGGRESSIVE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_liq_distance_logs_recovery_once():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_PRIMARY,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=True,
+    )
+    app.signal_engine.evaluate.return_value = None
+    state = engine.get_state(symbol, PositionSide.SHORT)
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        current_ms=1000,
+    )
+    assert state.liq_distance_active is True
+
+    app.risk_manager.check_risk.return_value = RiskFlag(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        is_triggered=False,
+        dist_to_liq=Decimal("0.03"),
+        reason=None,
+    )
+
+    with patch("src.main.log_event") as log_event_mock:
+        await app._evaluate_side(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            engine=engine,
+            rules=app._rules[symbol],
+            market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+            current_ms=1100,
+        )
+
+        recovery_calls = [
+            call for call in log_event_mock.call_args_list
+            if call.args and call.args[0] == "risk" and call.kwargs.get("reason") == "liq_distance_recovered"
+        ]
+        assert len(recovery_calls) == 1
+        assert state.liq_distance_active is False
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts, account events, execution feedback, and reduce-only block state
-# Pos: core data contracts, events, per-side execution state, and same-side open-order block metadata
+# Output: shared enums and dataclasses for module contracts, account events, execution feedback, reduce-only block state, and liq-distance risk latch state
+# Pos: core data contracts, events, per-side execution state, same-side open-order block metadata, and liq-distance risk latch metadata
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -413,6 +413,10 @@ class SideExecutionState:
     risk_active: bool = False
     ttl_ms_override: Optional[int] = None
     maker_timeouts_to_escalate_override: Optional[int] = None
+
+    # 一级风控（liq_distance）锁存：用于风险区内维持 AGGRESSIVE_LIMIT 并控制日志/通知频率
+    liq_distance_active: bool = False
+    liq_distance_reason: Optional[str] = None
 
     # 计数器（用于模式轮转）
     maker_timeout_count: int = 0
