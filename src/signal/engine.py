@@ -25,6 +25,7 @@
 from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
+from random import randint
 from typing import Deque, Dict, Optional, Tuple, List
 
 from src.models import (
@@ -50,6 +51,7 @@ class PressureSignalConfig:
     lot_mult: int
     aggressive_recheck_cooldown_ms: int
     passive_ttl_ms: int
+    qty_jitter_pct: Decimal = Decimal("0.15")
 
 
 class SignalEngine:
@@ -298,6 +300,12 @@ class SignalEngine:
         if cfg is None:
             return None
 
+        if cfg.qty_jitter_pct > 0 and cfg.lot_mult > 1:
+            jitter_range = max(1, round(cfg.lot_mult * float(cfg.qty_jitter_pct)))
+            actual_mult = randint(max(1, cfg.lot_mult - jitter_range), cfg.lot_mult)
+        else:
+            actual_mult = cfg.lot_mult
+
         dwell_key = f"{symbol}:{position_side.value}"
         active_qty = state.best_bid_qty if position_side == PositionSide.LONG else state.best_ask_qty
         if active_qty > cfg.threshold_qty:
@@ -330,7 +338,7 @@ class SignalEngine:
                 price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
                 ttl_override_ms=None,
                 cooldown_override_ms=cfg.aggressive_recheck_cooldown_ms,
-                fixed_lot_mult=cfg.lot_mult,
+                fixed_lot_mult=actual_mult,
             )
             self._log_signal_if_changed(dwell_key, signal, state)
             return signal
@@ -372,7 +380,7 @@ class SignalEngine:
             price_override=passive_price,
             ttl_override_ms=cfg.passive_ttl_ms,
             cooldown_override_ms=0,
-            fixed_lot_mult=cfg.lot_mult,
+            fixed_lot_mult=actual_mult,
         )
         self._log_signal_if_changed(dwell_key, signal, state)
         return signal

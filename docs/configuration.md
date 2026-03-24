@@ -627,6 +627,7 @@ symbols:
       lot_mult: 5
       aggressive_recheck_cooldown_ms: 1000
       passive_ttl_ms: 10000
+      qty_jitter_pct: 0.15
     execution:
       order_ttl_ms: 3000          # 覆盖全局配置
       max_order_notional: 500
@@ -674,6 +675,7 @@ symbols:
   - `lot_mult`: 固定下单量倍率；最终数量为 `min_qty × lot_mult`，按 `step_size` 规整并 clamp 到剩余仓位
   - `aggressive_recheck_cooldown_ms`: 主动单终态后的重检冷却
   - `passive_ttl_ms`: 被动单 TTL；超时撤单后不额外附加策略冷却
+  - `qty_jitter_pct`: 平仓量随机抖动比例（`0` = 关闭）；实际下单倍率在 `[max(1, lot_mult - round(lot_mult × qty_jitter_pct)), lot_mult]` 范围内均匀随机
 
 ### 示例：按 symbol 启用盘口量模式
 
@@ -690,6 +692,7 @@ symbols:
       lot_mult: 5                # 固定片大小 = min_qty × 5
       aggressive_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
       passive_ttl_ms: 10000      # 被动单 10000ms 未成交则自动撤单
+      qty_jitter_pct: 0.15       # 平仓量随机抖动 15%，0 = 关闭
 ```
 
 运行时语义：

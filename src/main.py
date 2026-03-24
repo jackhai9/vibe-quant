@@ -1628,6 +1628,7 @@ class Application:
                 lot_mult = cfg.pressure_exit_lot_mult
                 aggressive_recheck_cooldown_ms = cfg.pressure_exit_aggressive_recheck_cooldown_ms
                 passive_ttl_ms = cfg.pressure_exit_passive_ttl_ms
+                qty_jitter_pct = cfg.pressure_exit_qty_jitter_pct
                 if (
                     threshold_qty is None
                     or sustain_ms is None
@@ -1645,6 +1646,7 @@ class Application:
                     lot_mult=lot_mult,
                     aggressive_recheck_cooldown_ms=aggressive_recheck_cooldown_ms,
                     passive_ttl_ms=passive_ttl_ms,
+                    qty_jitter_pct=qty_jitter_pct if qty_jitter_pct is not None else Decimal("0.15"),
                 )
 
             self.signal_engine.configure_symbol(

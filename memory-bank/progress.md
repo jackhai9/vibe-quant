@@ -26,6 +26,19 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：`orderbook_pressure` 平仓量随机抖动
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-24
+
+**动机**：`orderbook_pressure` 每次平仓量固定为 `min_qty × lot_mult`，容易在公开成交记录中被识别为程序化交易模式。<br>
+**产出**：
+
+- `src/config/models.py`：`PressureExitConfig` 新增 `qty_jitter_pct`（默认 `0.15`，`0` = 关闭）
+- `src/signal/engine.py`：`_evaluate_orderbook_pressure` 在方法顶部按 `qty_jitter_pct` 随机化 `lot_mult`，active 和 passive 两条路径统一适用
+- `docs/configuration.md`、`config/config.yaml`、`config/config.example.yaml`：同步配置说明
+- `tests/test_signal.py`：补充 jitter=0 / lot_mult=1 / lot_mult=20 边界测试
+
 ## Milestone/附加改进：收口 `liq_distance` 风险日志刷屏与模式抖动
 
 **状态**：✅ 已完成<br>

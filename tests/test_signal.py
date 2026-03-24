@@ -89,6 +89,7 @@ class TestUpdateMarket:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                qty_jitter_pct=Decimal("0"),
             ),
         )
 
@@ -354,6 +355,7 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                qty_jitter_pct=Decimal("0"),
             ),
         )
         engine.update_market(MarketEvent(
@@ -557,6 +559,7 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                qty_jitter_pct=Decimal("0"),
             ),
         )
         engine.update_market(MarketEvent(
@@ -602,6 +605,7 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                qty_jitter_pct=Decimal("0"),
             ),
         )
         engine.update_market(MarketEvent(
@@ -1166,3 +1170,86 @@ class TestSignalContent:
         assert signal.best_ask == Decimal("50001")
         assert signal.last_trade_price == Decimal("50000")
         assert signal.timestamp_ms == 1300
+
+
+class TestQtyJitter:
+    """平仓量随机抖动测试"""
+
+    def _make_engine(self, lot_mult: int, qty_jitter_pct: Decimal) -> SignalEngine:
+        engine = SignalEngine(min_signal_interval_ms=200)
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                lot_mult=lot_mult,
+                aggressive_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+                qty_jitter_pct=qty_jitter_pct,
+            ),
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+        return engine
+
+    def _make_position(self) -> Position:
+        return Position(
+            symbol="DASH/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+
+    def test_jitter_zero_always_returns_exact_lot_mult(self):
+        engine = self._make_engine(lot_mult=20, qty_jitter_pct=Decimal("0"))
+        position = self._make_position()
+        for ms in range(1100, 1200):
+            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
+            if signal is not None:
+                assert signal.fixed_lot_mult == 20
+
+    def test_jitter_lot_mult_1_always_returns_1(self):
+        engine = self._make_engine(lot_mult=1, qty_jitter_pct=Decimal("0.15"))
+        position = self._make_position()
+        for ms in range(1100, 1200):
+            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
+            if signal is not None:
+                assert signal.fixed_lot_mult == 1
+
+    def test_jitter_lot_mult_20_stays_in_expected_range(self):
+        engine = self._make_engine(lot_mult=20, qty_jitter_pct=Decimal("0.15"))
+        position = self._make_position()
+        observed = set()
+        for ms in range(1100, 2000):
+            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
+            if signal is not None:
+                observed.add(signal.fixed_lot_mult)
+        assert all(17 <= v <= 20 for v in observed), f"out of range: {observed}"
+        assert len(observed) > 1, f"no variance: {observed}"

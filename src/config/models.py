@@ -243,6 +243,12 @@ class PressureExitConfig(BaseModel):
     sustain_ms: int = Field(default=2000, ge=1, description="顶档量持续阈值(ms)")
     passive_level: int = Field(default=3, ge=1, le=10, description="被动挂单使用的固定档位")
     lot_mult: int = Field(default=1, ge=1, description="固定平仓量倍数（minQty × lot_mult）")
+    qty_jitter_pct: Decimal = Field(
+        default=Decimal("0.15"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+        description="平仓量随机抖动比例，0 = 关闭",
+    )
     aggressive_recheck_cooldown_ms: int = Field(
         default=1000,
         ge=0,
@@ -388,6 +394,7 @@ class MergedSymbolConfig(BaseModel):
     pressure_exit_lot_mult: Optional[int]
     pressure_exit_aggressive_recheck_cooldown_ms: Optional[int]
     pressure_exit_passive_ttl_ms: Optional[int]
+    pressure_exit_qty_jitter_pct: Optional[Decimal]
 
     # WS
     stale_data_ms: int

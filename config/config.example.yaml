@@ -156,6 +156,7 @@ symbols:
   #     lot_mult: 5                # 固定下单量倍率，实际数量 = min_qty × lot_mult
   #     aggressive_recheck_cooldown_ms: 1000  # 主动单终态后的重检冷却（毫秒）
   #     passive_ttl_ms: 10000      # 被动单 TTL，超时自动撤单（毫秒）
+  #     qty_jitter_pct: 0.15       # 平仓量随机抖动比例，0 = 关闭
   #
   # 示例：统一缩放 accel 档位倍数（不需要逐档配置）
   # SOL/USDT:USDT:

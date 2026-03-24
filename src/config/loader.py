@@ -178,6 +178,7 @@ class ConfigLoader:
             None,
         )
         pressure_exit_passive_ttl_ms = _get_override(pressure_cfg, "passive_ttl_ms", None)
+        pressure_exit_qty_jitter_pct = _get_override(pressure_cfg, "qty_jitter_pct", None)
 
         # 合并执行配置
         order_ttl_ms = _get_override(s_exec, "order_ttl_ms", g_exec.order_ttl_ms)
@@ -250,6 +251,7 @@ class ConfigLoader:
             pressure_exit_lot_mult=pressure_exit_lot_mult,
             pressure_exit_aggressive_recheck_cooldown_ms=pressure_exit_aggressive_recheck_cooldown_ms,
             pressure_exit_passive_ttl_ms=pressure_exit_passive_ttl_ms,
+            pressure_exit_qty_jitter_pct=pressure_exit_qty_jitter_pct,
             # WS
             stale_data_ms=g_ws.stale_data_ms,
             reconnect_initial_delay_ms=g_ws.reconnect.initial_delay_ms,
