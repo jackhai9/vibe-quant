@@ -40,36 +40,36 @@
 - `docs/configuration.md` / `config/config.example.yaml`：`pressure_exit` 示例不再出现 `base_mult`，symbol 级基准量统一在 `execution.base_mult`
 - `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两个策略共用同一基准片大小真源”的当前语义
 
-## Milestone/附加改进：`max_order_notional` 收口到 fixed qty 路径
+## Milestone/附加改进：`max_order_notional` 收口到基准片大小路径
 
 **状态**：✅ 已完成<br>
 **日期**：2026-03-27
 
-**动机**：`orderbook_pressure` 的固定片路径此前没有应用 `max_order_notional`，导致执行层的单笔名义价值上限只对动态数量路径生效，策略语义不一致。<br>
+**动机**：`orderbook_pressure` 的基准片大小路径此前没有应用 `max_order_notional`，导致执行层的单笔名义价值上限只对动态数量路径生效，策略语义不一致。<br>
 **产出**：
 
-- `src/execution/engine.py`：`compute_fixed_qty()` 增加 `last_trade_price` 入参，在固定片基准量和 jitter 候选区间两处都受 `max_order_notional` 约束
-- `tests/test_execution.py`：新增 fixed qty 直接受 notional 限制、以及 jitter 不突破 notional 上限的回归
+- `src/execution/engine.py`：当时的基准片大小数量分支增加 `last_trade_price` 入参，在基准片大小和 jitter 候选区间两处都受 `max_order_notional` 约束；后续已并入统一 `compute_qty()`
+- `tests/test_execution.py`：新增基准片大小路径直接受 notional 限制、以及 jitter 不突破 notional 上限的回归
 - `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两条主策略最终 qty 都受 `max_order_notional` 约束”的当前语义
 
-## Milestone/附加改进：fixed qty 路径的 `max_mult` 语义收口
+## Milestone/附加改进：基准片大小路径的 `max_mult` 语义收口
 
 **状态**：✅ 已完成<br>
 **日期**：2026-03-27
 
-**动机**：`compute_fixed_qty()` 之前把 `max_mult` 解释成“只限制向上放大，不压低固定基准片”，导致 fixed 路径的最终倍数可能仍高于 `max_mult`，与 `compute_qty()` 和配置文档中的“最大倍数上限”定义不一致。<br>
+**动机**：当时的基准片大小数量分支曾把 `max_mult` 解释成“只限制向上放大，不压低基准片大小”，导致该路径的最终倍数可能仍高于 `max_mult`，与 `compute_qty()` 和配置文档中的“最大倍数上限”定义不一致。<br>
 **产出**：
 
-- `src/execution/engine.py`：`compute_fixed_qty()` 改为与 `compute_qty()` 一致的硬截断，`final_mult = min(base_mult × roi_mult × accel_mult, max_mult)`
-- `tests/test_execution.py`：回归覆盖 fixed 路径在 `base_mult > max_mult` 时也会被 `max_mult` 截断
-- `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：文档统一改成“`max_mult` 是硬上限”，不再保留“不会把 fixed 基准片大小压到低于 base”的旧语义
+- `src/execution/engine.py`：当时的基准片大小数量分支改为与 `compute_qty()` 一致的硬截断，`final_mult = min(base_mult × roi_mult × accel_mult, max_mult)`；后续已并入统一 `compute_qty()`
+- `tests/test_execution.py`：回归覆盖基准片大小路径在 `base_mult > max_mult` 时也会被 `max_mult` 截断
+- `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：文档统一改成“`max_mult` 是硬上限”，不再保留“不会把基准片大小压到低于 base”的旧语义
 
 ## Milestone/附加改进：移除 `FIXED_MIN_QTY_MULT`
 
 **状态**：✅ 已完成<br>
 **日期**：2026-03-27
 
-**动机**：动态路径与 pressure fixed 路径在 `base_mult`、公共 roi/accel modifiers、`max_mult`、`max_order_notional` 等主干语义上已经收敛，继续保留单独的 `QtyPolicy.FIXED_MIN_QTY_MULT` 只会增加概念噪音。<br>
+**动机**：动态路径与 pressure 基准片大小路径在 `base_mult`、公共 roi/accel modifiers、`max_mult`、`max_order_notional` 等主干语义上已经收敛，继续保留单独的 `QtyPolicy.FIXED_MIN_QTY_MULT` 只会增加概念噪音。<br>
 **产出**：
 
 - `src/models.py`：移除 `QtyPolicy` 与 `ExitSignal.qty_policy`
@@ -158,8 +158,8 @@
 **产出**：
 
 - `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `qty_anti_repeat_lookback`、`active_recheck_cooldown_jitter_pct`、`passive_ttl_jitter_pct`，并补齐 symbol 级合并字段
-- `src/signal/engine.py`：`orderbook_pressure` 不再直接改写固定基准片大小，而是把固定数量 jitter 参数与 TTL/cooldown jitter 注入 ExitSignal
-- `src/execution/engine.py`：固定片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
+- `src/signal/engine.py`：`orderbook_pressure` 不再直接改写基准片大小，而是把订单数量 jitter 参数与 TTL/cooldown jitter 注入 `ExitSignal`
+- `src/execution/engine.py`：基准片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
 - `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 TTL/cooldown jitter、execution-layer two-sided qty jitter、anti-repeat 与配置合并
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步当前语义与配置说明
 
@@ -196,13 +196,13 @@
 **状态**：✅ 已完成<br>
 **日期**：2026-03-27
 
-**动机**：`roi_mult / accel_mult` 在概念上属于公共 sizing context，不应只由 `orderbook_price` 独占；`orderbook_pressure` 需要能显式选择是否在固定基准片大小上叠加这些公共倍数，同时保持默认行为不变。<br>
+**动机**：`roi_mult / accel_mult` 在概念上属于公共 sizing context，不应只由 `orderbook_price` 独占；`orderbook_pressure` 需要能显式选择是否在基准片大小上叠加这些公共倍数，同时保持默认行为不变。<br>
 **产出**：
 
 - `src/config/models.py` / `src/config/loader.py`：`execution` 增加 `use_roi_mult` / `use_accel_mult` 开关，`pressure_exit` 增加同名可选覆盖开关；未配置时继承 `execution.use_*`
 - `src/signal/engine.py` / `src/main.py`：`orderbook_price` 默认通过 `execution.use_*` 使用公共倍数；`orderbook_pressure` 未配置 `pressure_exit.use_*` 时继承 `execution.use_*`，显式配置后再按 pressure 自己的值产出公共 `roi_mult / accel_mult / roi / ret_window`
-- `src/execution/engine.py`：`FIXED_MIN_QTY_MULT` 接入与动态数量同源的公共 roi/accel modifiers；固定基准片大小仍受 `max_mult` 与剩余仓位约束
-- `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 pressure 配置合并、pressure signal 产出公共倍数、fixed qty 叠加公共倍数并受 `max_mult` 截断
+- `src/execution/engine.py`：`FIXED_MIN_QTY_MULT` 接入与动态数量同源的公共 roi/accel modifiers；当时的基准片大小路径仍受 `max_mult` 与剩余仓位约束
+- `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 pressure 配置合并、pressure signal 产出公共倍数、基准片大小路径叠加公共倍数并受 `max_mult` 截断
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`、`memory-bank/design-document.md`：同步“公共 modifiers + 策略自选启用”的当前语义
 
 ## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
@@ -272,7 +272,7 @@
 
 - `src/config/models.py` / `src/config/loader.py`：新增 `strategy.mode` 与 `pressure_exit.*` 的 symbol 级配置与合并结果；默认 `orderbook_price`
 - `src/models.py` / `src/ws/market.py`：市场数据结构新增 `best_bid_qty/best_ask_qty`、`bid_levels/ask_levels` 与分源时间戳；仅对命中的 symbol 订阅 `depth10@100ms`
-- `src/signal/engine.py`：新增 `orderbook_pressure` 分支、固定数量/价格/TTL/cooldown 信号覆盖、被动档位缺失日志，以及 `bookTicker/depth10` 双源 stale 判定与 dwell reset
+- `src/signal/engine.py`：新增 `orderbook_pressure` 分支、基准片大小/价格/TTL/cooldown 信号覆盖、被动档位缺失日志，以及 `bookTicker/depth10` 双源 stale 判定与 dwell reset
 - `src/execution/engine.py` / `src/main.py`：复用单套执行状态机，支持 signal override；主动信号可抢占被动单；主流程在 stale/零仓位时清理 pressure dwell
 - `src/execution/engine.py` / `src/main.py`：timeout 撤单成功后统一保留在途订单上下文直到 WS grace 窗口结束；撤单失败时按 backoff 重试；`orderbook_pressure` 被动 `GTX` 拒单保持被动语义，不自动改发 taker 单
 - `tests/test_config.py` / `tests/test_ws_market.py` / `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_main_shutdown.py`：补齐配置、订阅、pressure 信号、执行覆盖与 dwell reset 回归
