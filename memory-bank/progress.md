@@ -55,6 +55,42 @@
 - `tests/test_market_recorder.py`：录制器采样/日切/清理测试
 - `tests/test_ws_market.py` / `tests/test_main_shutdown.py`：aggTrade 字段与 recorder 生命周期回归测试
 
+## Milestone/附加记录：`orderbook_pressure` 相关性工作假设
+
+**状态**：📝 已记录<br>
+**日期**：2026-03-27
+
+**背景**：基于 `2026-03-27 11:26:03` 之后的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。样本当前集中在 `DASH LONG`，用于形成在线判读假设。<br>
+**当前结论定位**：工作假设，仅用于辅助执行判断；后续应随样本扩大持续复核，不作为已固化策略逻辑。
+
+**当前经验性规则**：
+
+- 在线主观察窗口优先看 `5m`
+- 当前指标优先级：`5m passive_fill_rate` > `5m active_triggers / active_attempts` > `5m passive_triggers`
+- `passive_fill_rate > 0` 且 `active_triggers > 0`：当前最值得继续信 `orderbook_pressure`
+- `passive_fill_rate > 0` 但 `active_triggers = 0`：仍可参考，但信心降低
+- `passive_fill_rate = 0` 且 `passive_triggers` 很高：不把它视为利好，更像拥挤或磨损
+- `passive_fill_rate = 0` 且 `active_triggers = 0`：当前更接近“pressure 没有 edge”，不应继续死等
+
+**说明**：
+
+- 这套规则回答的是“是否继续依赖 `orderbook_pressure` 平仓”，不是价格方向预测
+- `1m` 噪音更大，适合观察短时切换；`15m` 滞后更重，容易混入前一段 regime 惯性
+- 后续有更多新口径样本和 `market_data_*.jsonl` 回放结果后，需要重新计算相关性并修订本结论
+
+**下一步分析计划**：
+
+- 当前已完成的是 same-window 观察：当前窗口的统计字段 vs 同一窗口的 `price_chg`
+- 下一步优先做 lead-lag：当前 `5m` 指标 vs 下一窗口 `5m price_chg`
+- 主分析字段保持为：
+  - `5m passive_fill_rate`
+  - `5m active_triggers`
+  - `5m active_attempts`
+  - `5m passive_triggers`
+- lead-lag 第一版门槛：`5m` 新口径样本达到 `100` 个
+- 经验规则是否更新的参考门槛：`5m` 新口径样本达到 `300` 个
+- `[PRESSURE_STATS]` lead-lag 用来验证统计字段的预测性；`market_data_*.jsonl` 离线回放用来验证参数调优，两者互补
+
 ## Milestone/附加改进：`orderbook_pressure` 平仓量随机抖动
 
 **状态**：✅ 已完成<br>
