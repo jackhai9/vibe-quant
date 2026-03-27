@@ -1,5 +1,5 @@
-<!-- Input: trigger/attempt/outcome 事件与原始 MarketEvent -->
-<!-- Output: 窗口化统计日志 -->
+<!-- Input: trigger/attempt/outcome 事件、原始 MarketEvent 与相关性分析口径 -->
+<!-- Output: 窗口化统计日志、录制说明与判读规则 -->
 <!-- Pos: src/stats 模块说明 -->
 <!-- 一旦我所属的文件夹有所变化，请更新我。 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
@@ -85,7 +85,7 @@ aggTrade：
 - 观察对象：`[PRESSURE_STATS]` 日志
 - 当前主样本：`DASH LONG`
 - 当前样本口径：带 `active_triggers / passive_triggers / attempts / fills` 的新口径日志
-- 当前样本起点：`2026-03-27 11:26:03` 之后
+- 当前样本范围：`2026-03-27 11:26:03` 之后的新口径 `5m` 样本
 - 当前结论定位：工作假设，后续应随样本扩大持续复核
 
 ### 当前优先观察窗口
@@ -94,7 +94,7 @@ aggTrade：
 - `1m` 变化快、噪音大，适合看短时切换，不适合作为唯一依据
 - `15m` 滞后明显，容易混入前一段 regime 的惯性，不适合做即时执行判断
 
-### 当前指标优先级
+### same-window 当前指标优先级
 
 经验上，当前样本中的解释力排序为：
 
@@ -106,7 +106,7 @@ aggTrade：
 - `active_triggers / active_attempts`：主动 pressure 是否有真实跟进，代表“市场有没有顺着这个方向推进”
 - `passive_triggers`：只表示被动 pressure 形态出现得多，不等于价格更有利；当前样本里更接近反向参考项
 
-### 当前判读方式
+### same-window 当前判读方式
 
 - `5m passive_fill_rate > 0` 且 `5m active_triggers > 0`
   - 当前最强的一档，说明被动单能成交，且主动 pressure 也在推进，可以继续信 `orderbook_pressure`
@@ -117,10 +117,32 @@ aggTrade：
 - `5m passive_fill_rate = 0` 且 `5m active_triggers = 0`
   - 当前更接近“pressure 没有 edge”，不应继续死等这一路径自行改善
 
+### lead-lag 当前工作假设
+
+当口径切换到 `当前 5m 指标(t) -> 下一个 5m price_chg(t+1)` 时，当前样本中的排序发生变化：
+
+`5m active_attempts / active_triggers` > `5m passive_triggers`（反向参考） >> `5m passive_fill_rate`
+
+其中：
+
+- `active_attempts / active_triggers`：更像下一窗口是否还会延续 pressure 推进的先行指标
+- `passive_triggers`：当前样本里仍然偏负向，更多表示拥挤和磨损，不像延续性 alpha
+- `passive_fill_rate`：更像“当前窗口里被动逻辑是否有效”的确认项，对下一窗口的预测性明显弱于 same-window 解释力
+
+### lead-lag 当前判读方式
+
+- 当前 `5m active_attempts` 或 `5m active_triggers` 明显抬升
+  - 更偏向“下一窗口继续改善”的工作假设
+- 当前 `5m passive_triggers` 很高，但 `active_triggers` 低
+  - 更偏向“下一窗口继续磨损或拥挤”，不把它视为延续利好
+- 当前 `5m passive_fill_rate > 0`
+  - 更适合解释“现在这 5 分钟是否有效”，不单独拿它预测下一窗口
+
 ### 当前使用边界
 
-- 这套规则用于辅助执行判断，不用于预测方向
-- 这套规则更适合回答“现在还值不值得继续依赖 `orderbook_pressure` 平仓”
+- `same-window` 规则用于辅助执行判断，不用于价格方向预测
+- `lead-lag` 规则用于辅助判断“下一窗口是否更可能延续”，仍然不是开仓方向信号
+- 这两套规则都更适合回答“现在还值不值得继续依赖 `orderbook_pressure` 平仓”
 - 这套规则不应替代后续基于 `market_data_*.jsonl` 的离线回放分析
 - 当线上样本显著增加后，应重新统计相关性，并按新数据修正本节内容
 
@@ -132,11 +154,14 @@ aggTrade：
 - 具体口径：`window=1m/5m/15m` 的统计字段，与同一条日志里的 `price_chg` 做相关性观察
 - 这回答的是“当前窗口里的 pressure 质量与同窗价格变化是否同向”
 - 这不回答“未来下一个窗口会不会继续涨/跌”
+- 当前也已完成第一版 exploratory lead-lag 检查
+- lead-lag 口径：`当前 5m 指标(t) -> 下一条 5m 日志的 price_chg(t+1)`
+- 当前 lead-lag 样本仍偏小，结论只作为方向性参考，不作为定版规则
 
-### 下一步要做的分析
+### 下一步要继续做的分析
 
-- 下一步优先做 lead-lag 分析
-- 目标：验证当前窗口的 pressure 指标，是否对下一窗口的 `price_chg` 有预测性
+- 继续扩大 lead-lag 样本
+- 目标：验证当前窗口的 pressure 指标，是否稳定地对下一窗口的 `price_chg` 有预测性
 - 主窗口仍优先看 `5m`
 
 建议口径：
@@ -152,19 +177,17 @@ aggTrade：
 
 ### 分析顺序
 
-1. 先做 `5m feature(t) -> 5m price_chg(t+1)`
-2. 再做分组比较
+1. 持续更新 `5m feature(t) -> 5m price_chg(t+1)`
+2. 分开看 `same-window` 与 `lead-lag` 的排序是否稳定
+3. 再做分组比较
    - `passive_fill_rate > 0` vs `= 0`
    - `active_triggers > 0` vs `= 0`
-3. 再看排序是否稳定
-   - `passive_fill_rate`
-   - `active_triggers / active_attempts`
-   - `passive_triggers`
 4. 最后才考虑把结论用于更新经验性规则
 
 ### 样本门槛
 
-- `5m` 新口径样本达到 `100` 个后，可以开始看第一版 lead-lag 结果
+- 当前已在不足 `100` 个 `5m` 样本时做了第一版 exploratory lead-lag 检查，只用于验证方法和方向
+- `5m` 新口径样本达到 `100` 个后，可以开始看更稳定的 lead-lag 结果
 - `5m` 新口径样本达到 `300` 个后，才值得考虑更新当前经验性规则
 - 如果中间停机较多、symbol 切换较多，优先拉长到 `3-5` 天再判断
 
@@ -178,7 +201,7 @@ aggTrade：
 
 出现以下任一情况时，应重新计算并更新“当前经验性判读规则”：
 
-- `5m passive_fill_rate` 不再是最强正向指标
-- `5m active_triggers / active_attempts` 的方向或排序发生明显变化
+- `same-window` 下 `5m passive_fill_rate` 不再是最强正向指标
+- `lead-lag` 下 `5m active_triggers / active_attempts` 不再表现为更强的延续性指标
 - `5m passive_triggers` 不再表现为稳定负向参考项
 - `DASH LONG` 之外的样本加入后，结论与当前规则冲突

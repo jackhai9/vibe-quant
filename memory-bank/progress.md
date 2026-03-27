@@ -1,5 +1,5 @@
-<!-- Input: 开发进度、里程碑与缺陷修复记录 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、一级风控日志降噪与 -4118 挂单占仓收口）-->
+<!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、一级风控日志降噪、-4118 挂单占仓收口与 PRESSURE_STATS 判读规则）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -26,20 +26,6 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
-## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
-
-**状态**：✅ 已完成<br>
-**日期**：2026-03-25
-
-**动机**：探索 orderbook_pressure 主动触发频率、被动成交率与价格走势三者的相关性，为后续参数调优提供数据基础。<br>
-**产出**：
-
-- `src/stats/pressure_stats.py`：`PressureStatsCollector`，纯内存 deque 环形缓冲区收集 trigger、成功下单、首次成交与价格事件，按 1m/5m/15m 窗口聚合
-- `src/stats/__init__.py`：模块导出
-- `src/main.py`：5 个集成点（bookTicker 价格采样、trigger 记录、成功下单记录、首次成交记录、5 分钟周期输出）
-- `src/utils/logger.py`：EVENT_TYPE_CN 添加 `pressure_stats`
-- `tests/test_pressure_stats.py`：统计收集器回归测试
-
 ## Milestone/附加改进：原始市场数据录制器
 
 **状态**：✅ 已完成<br>
@@ -60,10 +46,10 @@
 **状态**：📝 已记录<br>
 **日期**：2026-03-27
 
-**背景**：基于 `2026-03-27 11:26:03` 之后的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。样本当前集中在 `DASH LONG`，用于形成在线判读假设。<br>
+**背景**：基于 `2026-03-27 11:26:03` 之后的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。样本当前集中在 `DASH LONG`，并已拆分为 `same-window` 与 `lead-lag` 两套口径。<br>
 **当前结论定位**：工作假设，仅用于辅助执行判断；后续应随样本扩大持续复核，不作为已固化策略逻辑。
 
-**当前经验性规则**：
+**same-window 当前经验性规则**：
 
 - 在线主观察窗口优先看 `5m`
 - 当前指标优先级：`5m passive_fill_rate` > `5m active_triggers / active_attempts` > `5m passive_triggers`
@@ -72,22 +58,32 @@
 - `passive_fill_rate = 0` 且 `passive_triggers` 很高：不把它视为利好，更像拥挤或磨损
 - `passive_fill_rate = 0` 且 `active_triggers = 0`：当前更接近“pressure 没有 edge”，不应继续死等
 
+**lead-lag 当前工作假设**：
+
+- 口径：当前 `5m` 指标 `t` 对应下一条 `5m` 日志的 `price_chg(t+1)`
+- 当前排序：`5m active_attempts / active_triggers` > `5m passive_triggers`（反向参考） >> `5m passive_fill_rate`
+- `active_attempts / active_triggers` 更像下一窗口延续改善的先行项
+- `passive_triggers` 仍然更像拥挤或磨损，不像延续利好
+- `passive_fill_rate` 更像当前窗口有效性的确认项，而不是下一窗口预测项
+
 **说明**：
 
-- 这套规则回答的是“是否继续依赖 `orderbook_pressure` 平仓”，不是价格方向预测
+- `same-window` 规则回答的是“当前这一窗的 pressure 是否有效”
+- `lead-lag` 规则回答的是“下一窗口是否更可能延续改善”
+- 这两套规则都服务于“是否继续依赖 `orderbook_pressure` 平仓”，不是开仓方向预测
 - `1m` 噪音更大，适合观察短时切换；`15m` 滞后更重，容易混入前一段 regime 惯性
 - 后续有更多新口径样本和 `market_data_*.jsonl` 回放结果后，需要重新计算相关性并修订本结论
 
 **下一步分析计划**：
 
 - 当前已完成的是 same-window 观察：当前窗口的统计字段 vs 同一窗口的 `price_chg`
-- 下一步优先做 lead-lag：当前 `5m` 指标 vs 下一窗口 `5m price_chg`
+- 当前也已完成第一版 exploratory lead-lag：当前 `5m` 指标 vs 下一窗口 `5m price_chg`
 - 主分析字段保持为：
   - `5m passive_fill_rate`
   - `5m active_triggers`
   - `5m active_attempts`
   - `5m passive_triggers`
-- lead-lag 第一版门槛：`5m` 新口径样本达到 `100` 个
+- 当前 exploratory lead-lag 只用于验证方法和方向；`5m` 新口径样本达到 `100` 个后再看更稳定的结果
 - 经验规则是否更新的参考门槛：`5m` 新口径样本达到 `300` 个
 - `[PRESSURE_STATS]` lead-lag 用来验证统计字段的预测性；`market_data_*.jsonl` 离线回放用来验证参数调优，两者互补
 
@@ -104,6 +100,20 @@
 - `src/execution/engine.py`：固定片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
 - `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 TTL/cooldown jitter、execution-layer two-sided qty jitter、anti-repeat 与配置合并
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步当前语义与配置说明
+
+## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-25
+
+**动机**：探索 orderbook_pressure 主动触发频率、被动成交率与价格走势三者的相关性，为后续参数调优提供数据基础。<br>
+**产出**：
+
+- `src/stats/pressure_stats.py`：`PressureStatsCollector`，纯内存 deque 环形缓冲区收集 trigger、成功下单、首次成交与价格事件，按 1m/5m/15m 窗口聚合
+- `src/stats/__init__.py`：模块导出
+- `src/main.py`：5 个集成点（bookTicker 价格采样、trigger 记录、成功下单记录、首次成交记录、5 分钟周期输出）
+- `src/utils/logger.py`：EVENT_TYPE_CN 添加 `pressure_stats`
+- `tests/test_pressure_stats.py`：统计收集器回归测试
 
 ## Milestone/附加改进：收口 `liq_distance` 风险日志刷屏与模式抖动
 
