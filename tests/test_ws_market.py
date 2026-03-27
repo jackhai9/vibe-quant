@@ -289,6 +289,8 @@ class TestParseAggTrade:
         assert event is not None
         assert event.symbol == "BTC/USDT:USDT"
         assert event.last_trade_price == Decimal("50000.15")
+        assert event.trade_qty == Decimal("0.001")
+        assert event.is_buyer_maker is True
         assert event.best_bid is None
         assert event.best_ask is None
         assert event.event_type == "agg_trade"
@@ -536,7 +538,9 @@ class TestHandleMessage:
             "data": {
                 "s": "BTCUSDT",
                 "p": "50000.15",
+                "q": "0.001",
                 "T": 1591097736594,
+                "m": True,
             }
         }
 
@@ -545,6 +549,8 @@ class TestHandleMessage:
         assert len(events) == 1
         assert events[0].event_type == "agg_trade"
         assert events[0].last_trade_price == Decimal("50000.15")
+        assert events[0].trade_qty == Decimal("0.001")
+        assert events[0].is_buyer_maker is True
 
     @pytest.mark.asyncio
     async def test_handle_message_unknown_stream(self):

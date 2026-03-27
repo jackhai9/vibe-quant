@@ -38,7 +38,7 @@ from src.exchange.adapter import ExchangeAdapter
 from src.ws.market import MarketWSClient
 from src.ws.user_data import UserDataWSClient
 from src.signal.engine import SignalEngine, PressureSignalConfig
-from src.stats.pressure_stats import PressureStatsCollector
+from src.stats import MarketDataRecorder, PressureStatsCollector
 from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
@@ -131,6 +131,7 @@ class Application:
         self.telegram_notifier: Optional[TelegramNotifier] = None
         self._telegram_tasks: set[asyncio.Task[Any]] = set()
         self._side_tasks: set[asyncio.Task[Any]] = set()
+        self._market_recorder: Optional[MarketDataRecorder] = None
 
         # Telegram Bot 命令控制
         self.pause_manager: PauseManager = PauseManager()
@@ -1075,6 +1076,8 @@ class Application:
             min_signal_interval_ms=global_config.execution.min_signal_interval_ms,
         )
         self._pressure_stats = PressureStatsCollector()
+        self._market_recorder = MarketDataRecorder(log_dir=log_dir)
+        await self._market_recorder.start()
 
         # 4. 初始化 WebSocket 客户端（User Data 始终连接，Market WS 运行时按需创建）
         logger.info("初始化 WebSocket 客户端...")
@@ -1250,6 +1253,9 @@ class Application:
 
     def _on_market_event(self, event: MarketEvent) -> None:
         """处理市场事件回调"""
+        if self._market_recorder:
+            self._market_recorder.record(event)
+
         if not self.signal_engine:
             return
 
@@ -2588,6 +2594,11 @@ class Application:
             if not task.done():
                 task.cancel()
         await self._gather_with_timeout(ws_tasks_to_cancel, timeout_s=2.0, name="WebSocket 任务取消")
+
+        # 关闭市场数据录制器
+        if self._market_recorder:
+            await self._gather_with_timeout([self._market_recorder.close()], timeout_s=5.0, name="市场数据录制器关闭")
+            self._market_recorder = None
 
         # 关闭交易所连接
         if self.exchange:

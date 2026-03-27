@@ -40,6 +40,21 @@
 - `src/utils/logger.py`：EVENT_TYPE_CN 添加 `pressure_stats`
 - `tests/test_pressure_stats.py`：统计收集器回归测试
 
+## Milestone/附加改进：原始市场数据录制器
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：为 `orderbook_pressure` 提供 `bookTicker + depth10 + aggTrade` 的原始真源录制能力，支持离线回放与参数筛选。<br>
+**产出**：
+
+- `src/stats/market_recorder.py`：`MarketDataRecorder`，通过 queue + writer task 非阻塞录制原始市场数据，支持日切、gzip 压缩和保留清理
+- `src/models.py`：`MarketEvent` 补充 `trade_qty` / `is_buyer_maker`
+- `src/ws/market.py`：`aggTrade` 解析填充成交量与方向
+- `src/main.py`：初始化 recorder、在 `_on_market_event()` 中录制事件、在 `shutdown()` 中收口 writer task
+- `tests/test_market_recorder.py`：录制器采样/日切/清理测试
+- `tests/test_ws_market.py` / `tests/test_main_shutdown.py`：aggTrade 字段与 recorder 生命周期回归测试
+
 ## Milestone/附加改进：`orderbook_pressure` 平仓量随机抖动
 
 **状态**：✅ 已完成<br>

@@ -1,16 +1,25 @@
-<!-- Input: trigger/attempt/outcome 事件、bookTicker 价格 -->
+<!-- Input: trigger/attempt/outcome 事件与原始 MarketEvent -->
 <!-- Output: 窗口化统计日志 -->
 <!-- Pos: src/stats 模块说明 -->
 <!-- 一旦我所属的文件夹有所变化，请更新我。 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # src/stats 目录说明
 
-orderbook_pressure 策略旁路统计。<br>
-收集主动/被动 trigger、成功下单次数、订单首次成交、mid-price 采样，按窗口（1m/5m/15m）聚合输出结构化日志。<br>
-用于探索主动触发频率、被动成交率、价格走势三者的相关性。<br>
-纯内存 deque 环形缓冲区，不侵入核心交易路径，进程重启后清零。
+统计与录制模块。<br>
+`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志。<br>
+`market_recorder.py` 以非阻塞方式录制 `bookTicker + depth10 + aggTrade` 原始事件到 JSONL，供后续离线回放调参。<br>
+两者都不阻塞核心交易路径；前者纯内存，后者通过 queue + writer task 后台落盘。
 
 ## 文件清单
 
 - `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、日志输出
+- `market_recorder.py`：`MarketDataRecorder` — 原始市场数据录制、日切压缩、保留清理
 - `__init__.py`：模块导出
+
+## 运行说明
+
+- 录制文件默认写入 `logs/market_data_YYYY-MM-DD.jsonl`
+- 若设置 `VQ_LOG_DIR`，则与普通运行日志一起写入该目录
+- 日切后的历史文件会压缩为 `market_data_YYYY-MM-DD.jsonl.gz`
+- 当前活跃文件可用 `tail -n 5 logs/market_data_$(date +%F).jsonl` 查看
+- 历史压缩文件可用 `gzip -dc logs/market_data_YYYY-MM-DD.jsonl.gz | head` 查看

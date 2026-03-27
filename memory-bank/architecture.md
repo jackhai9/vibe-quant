@@ -292,6 +292,7 @@ vibe-quant/
 │   ├── stats/
 │   │   ├── README.md         # src/stats 目录说明
 │   │   ├── __init__.py
+│   │   ├── market_recorder.py # 原始市场数据录制（bookTicker/depth10/aggTrade）
 │   │   └── pressure_stats.py # orderbook_pressure 旁路统计（触发频率/成功下单/首次成交/价格走势）
 │   └── utils/
 │       ├── README.md         # src/utils 目录说明
@@ -321,16 +322,17 @@ vibe-quant/
 
 | 文件 | 行数 | 说明 |
 |------|------|------|
-| `src/models.py` | 454 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
-| `src/main.py` | 3033 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
+| `src/models.py` | 460 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
+| `src/main.py` | 3044 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
 | `src/config/loader.py` | 270 | ConfigLoader 类，YAML 加载 + 环境变量 + global/symbol 合并 |
 | `src/config/models.py` | 312 | pydantic 配置模型，支持类型验证和默认值 |
 | `src/utils/logger.py` | 483 | loguru 日志配置，按天滚动 + 结构化事件日志 |
 | `src/utils/helpers.py` | 159 | round_to_tick/round_up_to_tick/round_to_step/round_up_to_step/current_time_ms/symbol 转换 |
 | `src/exchange/adapter.py` | 1200 | ExchangeAdapter 类，ccxt 封装（markets/positions/下单/撤单/规整函数） |
-| `src/ws/market.py` | 477 | MarketWSClient 类，bookTicker/aggTrade/markPrice@1s 解析，指数退避重连，陈旧检测，重连回调 |
+| `src/ws/market.py` | 572 | MarketWSClient 类，bookTicker/aggTrade/markPrice@1s 解析，指数退避重连，陈旧检测，重连回调 |
 | `src/ws/user_data.py` | 744 | UserDataWSClient 类，listenKey 管理 + ORDER_TRADE_UPDATE/ALGO_UPDATE/ACCOUNT_UPDATE 解析，指数退避重连，重连回调 |
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
+| `src/stats/market_recorder.py` | 245 | MarketDataRecorder，原始市场数据录制（采样/日切/gzip/保留清理） |
 | `src/stats/pressure_stats.py` | 320 | PressureStatsCollector，orderbook_pressure 旁路统计（trigger/成功下单/首次成交/价格窗口聚合） |
 | `src/execution/engine.py` | 1705 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |

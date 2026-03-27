@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.main import Application
-from src.models import AccountUpdateEvent, Position, PositionSide
+from src.models import AccountUpdateEvent, MarketEvent, Position, PositionSide
 from src.models import (
     ExecutionMode,
     ExecutionState,
@@ -819,6 +819,41 @@ def test_on_account_update_event_schedules_refresh():
         reason="account_update:MARGIN_TRANSFER",
         debounce_s=2.5,
     )
+
+
+def test_on_market_event_records_with_market_recorder_before_signal_engine():
+    app = Application.__new__(Application)
+    app._market_recorder = MagicMock()
+    app.signal_engine = None
+
+    event = MarketEvent(
+        symbol="DASH/USDT:USDT",
+        timestamp_ms=1,
+        best_bid=Decimal("10"),
+        best_ask=Decimal("10.1"),
+        best_bid_qty=Decimal("1"),
+        best_ask_qty=Decimal("2"),
+        event_type="book_ticker",
+    )
+
+    app._on_market_event(event)
+
+    app._market_recorder.record.assert_called_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_market_recorder():
+    app = Application(Path("config/config.yaml"))
+    app._running = True
+    app._cancel_own_orders = AsyncMock()  # type: ignore[method-assign]
+    recorder = MagicMock()
+    recorder.close = AsyncMock()
+    app._market_recorder = recorder
+
+    await asyncio.wait_for(app.shutdown(), timeout=2.0)
+
+    recorder.close.assert_awaited_once()
+    assert app._market_recorder is None
 
 
 # ================================================================

@@ -125,6 +125,8 @@ class MarketEvent:
     bid_levels: Optional[list[tuple[Decimal, Decimal]]] = None
     ask_levels: Optional[list[tuple[Decimal, Decimal]]] = None
     last_trade_price: Optional[Decimal] = None
+    trade_qty: Optional[Decimal] = None
+    is_buyer_maker: Optional[bool] = None
     mark_price: Optional[Decimal] = None
     event_type: Literal["book_ticker", "depth", "agg_trade", "mark_price"] = "book_ticker"
 

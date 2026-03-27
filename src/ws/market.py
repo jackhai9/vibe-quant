@@ -427,6 +427,8 @@ class MarketWSClient:
                 return None
 
             last_trade_price = Decimal(str(data.get("p", "0")))
+            trade_qty = Decimal(str(data.get("q", "0")))
+            is_buyer_maker = bool(data.get("m", False))
             timestamp_ms = int(data.get("T", 0)) or int(data.get("E", 0)) or current_time_ms()
 
             return MarketEvent(
@@ -435,6 +437,8 @@ class MarketWSClient:
                 best_bid=None,
                 best_ask=None,
                 last_trade_price=last_trade_price,
+                trade_qty=trade_qty,
+                is_buyer_maker=is_buyer_maker,
                 event_type="agg_trade",
             )
 
