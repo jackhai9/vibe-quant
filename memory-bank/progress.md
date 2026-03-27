@@ -122,6 +122,7 @@
 - `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `active_burst_window_ms`、`active_burst_max_attempts`、`active_burst_max_fills`、`active_burst_pause_min_ms`、`active_burst_pause_max_ms`，并补齐运行时合并字段
 - `src/models.py`：`ExitSignal` 增加 active burst pacing 元数据
 - `src/signal/engine.py`：为 `orderbook_pressure` 维护 active 成功下单/首次成交窗口统计；命中 burst 阈值后暂停新的 active，并在暂停期间回落到 passive，避免重新累计 dwell
+- `src/utils/logger.py` / `src/signal/engine.py`：active burst 命中时输出 `INFO` 级结构化日志，pause 期间的主动跳过说明继续保留在 `DEBUG`
 - `src/main.py`：pressure active 成功下单与首次成交时，回写 `SignalEngine` 的 burst 计数
 - `tests/test_signal.py` / `tests/test_config.py` / `tests/test_main_shutdown.py`：覆盖 active burst pause、配置校验与 attempt/fill 记账接线
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步 active burst pacing 语义与默认配置

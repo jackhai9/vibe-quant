@@ -743,6 +743,7 @@ symbols:
 - `active_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
 - `active_burst_*` 只作用于 `orderbook_pressure` 的主动单；触发后不会停掉整个 symbol，而是把 active 临时回落到 passive
 - active burst 统计使用“成功下单”和“首次成交”两类事件，窗口内任一阈值命中都可触发 pause
+- active burst 命中 pause 时会输出 `INFO` 级结构化日志；pause 期间的“跳过主动单”说明仍保留在 `DEBUG`
 
 风控补充：
 - `orderbook_price` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`

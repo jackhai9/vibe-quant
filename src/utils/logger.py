@@ -56,6 +56,7 @@ EVENT_TYPE_CN = {
     "order_retry": "重试",
     "fill_rate": "成交率",
     "pressure_stats": "盘口量统计",
+    "pressure_burst": "盘口量节流",
     "error": "错误",
 }
 

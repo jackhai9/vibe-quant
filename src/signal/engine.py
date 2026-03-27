@@ -39,7 +39,7 @@ from src.models import (
     SignalExecutionPreference,
     QtyPolicy,
 )
-from src.utils.logger import get_logger, log_signal
+from src.utils.logger import get_logger, log_event, log_signal
 from src.utils.helpers import current_time_ms
 
 
@@ -485,11 +485,16 @@ class SignalEngine:
             return
 
         self._pressure_active_pause_until_ms[key] = ts_ms + pause_ms
-        get_logger().debug(
-            "盘口量 active burst 暂停: "
-            f"{symbol} {position_side.value} "
-            f"attempts={len(attempt_history)} fills={len(fill_history)} "
-            f"window_ms={cfg.active_burst_window_ms} pause_ms={pause_ms}"
+        log_event(
+            "pressure_burst",
+            level="info",
+            symbol=symbol,
+            side=position_side.value,
+            reason="active_burst_pause",
+            attempts=len(attempt_history),
+            fills=len(fill_history),
+            window_ms=cfg.active_burst_window_ms,
+            pause_ms=pause_ms,
         )
 
     @staticmethod
