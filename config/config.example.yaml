@@ -35,7 +35,7 @@ global:
     order_ttl_ms: 4000
     repost_cooldown_ms: 100
     min_signal_interval_ms: 200
-    default_base_mult: 1
+    base_mult: 1
     use_roi_mult: true
     use_accel_mult: true
 
@@ -150,15 +150,16 @@ symbols:
   # DASH/USDT:USDT:
   #   strategy:
   #     mode: orderbook_pressure   # 可选：orderbook_price | orderbook_pressure
+  #   execution:
+  #     base_mult: 5       # 该 symbol 两种策略共用的基准片大小
   #   pressure_exit:
   #     enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
   #     # 触发条件
   #     threshold_qty: 100         # 顶档量阈值：LONG 看 best_bid_qty，SHORT 看 best_ask_qty
   #     sustain_ms: 2000           # 顶档量连续超过阈值至少多久才主动吃单（毫秒）
   #     # 下单数量
-  #     base_mult: 5           # 固定基准片大小倍率，基准数量 = min_qty × base_mult
-  #     use_roi_mult: false        # 是否对固定片大小叠加公共 ROI 倍数
-  #     use_accel_mult: false      # 是否对固定片大小叠加公共 accel 倍数
+  #     use_roi_mult: false        # 显式覆盖 pressure 的 ROI 倍数开关；不写时继承 execution.use_roi_mult
+  #     use_accel_mult: false      # 显式覆盖 pressure 的 accel 倍数开关；不写时继承 execution.use_accel_mult
   #     qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小做双边抖动，0 = 关闭
   #     qty_anti_repeat_lookback: 3  # 尽量避开最近 N 笔已成功提交的相同数量，0 = 关闭
   #     # 主动路径节奏

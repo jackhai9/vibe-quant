@@ -140,7 +140,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
   - LONG 观察 `best_bid_qty`，SHORT 观察 `best_ask_qty`
   - 顶档量连续超过阈值 `sustain_ms` 后，主动吃一档（LONG=`SELL @ best_bid`，SHORT=`BUY @ best_ask`）
   - 主动条件未成立时，仅保留 1 笔固定档位的被动单（LONG=`ask[passive_level]`，SHORT=`bid[passive_level]`）
-  - 数量基准为 `min_qty × pressure_exit.base_mult`；默认不叠加公共倍数，可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式启用，并继续受 `execution.max_mult` 与剩余仓位约束；`max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `pressure_exit.base_mult`
+  - 数量基准为 `min_qty × execution.base_mult`；默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`，也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并继续受 `execution.max_mult` 与剩余仓位约束；`max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `execution.base_mult`
   - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新时，本轮跳过并重置 dwell
 
 ---
@@ -192,8 +192,8 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - `ret_window`：基于 `last_trade_price` 的滑动窗口回报率，用于匹配 `accel_mult`（按档位取最高满足档）
 - `roi`：用初始保证金口径计算（见 `README.md`），用于匹配 `roi_mult`（按档位取最高满足档）
 - `roi_mult / accel_mult` 是公共 sizing modifiers；不同策略先决定自己的基准片大小，再选择是否叠加这两个倍数
-- `orderbook_price` 的基准倍数是 `execution.default_base_mult`，默认通过 `execution.use_roi_mult` / `execution.use_accel_mult` 启用公共倍数
-- `orderbook_pressure` 的基准倍数是 `pressure_exit.base_mult`，默认不叠加公共倍数；显式开启 `use_roi_mult` / `use_accel_mult` 后再参与组合
+- `orderbook_price` 的基准倍数是 `execution.base_mult`，默认通过 `execution.use_roi_mult` / `execution.use_accel_mult` 启用公共倍数
+- `orderbook_pressure` 的基准倍数也是 `execution.base_mult`，默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；若在 `pressure_exit.use_*` 显式配置，则以 pressure 自己的值为准
 - 最终倍数受 `max_mult` 和 `max_order_notional` 约束
 
 ### 风控与限速（已实现）

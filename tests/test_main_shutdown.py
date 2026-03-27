@@ -228,6 +228,83 @@ def _make_pressure_eval_app(
 
 
 @pytest.mark.asyncio
+async def test_ensure_symbol_initialized_pressure_inherits_execution_modifier_defaults():
+    app = Application.__new__(Application)
+    app._symbol_init_lock = asyncio.Lock()
+    app._active_symbols = set()
+    app._rules = {}
+    app._symbol_configs = {}
+    app.execution_engines = {}
+    app.signal_engine = MagicMock()
+    app.exchange = MagicMock()
+    app.exchange.get_rules.return_value = SymbolRules(
+        symbol="DASH/USDT:USDT",
+        tick_size=Decimal("0.1"),
+        step_size=Decimal("0.001"),
+        min_qty=Decimal("0.001"),
+        min_notional=Decimal("5"),
+    )
+    app.exchange.fetch_order_trade_meta = AsyncMock(return_value=None)
+    app.config_loader = MagicMock()
+    app.config_loader.get_symbol_config.return_value = MagicMock(
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE.value,
+        pressure_exit_enabled=True,
+        pressure_exit_threshold_qty=Decimal("100"),
+        pressure_exit_sustain_ms=2000,
+        pressure_exit_passive_level=2,
+        pressure_exit_use_roi_mult=None,
+        pressure_exit_use_accel_mult=None,
+        pressure_exit_active_recheck_cooldown_ms=1000,
+        pressure_exit_active_recheck_cooldown_jitter_pct=Decimal("0.15"),
+        pressure_exit_active_burst_window_ms=10000,
+        pressure_exit_active_burst_max_attempts=8,
+        pressure_exit_active_burst_max_fills=5,
+        pressure_exit_active_burst_pause_min_ms=2500,
+        pressure_exit_active_burst_pause_max_ms=6000,
+        pressure_exit_passive_ttl_ms=10000,
+        pressure_exit_passive_ttl_jitter_pct=Decimal("0.15"),
+        pressure_exit_qty_jitter_pct=Decimal("0.20"),
+        pressure_exit_qty_anti_repeat_lookback=3,
+        execution_use_roi_mult=True,
+        execution_use_accel_mult=False,
+        min_signal_interval_ms=200,
+        accel_window_ms=2000,
+        accel_tiers=[],
+        roi_tiers=[],
+        order_ttl_ms=4000,
+        repost_cooldown_ms=100,
+        base_mult=31,
+        maker_price_mode="inside_spread_1tick",
+        maker_n_ticks=1,
+        maker_safety_ticks=1,
+        maker_timeouts_to_escalate=2,
+        aggr_fills_to_deescalate=1,
+        aggr_timeouts_to_deescalate=2,
+        fill_rate_feedback_enabled=False,
+        fill_rate_window_min=Decimal("5"),
+        fill_rate_low_threshold=Decimal("0.25"),
+        fill_rate_high_threshold=Decimal("0.75"),
+        fill_rate_log_windows_min=[],
+        max_mult=500,
+        max_order_notional=Decimal("2000"),
+    )
+    app._place_order = AsyncMock()
+    app._cancel_order = AsyncMock()
+    app._on_engine_fill = MagicMock()
+    app._inspect_reduce_only_block = AsyncMock(return_value=None)
+
+    initialized = await app._ensure_symbol_initialized("DASH/USDT:USDT")
+
+    assert initialized is True
+    app.signal_engine.configure_symbol.assert_called_once()
+    pressure_config = app.signal_engine.configure_symbol.call_args.kwargs["pressure_config"]
+    assert pressure_config is not None
+    assert pressure_config.base_mult == 31
+    assert pressure_config.use_roi_mult is True
+    assert pressure_config.use_accel_mult is False
+
+
+@pytest.mark.asyncio
 async def test_evaluate_side_risk_does_not_promote_pressure_passive_signal():
     """risk 触发 + pressure PASSIVE → 信号保持 PASSIVE，不被改写为 AGGRESSIVE。"""
     symbol = "DASH/USDT:USDT"

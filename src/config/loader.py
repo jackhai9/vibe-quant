@@ -171,7 +171,6 @@ class ConfigLoader:
         pressure_exit_threshold_qty = _get_override(pressure_cfg, "threshold_qty", None)
         pressure_exit_sustain_ms = _get_override(pressure_cfg, "sustain_ms", None)
         pressure_exit_passive_level = _get_override(pressure_cfg, "passive_level", None)
-        pressure_exit_base_mult = _get_override(pressure_cfg, "base_mult", None)
         pressure_exit_use_roi_mult = _get_override(pressure_cfg, "use_roi_mult", None)
         pressure_exit_use_accel_mult = _get_override(pressure_cfg, "use_accel_mult", None)
         pressure_exit_active_recheck_cooldown_ms = _get_override(
@@ -226,10 +225,10 @@ class ConfigLoader:
         order_ttl_ms = _get_override(s_exec, "order_ttl_ms", g_exec.order_ttl_ms)
         repost_cooldown_ms = _get_override(s_exec, "repost_cooldown_ms", g_exec.repost_cooldown_ms)
         min_signal_interval_ms = _get_override(s_exec, "min_signal_interval_ms", g_exec.min_signal_interval_ms)
-        default_base_mult = _get_override(
+        base_mult = _get_override(
             s_exec,
-            "default_base_mult",
-            g_exec.default_base_mult,
+            "base_mult",
+            g_exec.base_mult,
         )
         execution_use_roi_mult = _get_override(s_exec, "use_roi_mult", g_exec.use_roi_mult)
         execution_use_accel_mult = _get_override(s_exec, "use_accel_mult", g_exec.use_accel_mult)
@@ -296,7 +295,6 @@ class ConfigLoader:
             pressure_exit_threshold_qty=pressure_exit_threshold_qty,
             pressure_exit_sustain_ms=pressure_exit_sustain_ms,
             pressure_exit_passive_level=pressure_exit_passive_level,
-            pressure_exit_base_mult=pressure_exit_base_mult,
             pressure_exit_use_roi_mult=pressure_exit_use_roi_mult,
             pressure_exit_use_accel_mult=pressure_exit_use_accel_mult,
             pressure_exit_active_recheck_cooldown_ms=pressure_exit_active_recheck_cooldown_ms,
@@ -319,7 +317,7 @@ class ConfigLoader:
             order_ttl_ms=order_ttl_ms,
             repost_cooldown_ms=repost_cooldown_ms,
             min_signal_interval_ms=min_signal_interval_ms,
-            default_base_mult=default_base_mult,
+            base_mult=base_mult,
             execution_use_roi_mult=execution_use_roi_mult,
             execution_use_accel_mult=execution_use_accel_mult,
             maker_price_mode=maker_price_mode,

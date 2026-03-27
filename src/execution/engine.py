@@ -95,7 +95,7 @@ class ExecutionEngine:
         ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
-        default_base_mult: int = 1,
+        base_mult: int = 1,
         maker_price_mode: str = "inside_spread_1tick",
         maker_n_ticks: int = 1,
         maker_safety_ticks: int = 1,
@@ -123,7 +123,7 @@ class ExecutionEngine:
             inspect_reduce_only_block: 复核 `-4118` 是否由同侧普通平仓挂单占满仓位导致
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
-            default_base_mult: 默认基准片大小倍数
+            base_mult: 基准片大小倍数
             maker_price_mode: maker 定价模式
             maker_n_ticks: custom_ticks 模式的 tick 数
             maker_safety_ticks: post-only maker 安全距离（ticks）
@@ -147,7 +147,7 @@ class ExecutionEngine:
         self._inspect_reduce_only_block = inspect_reduce_only_block
         self.order_ttl_ms = order_ttl_ms
         self.repost_cooldown_ms = repost_cooldown_ms
-        self.default_base_mult = default_base_mult
+        self.base_mult = base_mult
         self.maker_price_mode = maker_price_mode
         self.maker_n_ticks = maker_n_ticks
         if maker_safety_ticks < 1:
@@ -1612,7 +1612,7 @@ class ExecutionEngine:
         计算下单数量
 
         MVP 策略：
-        - 基础数量 = min_qty * default_base_mult
+        - 基础数量 = min_qty * base_mult
         - 确保不超过仓位
         - 确保不超过 max_order_notional
         - 按 step_size 规整
@@ -1631,7 +1631,7 @@ class ExecutionEngine:
         if abs_position < min_qty:
             return Decimal("0")
 
-        base_mult = max(int(self.default_base_mult), 1)
+        base_mult = max(int(self.base_mult), 1)
         roi_mult = max(int(roi_mult), 1)
         accel_mult = max(int(accel_mult), 1)
         max_mult = max(int(self.max_mult), 1)

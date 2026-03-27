@@ -20,7 +20,7 @@
 | 1 | API 密钥管理 | 从环境变量读取（`BINANCE_API_KEY`、`BINANCE_API_SECRET`） |
 | 2 | 订单状态获取 | WebSocket User Data Stream（低延迟，实时推送成交/撤单事件） |
 | 3 | 部分成交对计数器影响 | 部分成交重置 `timeout_count`（有成交说明价格合理，继续 maker） |
-| 4 | `default_base_mult` | 可配置，放在 `global.execution.default_base_mult`，默认值 1，支持 symbol 覆盖 |
+| 4 | `base_mult` | 可配置，放在 `global.execution.base_mult`，默认值 1，支持 symbol 覆盖 |
 | 5 | 多 symbol 架构 | 共享 WS 连接（combined streams）+ 每个 symbol+side 独立 asyncio Task |
 | 6 | WS 重连策略 | 指数退避：初始 1s，倍数 2x，最大 30s，无限重试 |
 | 7 | `stale_data_ms` 判定 | 任一数据流（bookTicker 或 aggTrade）更新即重置 |
@@ -78,7 +78,7 @@ ws:
   - 按 symbol 覆盖（symbols.<symbol>.*）
 - 把以下配置项纳入（至少先占位），与设计文档保持一致：
   - WS：stale_data_ms、reconnect（initial_delay_ms、max_delay_ms、multiplier）
-  - 执行：order_ttl_ms、repost_cooldown_ms、min_signal_interval_ms、**default_base_mult**（默认 1）
+  - 执行：order_ttl_ms、repost_cooldown_ms、min_signal_interval_ms、**base_mult**（默认 1）
   - maker 定价策略：maker_price_mode、maker_n_ticks
   - 双保险：max_mult、max_order_notional
   - accel/roi 档位（先允许为空）
@@ -446,7 +446,7 @@ ws:
 ## 交付清单（每个里程碑的"可验收输出物"）
 
 - MVP 交付：
-  - 配置加载与覆盖 OK（含 default_base_mult、API 密钥从环境变量）
+  - 配置加载与覆盖 OK（含 base_mult、API 密钥从环境变量）
   - WS 行情接入 OK（best bid/ask + last trade）
   - User Data Stream OK（订单状态推送、listenKey 续期）
   - 信号（原始两类）OK

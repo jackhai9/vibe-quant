@@ -75,7 +75,7 @@ def engine(mock_place_order, mock_cancel_order):
         cancel_order=mock_cancel_order,
         order_ttl_ms=800,
         repost_cooldown_ms=100,
-        default_base_mult=1,
+        base_mult=1,
         maker_price_mode="inside_spread_1tick",
         maker_n_ticks=1,
         max_mult=50,
@@ -135,7 +135,7 @@ class TestExecutionEngineInit:
         )
         assert engine.order_ttl_ms == 800
         assert engine.repost_cooldown_ms == 100
-        assert engine.default_base_mult == 1
+        assert engine.base_mult == 1
         assert engine.maker_price_mode == "inside_spread_1tick"
         assert engine.maker_n_ticks == 1
         assert engine.max_mult == 50
@@ -148,7 +148,7 @@ class TestExecutionEngineInit:
             cancel_order=mock_cancel_order,
             order_ttl_ms=1000,
             repost_cooldown_ms=200,
-            default_base_mult=2,
+            base_mult=2,
             maker_price_mode="at_touch",
             maker_n_ticks=3,
             max_mult=100,
@@ -156,7 +156,7 @@ class TestExecutionEngineInit:
         )
         assert engine.order_ttl_ms == 1000
         assert engine.repost_cooldown_ms == 200
-        assert engine.default_base_mult == 2
+        assert engine.base_mult == 2
         assert engine.maker_price_mode == "at_touch"
         assert engine.maker_n_ticks == 3
         assert engine.max_mult == 100
@@ -913,7 +913,7 @@ class TestComputeQty:
             last_trade_price=Decimal("50000"),
         )
 
-        # default_base_mult=1, min_qty=0.001, base_qty=0.001
+        # base_mult=1, min_qty=0.001, base_qty=0.001
         assert qty == Decimal("0.001")
 
     def test_qty_limited_by_position(self, engine):
@@ -931,7 +931,7 @@ class TestComputeQty:
     def test_qty_limited_by_notional(self, engine):
         """测试数量受名义价值限制"""
         engine.max_order_notional = Decimal("100")  # 限制 100 USDT
-        engine.default_base_mult = 10  # 增大 base_qty 以触发 notional 限制
+        engine.base_mult = 10  # 增大 base_qty 以触发 notional 限制
 
         qty = engine.compute_qty(
             position_amt=Decimal("1"),
@@ -948,7 +948,7 @@ class TestComputeQty:
         engine = ExecutionEngine(
             place_order=mock_place_order,
             cancel_order=mock_cancel_order,
-            default_base_mult=10,
+            base_mult=10,
             max_order_notional=Decimal("1000"),  # 更大的 notional 限制
         )
 
@@ -959,14 +959,14 @@ class TestComputeQty:
             last_trade_price=Decimal("50000"),
         )
 
-        # default_base_mult=10, base_qty=0.01, max_notional/price = 1000/50000 = 0.02
+        # base_mult=10, base_qty=0.01, max_notional/price = 1000/50000 = 0.02
         # min(0.01, 0.1, 0.02) = 0.01
         assert qty == Decimal("0.01")
 
     def test_qty_step_size_rounding(self, engine):
         """测试数量步进规整"""
         engine.max_order_notional = Decimal("150")
-        engine.default_base_mult = 10  # base_qty = 0.01
+        engine.base_mult = 10  # base_qty = 0.01
 
         qty = engine.compute_qty(
             position_amt=Decimal("1"),
@@ -980,7 +980,7 @@ class TestComputeQty:
 
     def test_qty_uses_roi_and_accel_mult_and_caps_by_max_mult(self, engine):
         """测试 ROI/加速倍数叠加并受 max_mult 截断"""
-        engine.default_base_mult = 10
+        engine.base_mult = 10
         engine.max_mult = 50
         engine.max_order_notional = Decimal("1000000")
 
@@ -998,7 +998,7 @@ class TestComputeQty:
 
     def test_qty_returns_zero_when_notional_cap_below_min_qty(self, engine):
         """测试 max_order_notional 太小导致无法满足 min_qty 时返回 0"""
-        engine.default_base_mult = 1
+        engine.base_mult = 1
         engine.max_order_notional = Decimal("20")
 
         qty = engine.compute_qty(

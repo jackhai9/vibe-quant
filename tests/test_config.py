@@ -35,7 +35,7 @@ global:
     order_ttl_ms: 1000
     repost_cooldown_ms: 150
     min_signal_interval_ms: 250
-    default_base_mult: 2
+    base_mult: 2
     use_roi_mult: true
     use_accel_mult: true
     maker_price_mode: "at_touch"
@@ -75,14 +75,26 @@ symbols:
     execution:
       maker_price_mode: "custom_ticks"
       maker_n_ticks: 3
+  LDO/USDT:USDT:
+    strategy:
+      mode: orderbook_pressure
+    execution:
+      base_mult: 4
+    pressure_exit:
+      threshold_qty: 120
+      sustain_ms: 1500
+      passive_level: 2
+      active_recheck_cooldown_ms: 900
+      passive_ttl_ms: 8000
   DASH/USDT:USDT:
     strategy:
       mode: orderbook_pressure
+    execution:
+      base_mult: 5
     pressure_exit:
       threshold_qty: 100
       sustain_ms: 2000
       passive_level: 3
-      base_mult: 5
       use_roi_mult: true
       use_accel_mult: true
       qty_jitter_pct: 0.15
@@ -146,8 +158,9 @@ symbols:
         symbols = loader.get_symbols()
         assert "BTC/USDT:USDT" in symbols
         assert "ETH/USDT:USDT" in symbols
+        assert "LDO/USDT:USDT" in symbols
         assert "DASH/USDT:USDT" in symbols
-        assert len(symbols) == 3
+        assert len(symbols) == 4
 
     def test_get_symbol_config_with_override(self, sample_config_yaml, env_vars):
         """测试获取带覆盖的 symbol 配置"""
@@ -214,7 +227,7 @@ symbols:
         assert dash_config.pressure_exit_threshold_qty == Decimal("100")
         assert dash_config.pressure_exit_sustain_ms == 2000
         assert dash_config.pressure_exit_passive_level == 3
-        assert dash_config.pressure_exit_base_mult == 5
+        assert dash_config.base_mult == 5
         assert dash_config.pressure_exit_use_roi_mult is True
         assert dash_config.pressure_exit_use_accel_mult is True
         assert dash_config.pressure_exit_active_recheck_cooldown_ms == 1000
@@ -228,6 +241,15 @@ symbols:
         assert dash_config.pressure_exit_passive_ttl_jitter_pct == Decimal("0.25")
         assert dash_config.pressure_exit_qty_jitter_pct == Decimal("0.15")
         assert dash_config.pressure_exit_qty_anti_repeat_lookback == 4
+
+        ldo_config = loader.get_symbol_config("LDO/USDT:USDT")
+        assert ldo_config.strategy_mode == "orderbook_pressure"
+        assert ldo_config.pressure_exit_enabled is True
+        assert ldo_config.base_mult == 4
+        assert ldo_config.pressure_exit_use_roi_mult is None
+        assert ldo_config.pressure_exit_use_accel_mult is None
+        assert ldo_config.execution_use_roi_mult is True
+        assert ldo_config.execution_use_accel_mult is True
 
         btc_config = loader.get_symbol_config("BTC/USDT:USDT")
         assert btc_config.strategy_mode == "orderbook_price"
@@ -368,7 +390,7 @@ symbols: {}
         assert config.order_ttl_ms == 800
         assert config.repost_cooldown_ms == 100
         assert config.min_signal_interval_ms == 200
-        assert config.default_base_mult == 1
+        assert config.base_mult == 1
         assert config.execution_use_roi_mult is True
         assert config.execution_use_accel_mult is True
         assert config.maker_price_mode == "inside_spread_1tick"

@@ -156,7 +156,7 @@ vibe-quant/
 
 | 模式 | 行情来源 | 下单语义 | 数量语义 |
 |------|----------|----------|----------|
-| `orderbook_price` | `aggTrade` + `bookTicker` | 沿用原有 primary / improve 触发与执行模式轮转 | `default_base_mult × roi_mult × accel_mult` |
+| `orderbook_price` | `aggTrade` + `bookTicker` | 沿用原有 primary / improve 触发与执行模式轮转 | `base_mult × roi_mult × accel_mult` |
 | `orderbook_pressure` | `bookTicker` 的 `B/A` + `depth10@100ms` | 达到顶档量阈值后主动吃一档；未达阈值时仅挂 1 笔固定档位被动单 | `min_qty × base_mult` |
 
 `orderbook_pressure` 运行补充：

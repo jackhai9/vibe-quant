@@ -1746,13 +1746,17 @@ class Application:
                 threshold_qty = cfg.pressure_exit_threshold_qty
                 sustain_ms = cfg.pressure_exit_sustain_ms
                 passive_level = cfg.pressure_exit_passive_level
-                base_mult = (
-                    cfg.pressure_exit_base_mult
-                    if cfg.pressure_exit_base_mult is not None
-                    else cfg.default_base_mult
+                base_mult = cfg.base_mult
+                use_roi_mult = (
+                    cfg.pressure_exit_use_roi_mult
+                    if cfg.pressure_exit_use_roi_mult is not None
+                    else cfg.execution_use_roi_mult
                 )
-                use_roi_mult = cfg.pressure_exit_use_roi_mult
-                use_accel_mult = cfg.pressure_exit_use_accel_mult
+                use_accel_mult = (
+                    cfg.pressure_exit_use_accel_mult
+                    if cfg.pressure_exit_use_accel_mult is not None
+                    else cfg.execution_use_accel_mult
+                )
                 active_recheck_cooldown_ms = cfg.pressure_exit_active_recheck_cooldown_ms
                 active_recheck_cooldown_jitter_pct = cfg.pressure_exit_active_recheck_cooldown_jitter_pct
                 active_burst_window_ms = cfg.pressure_exit_active_burst_window_ms
@@ -1842,7 +1846,7 @@ class Application:
                 inspect_reduce_only_block=self._inspect_reduce_only_block,
                 order_ttl_ms=cfg.order_ttl_ms,
                 repost_cooldown_ms=cfg.repost_cooldown_ms,
-                default_base_mult=cfg.default_base_mult,
+                base_mult=cfg.base_mult,
                 maker_price_mode=cfg.maker_price_mode,
                 maker_n_ticks=cfg.maker_n_ticks,
                 maker_safety_ticks=cfg.maker_safety_ticks,

@@ -432,7 +432,7 @@ symbols:
    ```yaml
    global:
      execution:
-       default_base_mult: 2  # 增加基础片大小
+       base_mult: 2  # 增加基础片大小
    ```
 
 3. 查看日志中的仓位信息：

@@ -26,6 +26,20 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：统一两种策略的基准片大小入口
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`orderbook_price` 与 `orderbook_pressure` 同时维护 `execution.base_mult` 和 `pressure_exit.base_mult` 两套基准量入口，配置心智负担过高，也容易让同一 symbol 的基准片大小失去统一真源。<br>
+**产出**：
+
+- `src/config/models.py` / `src/config/loader.py`：移除 `pressure_exit.base_mult` 与对应运行时合并字段
+- `src/main.py`：`orderbook_pressure` 统一使用 `execution.base_mult` 作为基准片大小，保留 `pressure_exit.use_roi_mult` / `use_accel_mult` 作为 pressure 专属覆盖
+- `tests/test_config.py` / `tests/test_main_shutdown.py`：改为验证 pressure symbol 通过 `symbols.<symbol>.execution.base_mult` 覆盖基准量
+- `docs/configuration.md` / `config/config.example.yaml`：`pressure_exit` 示例不再出现 `base_mult`，symbol 级基准量统一在 `execution.base_mult`
+- `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两个策略共用同一基准片大小真源”的当前语义
+
 ## Milestone/附加改进：原始市场数据录制器
 
 **状态**：✅ 已完成<br>
@@ -147,8 +161,8 @@
 **动机**：`roi_mult / accel_mult` 在概念上属于公共 sizing context，不应只由 `orderbook_price` 独占；`orderbook_pressure` 需要能显式选择是否在固定基准片大小上叠加这些公共倍数，同时保持默认行为不变。<br>
 **产出**：
 
-- `src/config/models.py` / `src/config/loader.py`：`execution` 增加 `use_roi_mult` / `use_accel_mult` 开关，`pressure_exit` 也增加同名开关，并补齐 merged symbol 字段
-- `src/signal/engine.py` / `src/main.py`：`orderbook_price` 默认通过 `execution.use_*` 使用公共倍数；`orderbook_pressure` 在 `pressure_exit.use_*` 启用时产出公共 `roi_mult / accel_mult / roi / ret_window`，未启用时保持固定片默认语义
+- `src/config/models.py` / `src/config/loader.py`：`execution` 增加 `use_roi_mult` / `use_accel_mult` 开关，`pressure_exit` 增加同名可选覆盖开关；未配置时继承 `execution.use_*`
+- `src/signal/engine.py` / `src/main.py`：`orderbook_price` 默认通过 `execution.use_*` 使用公共倍数；`orderbook_pressure` 未配置 `pressure_exit.use_*` 时继承 `execution.use_*`，显式配置后再按 pressure 自己的值产出公共 `roi_mult / accel_mult / roi / ret_window`
 - `src/execution/engine.py`：`FIXED_MIN_QTY_MULT` 接入与动态数量同源的公共 roi/accel modifiers；固定基准片大小仍受 `max_mult` 与剩余仓位约束
 - `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 pressure 配置合并、pressure signal 产出公共倍数、fixed qty 叠加公共倍数并受 `max_mult` 截断
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`、`memory-bank/design-document.md`：同步“公共 modifiers + 策略自选启用”的当前语义
@@ -932,7 +946,7 @@ class SignalEngine:
 
 4. 数量计算
    - `compute_qty()`: 计算下单数量
-   - base_qty = min_qty × default_base_mult
+   - base_qty = min_qty × base_mult
    - 受仓位、max_order_notional 限制
    - 按 step_size 规整
 
@@ -962,7 +976,7 @@ class ExecutionEngine:
         cancel_order: Callable[[str, str], Awaitable[OrderResult]],
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
-        default_base_mult: int = 1,
+        base_mult: int = 1,
         maker_price_mode: str = "inside_spread_1tick",
         maker_n_ticks: int = 1,
         max_mult: int = 50,
