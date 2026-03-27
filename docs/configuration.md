@@ -621,14 +621,23 @@ symbols:
       mode: orderbook_pressure    # 可选：orderbook_price | orderbook_pressure
     pressure_exit:
       enabled: true
+      # 触发条件
       threshold_qty: 100
       sustain_ms: 2000
-      passive_level: 3
+      # 下单数量
       lot_mult: 5
       qty_jitter_pct: 0.15
       qty_anti_repeat_lookback: 3
-      aggressive_recheck_cooldown_ms: 1000
-      aggressive_recheck_cooldown_jitter_pct: 0.15
+      # 主动路径节奏
+      active_recheck_cooldown_ms: 1000
+      active_recheck_cooldown_jitter_pct: 0.15
+      active_burst_window_ms: 10000
+      active_burst_max_attempts: 8
+      active_burst_max_fills: 5
+      active_burst_pause_min_ms: 2500
+      active_burst_pause_max_ms: 6000
+      # 被动路径节奏
+      passive_level: 3
       passive_ttl_ms: 10000
       passive_ttl_jitter_pct: 0.15
     execution:
@@ -672,14 +681,23 @@ symbols:
   - `strategy.mode == "orderbook_pressure"` 且 `pressure_exit.enabled == false` 时，配置校验失败
 - **字段说明**:
   - `enabled`: 是否启用盘口量平仓路径；缺省为 `true`。当 `strategy.mode == "orderbook_pressure"` 时不能显式设为 `false`
+  - 触发条件
   - `threshold_qty`: 顶档量阈值；LONG 看 `best_bid_qty`，SHORT 看 `best_ask_qty`
   - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
-  - `passive_level`: 主动条件不成立时使用的固定档位；LONG 取 `ask[passive_level]`，SHORT 取 `bid[passive_level]`
+  - 下单数量
   - `lot_mult`: 固定下单量倍率；最终数量为 `min_qty × lot_mult`，按 `step_size` 规整并 clamp 到剩余仓位
   - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的 `min_qty × lot_mult` 为中心做双边 jitter，再 clamp 到剩余仓位
   - `qty_anti_repeat_lookback`: 固定片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）
-  - `aggressive_recheck_cooldown_ms`: 主动单终态后的重检冷却
-  - `aggressive_recheck_cooldown_jitter_pct`: 主动单重检冷却的随机抖动比例（`0` = 关闭）
+  - 主动路径节奏
+  - `active_recheck_cooldown_ms`: 主动单终态后的重检冷却
+  - `active_recheck_cooldown_jitter_pct`: 主动单重检冷却的随机抖动比例（`0` = 关闭）
+  - `active_burst_window_ms`: active burst 统计窗口；在该窗口内统计 active 成功下单/首次成交次数
+  - `active_burst_max_attempts`: 窗口内 active 成功下单上限；达到后暂停新的 active，回落到 passive（`0` = 关闭）
+  - `active_burst_max_fills`: 窗口内 active 首次成交上限；达到后暂停新的 active，回落到 passive（`0` = 关闭）
+  - `active_burst_pause_min_ms`: 触发 active burst 暂停后的最短停顿
+  - `active_burst_pause_max_ms`: 触发 active burst 暂停后的最长停顿；必须 `>= active_burst_pause_min_ms`
+  - 被动路径节奏
+  - `passive_level`: 主动条件不成立时使用的固定档位；LONG 取 `ask[passive_level]`，SHORT 取 `bid[passive_level]`
   - `passive_ttl_ms`: 被动单 TTL；超时撤单后不额外附加策略冷却
   - `passive_ttl_jitter_pct`: 被动单 TTL 的随机抖动比例（`0` = 关闭）
 
@@ -692,14 +710,23 @@ symbols:
       mode: orderbook_pressure   # 启用盘口量模式；不写时默认 orderbook_price
     pressure_exit:
       enabled: true              # 缺省即 true；mode=orderbook_pressure 时不能设为 false
+      # 触发条件
       threshold_qty: 100         # LONG 看 best_bid_qty；SHORT 看 best_ask_qty
       sustain_ms: 2000           # 顶档量连续超过阈值至少 2000ms 后才主动吃单
-      passive_level: 3           # 主动条件不成立时挂在第 3 档
+      # 下单数量
       lot_mult: 5                # 固定片大小 = min_qty × 5
       qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小双边抖动 15%
       qty_anti_repeat_lookback: 3  # 尽量避开最近 3 笔已成功提交的相同数量
-      aggressive_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
-      aggressive_recheck_cooldown_jitter_pct: 0.15  # 主动重检冷却双边抖动 15%
+      # 主动路径节奏
+      active_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
+      active_recheck_cooldown_jitter_pct: 0.15  # 主动重检冷却双边抖动 15%
+      active_burst_window_ms: 10000  # 10 秒内统计 active burst
+      active_burst_max_attempts: 8   # 10 秒内 active 成功下单达到 8 笔后暂停 active
+      active_burst_max_fills: 5      # 10 秒内 active 首次成交达到 5 笔后暂停 active
+      active_burst_pause_min_ms: 2500  # 暂停 active 至少 2500ms
+      active_burst_pause_max_ms: 6000  # 暂停 active 最多 6000ms
+      # 被动路径节奏
+      passive_level: 3           # 主动条件不成立时挂在第 3 档
       passive_ttl_ms: 10000      # 被动单 10000ms 未成交则自动撤单
       passive_ttl_jitter_pct: 0.15  # 被动单 TTL 双边抖动 15%
 ```
@@ -713,7 +740,9 @@ symbols:
 - 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
 - `qty_jitter_pct` 作用在最终规整后的固定片大小，不再通过缩窄 `lot_mult` 来单边抖动
 - `qty_anti_repeat_lookback` 只参考最近几笔已成功提交的 `orderbook_pressure` 固定数量订单
-- `aggressive_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
+- `active_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
+- `active_burst_*` 只作用于 `orderbook_pressure` 的主动单；触发后不会停掉整个 symbol，而是把 active 临时回落到 passive
+- active burst 统计使用“成功下单”和“首次成交”两类事件，窗口内任一阈值命中都可触发 pause
 
 风控补充：
 - `orderbook_price` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`

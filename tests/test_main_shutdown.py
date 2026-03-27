@@ -161,7 +161,7 @@ def _make_pressure_eval_app(
 
     sym_cfg = MagicMock()
     sym_cfg.liq_distance_threshold = Decimal("0.02")
-    sym_cfg.pressure_exit_aggressive_recheck_cooldown_ms = 1000
+    sym_cfg.pressure_exit_active_recheck_cooldown_ms = 1000
     app._symbol_configs = {signal.symbol: sym_cfg}
 
     app._calibrating = False
@@ -435,6 +435,58 @@ async def test_evaluate_side_pressure_stats_record_only_successful_attempt():
 
 
 @pytest.mark.asyncio
+async def test_evaluate_side_records_pressure_active_attempt_for_signal_engine():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_ASK_PRESSURE_ACTIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.AGGRESSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("10.1"),
+        ttl_override_ms=None,
+        cooldown_override_ms=1000,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=False,
+    )
+
+    async def place_order_stub(_intent):
+        return OrderResult(success=True, order_id="order-1", status=OrderStatus.NEW)
+
+    async def retry_passthrough(**kwargs):
+        return kwargs["intent"], kwargs["result"], False
+
+    app._place_order = place_order_stub  # type: ignore[method-assign]
+    app._maybe_retry_post_only_reject = retry_passthrough  # type: ignore[method-assign]
+    app._refresh_position = AsyncMock()  # type: ignore[method-assign]
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        current_ms=1000,
+    )
+
+    cast(MagicMock, app.signal_engine).record_pressure_active_attempt.assert_called_once_with(
+        symbol,
+        PositionSide.SHORT,
+        ts_ms=1000,
+    )
+
+
+@pytest.mark.asyncio
 async def test_evaluate_side_pressure_trigger_rearms_after_signal_clears():
     symbol = "DASH/USDT:USDT"
     signal = ExitSignal(
@@ -503,6 +555,7 @@ async def test_handle_order_update_pressure_partial_fill_recorded_once():
     app._pressure_stats = MagicMock()
     app._pressure_fill_recorded_orders = set()
     app._pressure_trigger_signatures = {}
+    app.signal_engine = MagicMock()
     app.config_loader = None
     app.telegram_notifier = None
     app.protective_stop_manager = None
@@ -553,6 +606,43 @@ async def test_handle_order_update_pressure_partial_fill_recorded_once():
         is_active=False,
         is_filled=True,
         ts_ms=partial.timestamp_ms,
+    )
+    cast(MagicMock, app.signal_engine).record_pressure_active_fill.assert_not_called()
+
+
+def test_record_pressure_fill_once_notifies_signal_engine_for_active_order():
+    app = Application.__new__(Application)
+    app._pressure_stats = MagicMock()
+    app._pressure_fill_recorded_orders = set()
+    app._pressure_trigger_signatures = {}
+    app.signal_engine = MagicMock()
+
+    app._record_pressure_fill_once(
+        symbol="DASH/USDT:USDT",
+        position_side=PositionSide.SHORT,
+        order_id="order-1",
+        reason=SignalReason.SHORT_ASK_PRESSURE_ACTIVE.value,
+        ts_ms=1234,
+    )
+    app._record_pressure_fill_once(
+        symbol="DASH/USDT:USDT",
+        position_side=PositionSide.SHORT,
+        order_id="order-1",
+        reason=SignalReason.SHORT_ASK_PRESSURE_ACTIVE.value,
+        ts_ms=1300,
+    )
+
+    app._pressure_stats.record_outcome.assert_called_once_with(
+        symbol="DASH/USDT:USDT",
+        side=PositionSide.SHORT.value,
+        is_active=True,
+        is_filled=True,
+        ts_ms=1234,
+    )
+    cast(MagicMock, app.signal_engine).record_pressure_active_fill.assert_called_once_with(
+        "DASH/USDT:USDT",
+        PositionSide.SHORT,
+        ts_ms=1234,
     )
 
 

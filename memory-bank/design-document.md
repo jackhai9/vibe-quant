@@ -367,7 +367,7 @@ symbols:
       sustain_ms: 2000
       passive_level: 3
       lot_mult: 5
-      aggressive_recheck_cooldown_ms: 1000
+      active_recheck_cooldown_ms: 1000
       passive_ttl_ms: 10000
 ```
 

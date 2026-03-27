@@ -255,16 +255,41 @@ class PressureExitConfig(BaseModel):
         le=20,
         description="固定平仓量 anti-repeat 回看笔数，0 = 关闭",
     )
-    aggressive_recheck_cooldown_ms: int = Field(
+    active_recheck_cooldown_ms: int = Field(
         default=1000,
         ge=0,
         description="主动单终态后的重检冷却(ms)",
     )
-    aggressive_recheck_cooldown_jitter_pct: Decimal = Field(
+    active_recheck_cooldown_jitter_pct: Decimal = Field(
         default=Decimal("0.15"),
         ge=Decimal("0"),
         le=Decimal("1"),
         description="主动单重检冷却随机抖动比例，0 = 关闭",
+    )
+    active_burst_window_ms: int = Field(
+        default=10000,
+        ge=1,
+        description="active burst 统计窗口(ms)",
+    )
+    active_burst_max_attempts: int = Field(
+        default=8,
+        ge=0,
+        description="窗口内 active 成功下单上限，达到后暂停 active；0 = 关闭",
+    )
+    active_burst_max_fills: int = Field(
+        default=5,
+        ge=0,
+        description="窗口内 active 首次成交上限，达到后暂停 active；0 = 关闭",
+    )
+    active_burst_pause_min_ms: int = Field(
+        default=2500,
+        ge=0,
+        description="触发 active burst 暂停后的最短停顿(ms)",
+    )
+    active_burst_pause_max_ms: int = Field(
+        default=6000,
+        ge=0,
+        description="触发 active burst 暂停后的最长停顿(ms)",
     )
     passive_ttl_ms: int = Field(default=10000, ge=1, description="被动单 TTL(ms)")
     passive_ttl_jitter_pct: Decimal = Field(
@@ -273,6 +298,12 @@ class PressureExitConfig(BaseModel):
         le=Decimal("1"),
         description="被动单 TTL 随机抖动比例，0 = 关闭",
     )
+
+    @model_validator(mode="after")
+    def validate_active_burst_pause_bounds(self) -> "PressureExitConfig":
+        if self.active_burst_pause_max_ms < self.active_burst_pause_min_ms:
+            raise ValueError("active_burst_pause_max_ms must be >= active_burst_pause_min_ms")
+        return self
 
 
 # ============================================================
@@ -410,8 +441,13 @@ class MergedSymbolConfig(BaseModel):
     pressure_exit_sustain_ms: Optional[int]
     pressure_exit_passive_level: Optional[int]
     pressure_exit_lot_mult: Optional[int]
-    pressure_exit_aggressive_recheck_cooldown_ms: Optional[int]
-    pressure_exit_aggressive_recheck_cooldown_jitter_pct: Optional[Decimal]
+    pressure_exit_active_recheck_cooldown_ms: Optional[int]
+    pressure_exit_active_recheck_cooldown_jitter_pct: Optional[Decimal]
+    pressure_exit_active_burst_window_ms: Optional[int]
+    pressure_exit_active_burst_max_attempts: Optional[int]
+    pressure_exit_active_burst_max_fills: Optional[int]
+    pressure_exit_active_burst_pause_min_ms: Optional[int]
+    pressure_exit_active_burst_pause_max_ms: Optional[int]
     pressure_exit_passive_ttl_ms: Optional[int]
     pressure_exit_passive_ttl_jitter_pct: Optional[Decimal]
     pressure_exit_qty_jitter_pct: Optional[Decimal]

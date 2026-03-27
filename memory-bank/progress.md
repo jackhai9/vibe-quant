@@ -95,11 +95,26 @@
 **动机**：`orderbook_pressure` 旧实现只会在 `lot_mult` 上做窄幅、单边抖动，公开成交数量和节拍仍然容易暴露同一程序的模式。<br>
 **产出**：
 
-- `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `qty_anti_repeat_lookback`、`aggressive_recheck_cooldown_jitter_pct`、`passive_ttl_jitter_pct`，并补齐 symbol 级合并字段
+- `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `qty_anti_repeat_lookback`、`active_recheck_cooldown_jitter_pct`、`passive_ttl_jitter_pct`，并补齐 symbol 级合并字段
 - `src/signal/engine.py`：`orderbook_pressure` 不再直接改写 `lot_mult`，而是把固定数量 jitter 参数与 TTL/cooldown jitter 注入 ExitSignal
 - `src/execution/engine.py`：固定片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
 - `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 TTL/cooldown jitter、execution-layer two-sided qty jitter、anti-repeat 与配置合并
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步当前语义与配置说明
+
+## Milestone/附加改进：`orderbook_pressure` active burst pacing
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：active 条件持续成立时，单靠 `active_recheck_cooldown_ms` 会在公开行为上留下约 1 秒级的稳定节奏带。需要在不关掉整条 pressure 路径的前提下，限制 active burst 的连续密度，并在暂停期间自然回落到 passive。<br>
+**产出**：
+
+- `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `active_burst_window_ms`、`active_burst_max_attempts`、`active_burst_max_fills`、`active_burst_pause_min_ms`、`active_burst_pause_max_ms`，并补齐运行时合并字段
+- `src/models.py`：`ExitSignal` 增加 active burst pacing 元数据
+- `src/signal/engine.py`：为 `orderbook_pressure` 维护 active 成功下单/首次成交窗口统计；命中 burst 阈值后暂停新的 active，并在暂停期间回落到 passive，避免重新累计 dwell
+- `src/main.py`：pressure active 成功下单与首次成交时，回写 `SignalEngine` 的 burst 计数
+- `tests/test_signal.py` / `tests/test_config.py` / `tests/test_main_shutdown.py`：覆盖 active burst pause、配置校验与 attempt/fill 记账接线
+- `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步 active burst pacing 语义与默认配置
 
 ## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
 

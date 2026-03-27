@@ -1,6 +1,6 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts, account events, execution feedback, reduce-only block state, liq-distance risk latch state, and pressure jitter metadata
-# Pos: core data contracts, events, per-side execution state, same-side open-order block metadata, liq-distance risk latch metadata, and pressure anti-repeat state
+# Output: shared enums and dataclasses for module contracts, account events, execution feedback, reduce-only block state, liq-distance risk latch state, and pressure jitter/burst pacing metadata
+# Pos: core data contracts, events, per-side execution state, same-side open-order block metadata, liq-distance risk latch metadata, and pressure anti-repeat/burst pacing state
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -259,6 +259,11 @@ class ExitSignal:
     fixed_lot_mult: Optional[int] = None
     fixed_qty_jitter_pct: Optional[Decimal] = None
     fixed_qty_anti_repeat_lookback: Optional[int] = None
+    active_burst_window_ms: Optional[int] = None
+    active_burst_max_attempts: Optional[int] = None
+    active_burst_max_fills: Optional[int] = None
+    active_burst_pause_min_ms: Optional[int] = None
+    active_burst_pause_max_ms: Optional[int] = None
     roi_mult: int = 1
     accel_mult: int = 1
     roi: Optional[Decimal] = None

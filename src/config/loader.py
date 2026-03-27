@@ -172,14 +172,39 @@ class ConfigLoader:
         pressure_exit_sustain_ms = _get_override(pressure_cfg, "sustain_ms", None)
         pressure_exit_passive_level = _get_override(pressure_cfg, "passive_level", None)
         pressure_exit_lot_mult = _get_override(pressure_cfg, "lot_mult", None)
-        pressure_exit_aggressive_recheck_cooldown_ms = _get_override(
+        pressure_exit_active_recheck_cooldown_ms = _get_override(
             pressure_cfg,
-            "aggressive_recheck_cooldown_ms",
+            "active_recheck_cooldown_ms",
             None,
         )
-        pressure_exit_aggressive_recheck_cooldown_jitter_pct = _get_override(
+        pressure_exit_active_recheck_cooldown_jitter_pct = _get_override(
             pressure_cfg,
-            "aggressive_recheck_cooldown_jitter_pct",
+            "active_recheck_cooldown_jitter_pct",
+            None,
+        )
+        pressure_exit_active_burst_window_ms = _get_override(
+            pressure_cfg,
+            "active_burst_window_ms",
+            None,
+        )
+        pressure_exit_active_burst_max_attempts = _get_override(
+            pressure_cfg,
+            "active_burst_max_attempts",
+            None,
+        )
+        pressure_exit_active_burst_max_fills = _get_override(
+            pressure_cfg,
+            "active_burst_max_fills",
+            None,
+        )
+        pressure_exit_active_burst_pause_min_ms = _get_override(
+            pressure_cfg,
+            "active_burst_pause_min_ms",
+            None,
+        )
+        pressure_exit_active_burst_pause_max_ms = _get_override(
+            pressure_cfg,
+            "active_burst_pause_max_ms",
             None,
         )
         pressure_exit_passive_ttl_ms = _get_override(pressure_cfg, "passive_ttl_ms", None)
@@ -264,8 +289,13 @@ class ConfigLoader:
             pressure_exit_sustain_ms=pressure_exit_sustain_ms,
             pressure_exit_passive_level=pressure_exit_passive_level,
             pressure_exit_lot_mult=pressure_exit_lot_mult,
-            pressure_exit_aggressive_recheck_cooldown_ms=pressure_exit_aggressive_recheck_cooldown_ms,
-            pressure_exit_aggressive_recheck_cooldown_jitter_pct=pressure_exit_aggressive_recheck_cooldown_jitter_pct,
+            pressure_exit_active_recheck_cooldown_ms=pressure_exit_active_recheck_cooldown_ms,
+            pressure_exit_active_recheck_cooldown_jitter_pct=pressure_exit_active_recheck_cooldown_jitter_pct,
+            pressure_exit_active_burst_window_ms=pressure_exit_active_burst_window_ms,
+            pressure_exit_active_burst_max_attempts=pressure_exit_active_burst_max_attempts,
+            pressure_exit_active_burst_max_fills=pressure_exit_active_burst_max_fills,
+            pressure_exit_active_burst_pause_min_ms=pressure_exit_active_burst_pause_min_ms,
+            pressure_exit_active_burst_pause_max_ms=pressure_exit_active_burst_pause_max_ms,
             pressure_exit_passive_ttl_ms=pressure_exit_passive_ttl_ms,
             pressure_exit_passive_ttl_jitter_pct=pressure_exit_passive_ttl_jitter_pct,
             pressure_exit_qty_jitter_pct=pressure_exit_qty_jitter_pct,

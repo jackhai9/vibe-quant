@@ -82,8 +82,13 @@ symbols:
       lot_mult: 5
       qty_jitter_pct: 0.15
       qty_anti_repeat_lookback: 4
-      aggressive_recheck_cooldown_ms: 1000
-      aggressive_recheck_cooldown_jitter_pct: 0.2
+      active_recheck_cooldown_ms: 1000
+      active_recheck_cooldown_jitter_pct: 0.2
+      active_burst_window_ms: 12000
+      active_burst_max_attempts: 9
+      active_burst_max_fills: 6
+      active_burst_pause_min_ms: 3000
+      active_burst_pause_max_ms: 7000
       passive_ttl_ms: 10000
       passive_ttl_jitter_pct: 0.25
 """
@@ -199,8 +204,13 @@ symbols:
         assert dash_config.pressure_exit_sustain_ms == 2000
         assert dash_config.pressure_exit_passive_level == 3
         assert dash_config.pressure_exit_lot_mult == 5
-        assert dash_config.pressure_exit_aggressive_recheck_cooldown_ms == 1000
-        assert dash_config.pressure_exit_aggressive_recheck_cooldown_jitter_pct == Decimal("0.2")
+        assert dash_config.pressure_exit_active_recheck_cooldown_ms == 1000
+        assert dash_config.pressure_exit_active_recheck_cooldown_jitter_pct == Decimal("0.2")
+        assert dash_config.pressure_exit_active_burst_window_ms == 12000
+        assert dash_config.pressure_exit_active_burst_max_attempts == 9
+        assert dash_config.pressure_exit_active_burst_max_fills == 6
+        assert dash_config.pressure_exit_active_burst_pause_min_ms == 3000
+        assert dash_config.pressure_exit_active_burst_pause_max_ms == 7000
         assert dash_config.pressure_exit_passive_ttl_ms == 10000
         assert dash_config.pressure_exit_passive_ttl_jitter_pct == Decimal("0.25")
         assert dash_config.pressure_exit_qty_jitter_pct == Decimal("0.15")
@@ -209,6 +219,14 @@ symbols:
         btc_config = loader.get_symbol_config("BTC/USDT:USDT")
         assert btc_config.strategy_mode == "orderbook_price"
         assert btc_config.pressure_exit_enabled is False
+
+    def test_pressure_exit_rejects_invalid_active_burst_pause_bounds(self):
+        with pytest.raises(ValueError, match="active_burst_pause_max_ms must be >="):
+            PressureExitConfig(
+                threshold_qty=Decimal("100"),
+                active_burst_pause_min_ms=6000,
+                active_burst_pause_max_ms=3000,
+            )
 
     def test_pressure_exit_rejects_mode_orderbook_pressure_with_enabled_false(self):
         """strategy.mode=orderbook_pressure + pressure_exit.enabled=false 应被拒绝。"""

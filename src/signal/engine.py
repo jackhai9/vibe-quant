@@ -1,6 +1,6 @@
 # Input: MarketEvent, Position, config
-# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure (including pressure timing jitter)
-# Pos: signal evaluation engine with pressure dwell/freshness and TTL/cooldown jitter
+# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure (including pressure timing jitter and active burst pacing)
+# Pos: signal evaluation engine with pressure dwell/freshness, TTL/cooldown jitter, and active burst pacing
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -49,10 +49,15 @@ class PressureSignalConfig:
     sustain_ms: int
     passive_level: int
     lot_mult: int
-    aggressive_recheck_cooldown_ms: int
+    active_recheck_cooldown_ms: int
     passive_ttl_ms: int
-    aggressive_recheck_cooldown_jitter_pct: Decimal = Decimal("0.15")
+    active_recheck_cooldown_jitter_pct: Decimal = Decimal("0.15")
     passive_ttl_jitter_pct: Decimal = Decimal("0.15")
+    active_burst_window_ms: int = 10000
+    active_burst_max_attempts: int = 8
+    active_burst_max_fills: int = 5
+    active_burst_pause_min_ms: int = 2500
+    active_burst_pause_max_ms: int = 6000
     qty_jitter_pct: Decimal = Decimal("0.15")
     qty_anti_repeat_lookback: int = 3
 
@@ -89,6 +94,9 @@ class SignalEngine:
         self._trade_history: Dict[str, Deque[Tuple[int, Decimal]]] = {}
         self._pressure_dwell_start_ms: Dict[str, int] = {}
         self._last_pressure_skip_reason: Dict[str, str] = {}
+        self._pressure_active_attempt_history_ms: Dict[str, Deque[int]] = {}
+        self._pressure_active_fill_history_ms: Dict[str, Deque[int]] = {}
+        self._pressure_active_pause_until_ms: Dict[str, int] = {}
 
     def configure_symbol(
         self,
@@ -304,6 +312,7 @@ class SignalEngine:
             return None
 
         dwell_key = f"{symbol}:{position_side.value}"
+        active_paused = False
         active_qty = state.best_bid_qty if position_side == PositionSide.LONG else state.best_ask_qty
         if active_qty > cfg.threshold_qty:
             start_ms = self._pressure_dwell_start_ms.get(dwell_key)
@@ -313,40 +322,53 @@ class SignalEngine:
             if current_ms - start_ms < cfg.sustain_ms:
                 return None
 
-            reason = (
-                SignalReason.LONG_BID_PRESSURE_ACTIVE
-                if position_side == PositionSide.LONG
-                else SignalReason.SHORT_ASK_PRESSURE_ACTIVE
-            )
-            self._clear_pressure_skip_reason(dwell_key)
-            self._last_signal_ms[dwell_key] = current_ms
-            signal = ExitSignal(
+            if self._is_pressure_active_paused(
+                key=dwell_key,
                 symbol=symbol,
                 position_side=position_side,
-                reason=reason,
-                timestamp_ms=current_ms,
-                best_bid=state.best_bid,
-                best_ask=state.best_ask,
-                last_trade_price=state.last_trade_price if state.last_trade_price > Decimal("0")
-                else (state.best_bid if position_side == PositionSide.LONG else state.best_ask),
-                strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
-                execution_preference=SignalExecutionPreference.AGGRESSIVE,
-                qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
-                price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
-                ttl_override_ms=None,
-                cooldown_override_ms=self._jitter_duration_ms(
-                    cfg.aggressive_recheck_cooldown_ms,
-                    cfg.aggressive_recheck_cooldown_jitter_pct,
-                    minimum_ms=0,
-                ),
-                fixed_lot_mult=cfg.lot_mult,
-                fixed_qty_jitter_pct=cfg.qty_jitter_pct,
-                fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
-            )
-            self._log_signal_if_changed(dwell_key, signal, state)
-            return signal
+                current_ms=current_ms,
+            ):
+                active_paused = True
+            else:
+                reason = (
+                    SignalReason.LONG_BID_PRESSURE_ACTIVE
+                    if position_side == PositionSide.LONG
+                    else SignalReason.SHORT_ASK_PRESSURE_ACTIVE
+                )
+                self._clear_pressure_skip_reason(dwell_key)
+                self._last_signal_ms[dwell_key] = current_ms
+                signal = ExitSignal(
+                    symbol=symbol,
+                    position_side=position_side,
+                    reason=reason,
+                    timestamp_ms=current_ms,
+                    best_bid=state.best_bid,
+                    best_ask=state.best_ask,
+                    last_trade_price=state.last_trade_price if state.last_trade_price > Decimal("0")
+                    else (state.best_bid if position_side == PositionSide.LONG else state.best_ask),
+                    strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+                    execution_preference=SignalExecutionPreference.AGGRESSIVE,
+                    qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+                    price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
+                    ttl_override_ms=None,
+                    cooldown_override_ms=self._jitter_duration_ms(
+                        cfg.active_recheck_cooldown_ms,
+                        cfg.active_recheck_cooldown_jitter_pct,
+                        minimum_ms=0,
+                    ),
+                    fixed_lot_mult=cfg.lot_mult,
+                    fixed_qty_jitter_pct=cfg.qty_jitter_pct,
+                    fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
+                    active_burst_window_ms=cfg.active_burst_window_ms,
+                    active_burst_max_attempts=cfg.active_burst_max_attempts,
+                    active_burst_max_fills=cfg.active_burst_max_fills,
+                    active_burst_pause_min_ms=cfg.active_burst_pause_min_ms,
+                    active_burst_pause_max_ms=cfg.active_burst_pause_max_ms,
+                )
+                self._log_signal_if_changed(dwell_key, signal, state)
+                return signal
 
-        if dwell_key in self._pressure_dwell_start_ms:
+        if active_qty <= cfg.threshold_qty and dwell_key in self._pressure_dwell_start_ms:
             del self._pressure_dwell_start_ms[dwell_key]
 
         passive_price = self._resolve_passive_price(state, position_side, cfg.passive_level)
@@ -366,7 +388,8 @@ class SignalEngine:
             if position_side == PositionSide.LONG
             else SignalReason.SHORT_BID_PRESSURE_PASSIVE
         )
-        self._clear_pressure_skip_reason(dwell_key)
+        if not active_paused:
+            self._clear_pressure_skip_reason(dwell_key)
         self._last_signal_ms[dwell_key] = current_ms
         signal = ExitSignal(
             symbol=symbol,
@@ -393,6 +416,128 @@ class SignalEngine:
         )
         self._log_signal_if_changed(dwell_key, signal, state)
         return signal
+
+    def record_pressure_active_attempt(self, symbol: str, position_side: PositionSide, *, ts_ms: int) -> None:
+        self._record_pressure_active_event(
+            symbol=symbol,
+            position_side=position_side,
+            ts_ms=ts_ms,
+            is_fill=False,
+        )
+
+    def record_pressure_active_fill(self, symbol: str, position_side: PositionSide, *, ts_ms: int) -> None:
+        self._record_pressure_active_event(
+            symbol=symbol,
+            position_side=position_side,
+            ts_ms=ts_ms,
+            is_fill=True,
+        )
+
+    def _record_pressure_active_event(
+        self,
+        *,
+        symbol: str,
+        position_side: PositionSide,
+        ts_ms: int,
+        is_fill: bool,
+    ) -> None:
+        cfg = self._symbol_pressure_configs.get(symbol)
+        if cfg is None:
+            return
+        if (
+            cfg.active_burst_window_ms <= 0
+            or cfg.active_burst_pause_max_ms <= 0
+            or (
+                cfg.active_burst_max_attempts <= 0
+                and cfg.active_burst_max_fills <= 0
+            )
+        ):
+            return
+
+        key = f"{symbol}:{position_side.value}"
+        attempt_history = self._pressure_active_attempt_history_ms.setdefault(key, deque())
+        fill_history = self._pressure_active_fill_history_ms.setdefault(key, deque())
+        self._prune_pressure_active_history(
+            attempt_history=attempt_history,
+            fill_history=fill_history,
+            current_ms=ts_ms,
+            window_ms=cfg.active_burst_window_ms,
+        )
+
+        if is_fill:
+            fill_history.append(ts_ms)
+        else:
+            attempt_history.append(ts_ms)
+
+        pause_until_ms = self._pressure_active_pause_until_ms.get(key, 0)
+        if pause_until_ms > ts_ms:
+            return
+
+        should_pause = (
+            (cfg.active_burst_max_attempts > 0 and len(attempt_history) >= cfg.active_burst_max_attempts)
+            or (cfg.active_burst_max_fills > 0 and len(fill_history) >= cfg.active_burst_max_fills)
+        )
+        if not should_pause:
+            return
+
+        pause_ms = self._compute_pressure_active_pause_ms(cfg)
+        if pause_ms <= 0:
+            return
+
+        self._pressure_active_pause_until_ms[key] = ts_ms + pause_ms
+        get_logger().debug(
+            "盘口量 active burst 暂停: "
+            f"{symbol} {position_side.value} "
+            f"attempts={len(attempt_history)} fills={len(fill_history)} "
+            f"window_ms={cfg.active_burst_window_ms} pause_ms={pause_ms}"
+        )
+
+    @staticmethod
+    def _prune_pressure_active_history(
+        *,
+        attempt_history: Deque[int],
+        fill_history: Deque[int],
+        current_ms: int,
+        window_ms: int,
+    ) -> None:
+        cutoff_ms = current_ms - window_ms
+        while attempt_history and attempt_history[0] < cutoff_ms:
+            attempt_history.popleft()
+        while fill_history and fill_history[0] < cutoff_ms:
+            fill_history.popleft()
+
+    def _is_pressure_active_paused(
+        self,
+        *,
+        key: str,
+        symbol: str,
+        position_side: PositionSide,
+        current_ms: int,
+    ) -> bool:
+        pause_until_ms = self._pressure_active_pause_until_ms.get(key, 0)
+        if pause_until_ms <= current_ms:
+            if pause_until_ms > 0:
+                del self._pressure_active_pause_until_ms[key]
+                self._clear_pressure_skip_reason(key)
+            return False
+
+        self._log_pressure_skip_once(
+            key,
+            reason="active_burst_pause",
+            message=(
+                f"盘口量模式跳过主动单: {symbol} {position_side.value} "
+                f"reason=active_burst_pause remaining_ms={pause_until_ms - current_ms}"
+            ),
+        )
+        return True
+
+    @staticmethod
+    def _compute_pressure_active_pause_ms(cfg: PressureSignalConfig) -> int:
+        if cfg.active_burst_pause_max_ms <= 0:
+            return 0
+        lower = max(0, cfg.active_burst_pause_min_ms)
+        upper = max(lower, cfg.active_burst_pause_max_ms)
+        return randint(lower, upper)
 
     @staticmethod
     def _jitter_duration_ms(base_ms: int, jitter_pct: Decimal, *, minimum_ms: int) -> int:
@@ -745,6 +890,15 @@ class SignalEngine:
         keys_to_remove = [k for k in self._last_pressure_skip_reason if k.startswith(f"{symbol}:")]
         for key in keys_to_remove:
             del self._last_pressure_skip_reason[key]
+        keys_to_remove = [k for k in self._pressure_active_attempt_history_ms if k.startswith(f"{symbol}:")]
+        for key in keys_to_remove:
+            del self._pressure_active_attempt_history_ms[key]
+        keys_to_remove = [k for k in self._pressure_active_fill_history_ms if k.startswith(f"{symbol}:")]
+        for key in keys_to_remove:
+            del self._pressure_active_fill_history_ms[key]
+        keys_to_remove = [k for k in self._pressure_active_pause_until_ms if k.startswith(f"{symbol}:")]
+        for key in keys_to_remove:
+            del self._pressure_active_pause_until_ms[key]
 
         # 清除相关的节流记录
         keys_to_remove = [k for k in self._last_signal_ms if k.startswith(f"{symbol}:")]

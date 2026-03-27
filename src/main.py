@@ -693,6 +693,12 @@ class Application:
             is_filled=True,
             ts_ms=ts_ms if ts_ms is not None else current_time_ms(),
         )
+        if self.signal_engine and reason in _PRESSURE_ACTIVE_REASONS:
+            self.signal_engine.record_pressure_active_fill(
+                symbol,
+                position_side,
+                ts_ms=ts_ms if ts_ms is not None else current_time_ms(),
+            )
 
     def _clear_pressure_trigger_signature(self, symbol: str, position_side: PositionSide) -> None:
         self._pressure_trigger_signatures.pop((symbol, position_side), None)
@@ -1741,8 +1747,13 @@ class Application:
                 sustain_ms = cfg.pressure_exit_sustain_ms
                 passive_level = cfg.pressure_exit_passive_level
                 lot_mult = cfg.pressure_exit_lot_mult
-                aggressive_recheck_cooldown_ms = cfg.pressure_exit_aggressive_recheck_cooldown_ms
-                aggressive_recheck_cooldown_jitter_pct = cfg.pressure_exit_aggressive_recheck_cooldown_jitter_pct
+                active_recheck_cooldown_ms = cfg.pressure_exit_active_recheck_cooldown_ms
+                active_recheck_cooldown_jitter_pct = cfg.pressure_exit_active_recheck_cooldown_jitter_pct
+                active_burst_window_ms = cfg.pressure_exit_active_burst_window_ms
+                active_burst_max_attempts = cfg.pressure_exit_active_burst_max_attempts
+                active_burst_max_fills = cfg.pressure_exit_active_burst_max_fills
+                active_burst_pause_min_ms = cfg.pressure_exit_active_burst_pause_min_ms
+                active_burst_pause_max_ms = cfg.pressure_exit_active_burst_pause_max_ms
                 passive_ttl_ms = cfg.pressure_exit_passive_ttl_ms
                 passive_ttl_jitter_pct = cfg.pressure_exit_passive_ttl_jitter_pct
                 qty_jitter_pct = cfg.pressure_exit_qty_jitter_pct
@@ -1752,7 +1763,7 @@ class Application:
                     or sustain_ms is None
                     or passive_level is None
                     or lot_mult is None
-                    or aggressive_recheck_cooldown_ms is None
+                    or active_recheck_cooldown_ms is None
                     or passive_ttl_ms is None
                 ):
                     log_error("盘口量策略配置缺失", symbol=symbol)
@@ -1762,17 +1773,42 @@ class Application:
                     sustain_ms=sustain_ms,
                     passive_level=passive_level,
                     lot_mult=lot_mult,
-                    aggressive_recheck_cooldown_ms=aggressive_recheck_cooldown_ms,
+                    active_recheck_cooldown_ms=active_recheck_cooldown_ms,
                     passive_ttl_ms=passive_ttl_ms,
-                    aggressive_recheck_cooldown_jitter_pct=(
-                        aggressive_recheck_cooldown_jitter_pct
-                        if aggressive_recheck_cooldown_jitter_pct is not None
+                    active_recheck_cooldown_jitter_pct=(
+                        active_recheck_cooldown_jitter_pct
+                        if active_recheck_cooldown_jitter_pct is not None
                         else Decimal("0.15")
                     ),
                     passive_ttl_jitter_pct=(
                         passive_ttl_jitter_pct
                         if passive_ttl_jitter_pct is not None
                         else Decimal("0.15")
+                    ),
+                    active_burst_window_ms=(
+                        active_burst_window_ms
+                        if active_burst_window_ms is not None
+                        else 10000
+                    ),
+                    active_burst_max_attempts=(
+                        active_burst_max_attempts
+                        if active_burst_max_attempts is not None
+                        else 8
+                    ),
+                    active_burst_max_fills=(
+                        active_burst_max_fills
+                        if active_burst_max_fills is not None
+                        else 5
+                    ),
+                    active_burst_pause_min_ms=(
+                        active_burst_pause_min_ms
+                        if active_burst_pause_min_ms is not None
+                        else 2500
+                    ),
+                    active_burst_pause_max_ms=(
+                        active_burst_pause_max_ms
+                        if active_burst_pause_max_ms is not None
+                        else 6000
                     ),
                     qty_jitter_pct=qty_jitter_pct if qty_jitter_pct is not None else Decimal("0.15"),
                     qty_anti_repeat_lookback=qty_anti_repeat_lookback if qty_anti_repeat_lookback is not None else 3,
@@ -2358,6 +2394,16 @@ class Application:
 
                 # 更新仓位
                 if result.success:
+                    if (
+                        signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+                        and signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+                        and self.signal_engine
+                    ):
+                        self.signal_engine.record_pressure_active_attempt(
+                            symbol,
+                            position_side,
+                            ts_ms=current_ms,
+                        )
                     if signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE and self._pressure_stats:
                         self._pressure_stats.record_attempt(
                             symbol=symbol,
