@@ -1324,6 +1324,204 @@ class TestSignalContent:
         assert signal.timestamp_ms == 1300
 
 
+class TestPressureSignalLogging:
+    """盘口量模式信号日志去重测试"""
+
+    def _make_pressure_engine(self) -> tuple[SignalEngine, str, Position]:
+        engine = SignalEngine(min_signal_interval_ms=200)
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                lot_mult=5,
+                active_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+                active_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
+                qty_jitter_pct=Decimal("0"),
+            ),
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10.0"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+        return engine, symbol, position
+
+    def test_pressure_signal_log_ignores_last_trade_jitter_before_heartbeat(self, monkeypatch):
+        engine, symbol, position = self._make_pressure_engine()
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        signal1 = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=1100)
+        assert signal1 is not None
+        assert signal1.execution_preference == SignalExecutionPreference.PASSIVE
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1200,
+            last_trade_price=Decimal("10.25"),
+            event_type="agg_trade",
+        ))
+        signal2 = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=1400)
+        assert signal2 is not None
+        assert signal2.execution_preference == SignalExecutionPreference.PASSIVE
+
+        assert len(logged) == 1
+
+    def test_pressure_signal_log_emits_heartbeat_for_same_signature(self, monkeypatch):
+        engine, symbol, position = self._make_pressure_engine()
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        first = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=1100)
+        assert first is not None
+
+        second = engine.evaluate(symbol, PositionSide.SHORT, position, current_ms=6200)
+        assert second is not None
+        assert second.execution_preference == SignalExecutionPreference.PASSIVE
+
+        assert len(logged) == 2
+
+
+class TestOrderbookPriceSignalLogging:
+    """盘口价格模式信号日志去重测试"""
+
+    def _make_price_engine(self) -> tuple[SignalEngine, str, Position]:
+        engine = SignalEngine(min_signal_interval_ms=0)
+        symbol = "BTC/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRICE,
+            roi_tiers=[(Decimal("0.10"), 2)],
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("100"),
+            best_ask=Decimal("101"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1100,
+            last_trade_price=Decimal("99"),
+            event_type="agg_trade",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1200,
+            last_trade_price=Decimal("100"),
+            event_type="agg_trade",
+        ))
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("1"),
+            entry_price=Decimal("100"),
+            unrealized_pnl=Decimal("0.5"),
+            leverage=10,
+        )
+        return engine, symbol, position
+
+    def test_orderbook_price_signal_log_ignores_market_jitter_before_heartbeat(self, monkeypatch):
+        engine, symbol, position = self._make_price_engine()
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        signal1 = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=1300)
+        assert signal1 is not None
+        assert signal1.reason == SignalReason.LONG_PRIMARY
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1400,
+            best_bid=Decimal("101"),
+            best_ask=Decimal("102"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1450,
+            last_trade_price=Decimal("101"),
+            event_type="agg_trade",
+        ))
+        signal2 = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=1600)
+        assert signal2 is not None
+        assert signal2.reason == SignalReason.LONG_PRIMARY
+
+        assert len(logged) == 1
+
+    def test_orderbook_price_signal_log_emits_when_multiplier_changes(self, monkeypatch):
+        engine, symbol, position = self._make_price_engine()
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        first = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=1300)
+        assert first is not None
+        assert first.roi_mult == 1
+
+        boosted_position = Position(
+            symbol=symbol,
+            position_side=PositionSide.LONG,
+            position_amt=position.position_amt,
+            entry_price=position.entry_price,
+            unrealized_pnl=Decimal("2"),
+            leverage=position.leverage,
+        )
+        second = engine.evaluate(symbol, PositionSide.LONG, boosted_position, current_ms=1600)
+        assert second is not None
+        assert second.reason == SignalReason.LONG_PRIMARY
+        assert second.roi_mult == 2
+
+        assert len(logged) == 2
+
+    def test_orderbook_price_signal_log_emits_heartbeat_for_same_signature(self, monkeypatch):
+        engine, symbol, position = self._make_price_engine()
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        first = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=1300)
+        assert first is not None
+
+        second = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=6400)
+        assert second is not None
+        assert second.reason == SignalReason.LONG_PRIMARY
+
+        assert len(logged) == 2
+
+
 class TestQtyJitter:
     """平仓量随机抖动测试"""
 

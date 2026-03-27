@@ -1,6 +1,6 @@
 # Input: MarketEvent, Position, config
-# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure (including pressure timing jitter and active burst pacing)
-# Pos: signal evaluation engine with pressure dwell/freshness, TTL/cooldown jitter, and active burst pacing
+# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure (including semantic signal-log denoise, pressure timing jitter, and active burst pacing)
+# Pos: signal evaluation engine with orderbook_price/orderbook_pressure log heartbeat, pressure dwell/freshness, TTL/cooldown jitter, and active burst pacing
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -42,6 +42,8 @@ from src.models import (
 from src.utils.logger import get_logger, log_event, log_signal
 from src.utils.helpers import current_time_ms
 
+SIGNAL_LOG_HEARTBEAT_MS = 5000
+
 
 @dataclass
 class PressureSignalConfig:
@@ -75,7 +77,7 @@ class SignalEngine:
         self.min_signal_interval_ms = min_signal_interval_ms
         self._market_states: Dict[str, MarketState] = {}
         self._last_signal_ms: Dict[str, int] = {}  # key: symbol:position_side
-        self._last_logged_signal: Dict[str, Tuple[SignalReason, Decimal, Decimal, Decimal]] = {}  # key: symbol:position_side
+        self._last_logged_signal: Dict[str, Tuple[Tuple[object, ...], int]] = {}  # key: symbol:position_side
 
         # 追踪是否收到过 bid/ask 和 trade 数据
         self._has_book_data: Dict[str, bool] = {}
@@ -279,22 +281,7 @@ class SignalEngine:
             ret_window=ret_window,
         )
 
-        # 记录日志（避免完全相同的信号快照重复刷屏）
-        signature = (reason, state.best_bid, state.best_ask, state.last_trade_price)
-        if self._last_logged_signal.get(key) != signature:
-            self._last_logged_signal[key] = signature
-            log_signal(
-                symbol=symbol,
-                side=position_side.value,
-                reason=reason.value,
-                best_bid=state.best_bid,
-                best_ask=state.best_ask,
-                last_trade=state.last_trade_price,
-                roi_mult=roi_mult,
-                accel_mult=accel_mult,
-                roi=roi,
-                ret_window=ret_window,
-            )
+        self._log_signal_if_changed(key, signal)
 
         return signal
 
@@ -365,7 +352,7 @@ class SignalEngine:
                     active_burst_pause_min_ms=cfg.active_burst_pause_min_ms,
                     active_burst_pause_max_ms=cfg.active_burst_pause_max_ms,
                 )
-                self._log_signal_if_changed(dwell_key, signal, state)
+                self._log_signal_if_changed(dwell_key, signal)
                 return signal
 
         if active_qty <= cfg.threshold_qty and dwell_key in self._pressure_dwell_start_ms:
@@ -414,7 +401,7 @@ class SignalEngine:
             fixed_qty_jitter_pct=cfg.qty_jitter_pct,
             fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
         )
-        self._log_signal_if_changed(dwell_key, signal, state)
+        self._log_signal_if_changed(dwell_key, signal)
         return signal
 
     def record_pressure_active_attempt(self, symbol: str, position_side: PositionSide, *, ts_ms: int) -> None:
@@ -571,23 +558,43 @@ class SignalEngine:
             return None
         return price
 
-    def _log_signal_if_changed(self, key: str, signal: ExitSignal, state: MarketState) -> None:
-        signature = (signal.reason, state.best_bid, state.best_ask, signal.last_trade_price)
-        if self._last_logged_signal.get(key) == signature:
-            return
+    def _log_signal_if_changed(self, key: str, signal: ExitSignal) -> None:
+        signature = self._build_signal_log_signature(signal)
+        previous = self._last_logged_signal.get(key)
+        if previous is not None:
+            previous_signature, previous_ts_ms = previous
+            if previous_signature == signature:
+                if signal.timestamp_ms - previous_ts_ms < SIGNAL_LOG_HEARTBEAT_MS:
+                    return
 
-        self._last_logged_signal[key] = signature
+        self._last_logged_signal[key] = (signature, signal.timestamp_ms)
         log_signal(
             symbol=signal.symbol,
             side=signal.position_side.value,
             reason=signal.reason.value,
-            best_bid=state.best_bid,
-            best_ask=state.best_ask,
+            best_bid=signal.best_bid,
+            best_ask=signal.best_ask,
             last_trade=signal.last_trade_price,
             roi_mult=signal.roi_mult,
             accel_mult=signal.accel_mult,
             roi=signal.roi,
             ret_window=signal.ret_window,
+        )
+
+    @staticmethod
+    def _build_signal_log_signature(signal: ExitSignal) -> Tuple[object, ...]:
+        if signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
+            return (
+                signal.strategy_mode,
+                signal.reason,
+                signal.execution_preference,
+                signal.price_override,
+            )
+        return (
+            signal.strategy_mode,
+            signal.reason,
+            signal.roi_mult,
+            signal.accel_mult,
         )
 
     def _log_pressure_skip_once(self, key: str, *, reason: str, message: str) -> None:

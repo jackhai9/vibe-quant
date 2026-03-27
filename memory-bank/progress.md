@@ -127,6 +127,18 @@
 - `tests/test_signal.py` / `tests/test_config.py` / `tests/test_main_shutdown.py`：覆盖 active burst pause、配置校验与 attempt/fill 记账接线
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步 active burst pacing 语义与默认配置
 
+## Milestone/附加改进：信号日志降噪
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`[SIGNAL]` INFO 日志原本按 `reason + bid + ask + last_trade` 去重；`orderbook_pressure` 在 `WAITING` 期间会被盘口微小波动持续重打同类 passive signal，`orderbook_price` 也存在同类机制风险。<br>
+**产出**：
+
+- `src/signal/engine.py`：`orderbook_pressure` 的 signal log 改成按“`reason + execution_preference + price_override` 语义变化”去重，`orderbook_price` 改成按“`reason + roi_mult + accel_mult`”去重，两者统一补 `5s` 心跳
+- `tests/test_signal.py`：覆盖“忽略盘口/成交微抖”“倍率变化立即重打”“同一语义按心跳重打”三类回归
+- `src/signal/README.md`：同步两条策略路径的 signal 日志降噪语义
+
 ## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
 
 **状态**：✅ 已完成<br>
