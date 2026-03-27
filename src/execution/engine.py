@@ -1685,7 +1685,7 @@ class ExecutionEngine:
         max_mult = max(int(self.max_mult), 1)
         final_mult = fixed_mult * roi_mult * accel_mult
         if final_mult > max_mult:
-            final_mult = max(fixed_mult, max_mult)
+            final_mult = max_mult
 
         base_qty = min(min_qty * final_mult, abs_position)
         if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0"):

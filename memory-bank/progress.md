@@ -52,6 +52,18 @@
 - `tests/test_execution.py`：新增 fixed qty 直接受 notional 限制、以及 jitter 不突破 notional 上限的回归
 - `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两条主策略最终 qty 都受 `max_order_notional` 约束”的当前语义
 
+## Milestone/附加改进：fixed qty 路径的 `max_mult` 语义收口
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`compute_fixed_qty()` 之前把 `max_mult` 解释成“只限制向上放大，不压低固定基准片”，导致 fixed 路径的最终倍数可能仍高于 `max_mult`，与 `compute_qty()` 和配置文档中的“最大倍数上限”定义不一致。<br>
+**产出**：
+
+- `src/execution/engine.py`：`compute_fixed_qty()` 改为与 `compute_qty()` 一致的硬截断，`final_mult = min(base_mult × roi_mult × accel_mult, max_mult)`
+- `tests/test_execution.py`：回归覆盖 fixed 路径在 `base_mult > max_mult` 时也会被 `max_mult` 截断
+- `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：文档统一改成“`max_mult` 是硬上限”，不再保留“不会把 fixed 基准片大小压到低于 base”的旧语义
+
 ## Milestone/附加改进：原始市场数据录制器
 
 **状态**：✅ 已完成<br>

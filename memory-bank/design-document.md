@@ -191,7 +191,7 @@ maker 订单要求：
 - `roi_mult / accel_mult` 是公共 sizing modifiers，不绑定特定策略
 - 不同策略先确定自己的 `base_mult`，再决定是否叠加 `roi_mult / accel_mult`
 - `orderbook_price` 默认叠加两者；通过 `execution.use_roi_mult` / `execution.use_accel_mult` 可单独关闭
-- `orderbook_pressure` 默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，且 `max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `base_mult`
+- `orderbook_pressure` 默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并与 `orderbook_price` 一样受 `max_mult` 硬上限约束
 - `final_mult = base_mult * roi_mult * accel_mult`
 - 保险 1：`final_mult = min(final_mult, max_mult)`（每 symbol 可覆盖；用户可设很高，但建议更保守）
 - 保险 2：`max_order_notional`（强烈建议启用）

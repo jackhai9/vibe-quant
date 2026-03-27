@@ -704,7 +704,7 @@ symbols:
   - 基准片大小来自 `execution.base_mult`；若需按 symbol 调整基准量，在 `symbols.<symbol>.execution.base_mult` 覆盖
   - `use_roi_mult`: 是否对固定基准片大小叠加公共 `roi_mult`；未配置时继承 `execution.use_roi_mult`
   - `use_accel_mult`: 是否对固定基准片大小叠加公共 `accel_mult`；未配置时继承 `execution.use_accel_mult`
-  - 当上述开关启用时，固定片会在 `execution.base_mult` 基准上叠加公共倍数，并继续受 `execution.max_mult` 约束；该约束只限制向上放大，不会把固定基准片大小压到低于基准量
+  - 当上述开关启用时，固定片会在 `execution.base_mult` 基准上叠加公共倍数，并继续受 `execution.max_mult` 硬上限约束
   - 固定片路径同样受 `execution.max_order_notional` 约束；若单笔名义价值上限过低，规整后数量可能直接变成 `0`
   - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的固定片最终数量为中心做双边 jitter，再 clamp 到剩余仓位
   - `qty_anti_repeat_lookback`: 固定片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）

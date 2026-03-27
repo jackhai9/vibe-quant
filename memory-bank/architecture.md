@@ -140,7 +140,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
   - LONG 观察 `best_bid_qty`，SHORT 观察 `best_ask_qty`
   - 顶档量连续超过阈值 `sustain_ms` 后，主动吃一档（LONG=`SELL @ best_bid`，SHORT=`BUY @ best_ask`）
   - 主动条件未成立时，仅保留 1 笔固定档位的被动单（LONG=`ask[passive_level]`，SHORT=`bid[passive_level]`）
-  - 数量基准为 `min_qty × execution.base_mult`；默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`，也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并继续受 `execution.max_mult` 与剩余仓位约束；`max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `execution.base_mult`
+  - 数量基准为 `min_qty × execution.base_mult`；默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`，也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并继续受 `execution.max_mult`、`execution.max_order_notional` 与剩余仓位约束
   - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新时，本轮跳过并重置 dwell
 
 ---

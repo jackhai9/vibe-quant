@@ -382,7 +382,7 @@ class TestOrderbookPressureExecution:
         # final_mult = min(5*3*4, 20) = 20 => qty = 0.001 * 20 = 0.02
         assert qty == Decimal("0.020")
 
-    def test_compute_fixed_qty_never_caps_below_fixed_base_mult(self, engine):
+    def test_compute_fixed_qty_caps_fixed_path_by_max_mult(self, engine):
         engine.max_mult = 20
 
         qty = engine.compute_fixed_qty(
@@ -395,8 +395,8 @@ class TestOrderbookPressureExecution:
             accel_mult=2,
         )
 
-        # 启用共享倍数后，max_mult 只限制“向上放大”，不能把固定基准片大小压到 31 以下
-        assert qty == Decimal("0.031")
+        # final_mult = min(31*2*2, 20) = 20 => qty = 0.001 * 20 = 0.02
+        assert qty == Decimal("0.020")
 
     def test_compute_fixed_qty_limited_by_notional(self, engine):
         engine.max_order_notional = Decimal("100")
