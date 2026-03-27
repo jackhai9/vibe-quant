@@ -1,5 +1,5 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, liq-distance-aware mode holding, and pressure qty jitter/anti-repeat)
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, liq-distance-aware mode holding, and pressure qty jitter/anti-repeat with optional shared sizing modifiers)
 # Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, liq-distance-aware mode holding, and pressure anti-repeat sizing
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -95,7 +95,7 @@ class ExecutionEngine:
         ] = None,
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
-        base_lot_mult: int = 1,
+        default_base_mult: int = 1,
         maker_price_mode: str = "inside_spread_1tick",
         maker_n_ticks: int = 1,
         maker_safety_ticks: int = 1,
@@ -123,7 +123,7 @@ class ExecutionEngine:
             inspect_reduce_only_block: 复核 `-4118` 是否由同侧普通平仓挂单占满仓位导致
             order_ttl_ms: 订单 TTL
             repost_cooldown_ms: 撤单后冷却时间
-            base_lot_mult: 基础片大小倍数
+            default_base_mult: 默认基准片大小倍数
             maker_price_mode: maker 定价模式
             maker_n_ticks: custom_ticks 模式的 tick 数
             maker_safety_ticks: post-only maker 安全距离（ticks）
@@ -147,7 +147,7 @@ class ExecutionEngine:
         self._inspect_reduce_only_block = inspect_reduce_only_block
         self.order_ttl_ms = order_ttl_ms
         self.repost_cooldown_ms = repost_cooldown_ms
-        self.base_lot_mult = base_lot_mult
+        self.default_base_mult = default_base_mult
         self.maker_price_mode = maker_price_mode
         self.maker_n_ticks = maker_n_ticks
         if maker_safety_ticks < 1:
@@ -495,7 +495,9 @@ class ExecutionEngine:
                 position_amt=position_amt,
                 min_qty=rules.min_qty,
                 step_size=rules.step_size,
-                lot_mult=signal.fixed_lot_mult or 1,
+                base_mult=signal.base_mult_override or 1,
+                roi_mult=signal.roi_mult,
+                accel_mult=signal.accel_mult,
                 qty_jitter_pct=signal.fixed_qty_jitter_pct or Decimal("0"),
                 anti_repeat_lookback=signal.fixed_qty_anti_repeat_lookback or 0,
                 recent_qtys=state.recent_fixed_order_qtys,
@@ -1610,7 +1612,7 @@ class ExecutionEngine:
         计算下单数量
 
         MVP 策略：
-        - 基础数量 = min_qty * base_lot_mult
+        - 基础数量 = min_qty * default_base_mult
         - 确保不超过仓位
         - 确保不超过 max_order_notional
         - 按 step_size 规整
@@ -1629,7 +1631,7 @@ class ExecutionEngine:
         if abs_position < min_qty:
             return Decimal("0")
 
-        base_mult = max(int(self.base_lot_mult), 1)
+        base_mult = max(int(self.default_base_mult), 1)
         roi_mult = max(int(roi_mult), 1)
         accel_mult = max(int(accel_mult), 1)
         max_mult = max(int(self.max_mult), 1)
@@ -1663,18 +1665,27 @@ class ExecutionEngine:
         position_amt: Decimal,
         min_qty: Decimal,
         step_size: Decimal,
-        lot_mult: int,
+        base_mult: int,
+        roi_mult: int = 1,
+        accel_mult: int = 1,
         qty_jitter_pct: Decimal = Decimal("0"),
         anti_repeat_lookback: int = 0,
         recent_qtys: Optional[Sequence[Decimal]] = None,
     ) -> Decimal:
-        """按 min_qty × lot_mult 计算固定片大小，并在最终可下单量上做 jitter/anti-repeat。"""
+        """按固定基准片大小计算数量，并可叠加公共 roi/accel modifiers 后做 jitter/anti-repeat。"""
         abs_position = abs(position_amt)
         if abs_position < min_qty:
             return Decimal("0")
 
-        fixed_mult = max(int(lot_mult), 1)
-        base_qty = min(min_qty * fixed_mult, abs_position)
+        fixed_mult = max(int(base_mult), 1)
+        roi_mult = max(int(roi_mult), 1)
+        accel_mult = max(int(accel_mult), 1)
+        max_mult = max(int(self.max_mult), 1)
+        final_mult = fixed_mult * roi_mult * accel_mult
+        if final_mult > max_mult:
+            final_mult = max(fixed_mult, max_mult)
+
+        base_qty = min(min_qty * final_mult, abs_position)
         base_qty = round_to_step(base_qty, step_size)
         if base_qty < min_qty:
             return Decimal("0")

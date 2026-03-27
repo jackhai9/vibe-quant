@@ -35,7 +35,9 @@ global:
     order_ttl_ms: 1000
     repost_cooldown_ms: 150
     min_signal_interval_ms: 250
-    base_lot_mult: 2
+    default_base_mult: 2
+    use_roi_mult: true
+    use_accel_mult: true
     maker_price_mode: "at_touch"
     maker_n_ticks: 2
     maker_safety_ticks: 2
@@ -62,6 +64,7 @@ symbols:
   BTC/USDT:USDT:
     execution:
       order_ttl_ms: 1500
+      use_roi_mult: false
       maker_safety_ticks: 3
       max_mult: 150
       max_order_notional: 1000
@@ -79,7 +82,9 @@ symbols:
       threshold_qty: 100
       sustain_ms: 2000
       passive_level: 3
-      lot_mult: 5
+      base_mult: 5
+      use_roi_mult: true
+      use_accel_mult: true
       qty_jitter_pct: 0.15
       qty_anti_repeat_lookback: 4
       active_recheck_cooldown_ms: 1000
@@ -155,6 +160,8 @@ symbols:
         assert btc_config.symbol == "BTC/USDT:USDT"
         # 覆盖值
         assert btc_config.order_ttl_ms == 1500
+        assert btc_config.execution_use_roi_mult is False
+        assert btc_config.execution_use_accel_mult is True
         assert btc_config.maker_safety_ticks == 3
         assert btc_config.max_mult == 150
         assert btc_config.max_order_notional == Decimal("1000")
@@ -172,6 +179,8 @@ symbols:
         assert eth_config.maker_price_mode == "custom_ticks"
         assert eth_config.maker_n_ticks == 3
         assert eth_config.maker_safety_ticks == 2
+        assert eth_config.execution_use_roi_mult is True
+        assert eth_config.execution_use_accel_mult is True
         # 其他继承 global
         assert eth_config.order_ttl_ms == 1000
         assert eth_config.max_mult == 100
@@ -189,6 +198,8 @@ symbols:
         assert unknown_config.max_mult == 100  # global 默认
         assert unknown_config.maker_price_mode == "at_touch"  # global 默认
         assert unknown_config.maker_safety_ticks == 2  # global 默认
+        assert unknown_config.execution_use_roi_mult is True
+        assert unknown_config.execution_use_accel_mult is True
         assert unknown_config.strategy_mode == "orderbook_price"
         assert unknown_config.pressure_exit_enabled is False
 
@@ -203,7 +214,9 @@ symbols:
         assert dash_config.pressure_exit_threshold_qty == Decimal("100")
         assert dash_config.pressure_exit_sustain_ms == 2000
         assert dash_config.pressure_exit_passive_level == 3
-        assert dash_config.pressure_exit_lot_mult == 5
+        assert dash_config.pressure_exit_base_mult == 5
+        assert dash_config.pressure_exit_use_roi_mult is True
+        assert dash_config.pressure_exit_use_accel_mult is True
         assert dash_config.pressure_exit_active_recheck_cooldown_ms == 1000
         assert dash_config.pressure_exit_active_recheck_cooldown_jitter_pct == Decimal("0.2")
         assert dash_config.pressure_exit_active_burst_window_ms == 12000
@@ -355,7 +368,9 @@ symbols: {}
         assert config.order_ttl_ms == 800
         assert config.repost_cooldown_ms == 100
         assert config.min_signal_interval_ms == 200
-        assert config.base_lot_mult == 1
+        assert config.default_base_mult == 1
+        assert config.execution_use_roi_mult is True
+        assert config.execution_use_accel_mult is True
         assert config.maker_price_mode == "inside_spread_1tick"
         assert config.maker_n_ticks == 1
         assert config.maker_safety_ticks == 1

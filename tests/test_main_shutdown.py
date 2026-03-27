@@ -245,7 +245,7 @@ async def test_evaluate_side_risk_does_not_promote_pressure_passive_signal():
         price_override=Decimal("9.8"),
         ttl_override_ms=10000,
         cooldown_override_ms=0,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,
@@ -288,7 +288,7 @@ async def test_evaluate_side_risk_does_not_trigger_preempt_for_pressure_passive(
         price_override=Decimal("9.8"),
         ttl_override_ms=10000,
         cooldown_override_ms=0,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,
@@ -333,7 +333,7 @@ async def test_evaluate_side_pressure_stats_skip_repeated_waiting_signal():
         price_override=Decimal("9.8"),
         ttl_override_ms=10_000,
         cooldown_override_ms=0,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,
@@ -389,7 +389,7 @@ async def test_evaluate_side_pressure_stats_record_only_successful_attempt():
         price_override=Decimal("9.8"),
         ttl_override_ms=10_000,
         cooldown_override_ms=0,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,
@@ -451,7 +451,7 @@ async def test_evaluate_side_records_pressure_active_attempt_for_signal_engine()
         price_override=Decimal("10.1"),
         ttl_override_ms=None,
         cooldown_override_ms=1000,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,
@@ -503,7 +503,7 @@ async def test_evaluate_side_pressure_trigger_rearms_after_signal_clears():
         price_override=Decimal("9.8"),
         ttl_override_ms=10_000,
         cooldown_override_ms=0,
-        fixed_lot_mult=5,
+        base_mult_override=5,
     )
     app, engine = _make_pressure_eval_app(
         position_side=PositionSide.SHORT,

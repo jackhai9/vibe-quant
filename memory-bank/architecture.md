@@ -89,8 +89,8 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断；在 `-4118` 后复核同侧普通平仓挂单是否已覆盖剩余可交易仓位 | 配置, OrderIntent | OrderResult, Position |
-| **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；`orderbook_price` 计算 accel/ROI 倍数；`orderbook_pressure` 生成带 TTL/cooldown jitter、固定数量 jitter 与 burst pacing 元数据的 ExitSignal | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 固定片大小在最终可下单量上应用双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
+| **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；产出公共 ROI/accel sizing context；`orderbook_pressure` 生成带 TTL/cooldown jitter、固定数量 jitter 与 burst pacing 元数据的 ExitSignal，并可显式启用公共倍数 | MarketEvent, Position | ExitSignal |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 固定片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
@@ -140,7 +140,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
   - LONG 观察 `best_bid_qty`，SHORT 观察 `best_ask_qty`
   - 顶档量连续超过阈值 `sustain_ms` 后，主动吃一档（LONG=`SELL @ best_bid`，SHORT=`BUY @ best_ask`）
   - 主动条件未成立时，仅保留 1 笔固定档位的被动单（LONG=`ask[passive_level]`，SHORT=`bid[passive_level]`）
-  - 数量固定为 `min_qty × lot_mult`，只按 `step_size` 与剩余仓位收敛，不叠加 `base_lot_mult/roi_mult/accel_mult`
+  - 数量基准为 `min_qty × pressure_exit.base_mult`；默认不叠加公共倍数，可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式启用，并继续受 `execution.max_mult` 与剩余仓位约束；`max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `pressure_exit.base_mult`
   - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新时，本轮跳过并重置 dwell
 
 ---
@@ -191,7 +191,10 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 - `ret_window`：基于 `last_trade_price` 的滑动窗口回报率，用于匹配 `accel_mult`（按档位取最高满足档）
 - `roi`：用初始保证金口径计算（见 `README.md`），用于匹配 `roi_mult`（按档位取最高满足档）
-- `final_mult = base_lot_mult × roi_mult × accel_mult`，并受 `max_mult` 和 `max_order_notional` 约束
+- `roi_mult / accel_mult` 是公共 sizing modifiers；不同策略先决定自己的基准片大小，再选择是否叠加这两个倍数
+- `orderbook_price` 的基准倍数是 `execution.default_base_mult`，默认通过 `execution.use_roi_mult` / `execution.use_accel_mult` 启用公共倍数
+- `orderbook_pressure` 的基准倍数是 `pressure_exit.base_mult`，默认不叠加公共倍数；显式开启 `use_roi_mult` / `use_accel_mult` 后再参与组合
+- 最终倍数受 `max_mult` 和 `max_order_notional` 约束
 
 ### 风控与限速（已实现）
 

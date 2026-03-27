@@ -87,7 +87,7 @@ class TestUpdateMarket:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -340,6 +340,99 @@ class TestMultipliers:
         assert signal.roi == Decimal("0.2")
         assert signal.roi_mult == 6
 
+    def test_orderbook_price_can_disable_shared_accel_mult(self):
+        engine = SignalEngine()
+        symbol = "BTC/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            use_accel_mult=False,
+            accel_window_ms=2000,
+            accel_tiers=[
+                (Decimal("0.01"), 2),
+                (Decimal("0.02"), 4),
+            ],
+        )
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=0,
+            best_bid=Decimal("102"),
+            best_ask=Decimal("103"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=0,
+            last_trade_price=Decimal("100"),
+            event_type="agg_trade",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=2000,
+            last_trade_price=Decimal("102"),
+            event_type="agg_trade",
+        ))
+
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("1"),
+            entry_price=Decimal("100"),
+            unrealized_pnl=Decimal("0"),
+            leverage=10,
+        )
+
+        signal = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=2000)
+        assert signal is not None
+        assert signal.ret_window == Decimal("0.02")
+        assert signal.accel_mult == 1
+
+    def test_orderbook_price_can_disable_shared_roi_mult(self):
+        engine = SignalEngine()
+        symbol = "BTC/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            use_roi_mult=False,
+            roi_tiers=[
+                (Decimal("0.10"), 3),
+                (Decimal("0.20"), 6),
+            ],
+        )
+
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=0,
+            best_bid=Decimal("102"),
+            best_ask=Decimal("103"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=0,
+            last_trade_price=Decimal("100"),
+            event_type="agg_trade",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1,
+            last_trade_price=Decimal("102"),
+            event_type="agg_trade",
+        ))
+
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("1"),
+            entry_price=Decimal("100"),
+            unrealized_pnl=Decimal("2"),
+            leverage=10,
+        )
+
+        signal = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=2)
+        assert signal is not None
+        assert signal.roi == Decimal("0.2")
+        assert signal.roi_mult == 1
+
 
 class TestOrderbookPressureSignals:
     """盘口量平仓模式测试"""
@@ -355,7 +448,7 @@ class TestOrderbookPressureSignals:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -409,7 +502,87 @@ class TestOrderbookPressureSignals:
         assert signal.price_override == Decimal("9.8")
         assert signal.ttl_override_ms == 10000
         assert signal.cooldown_override_ms == 0
-        assert signal.fixed_lot_mult == 5
+        assert signal.base_mult_override == 5
+
+    def test_pressure_mode_can_opt_into_shared_roi_and_accel_modifiers(self):
+        engine = SignalEngine(min_signal_interval_ms=200)
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                base_mult=5,
+                active_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+                use_roi_mult=True,
+                use_accel_mult=True,
+                active_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
+                qty_jitter_pct=Decimal("0"),
+            ),
+            accel_window_ms=2000,
+            accel_tiers=[(Decimal("0.01"), 4)],
+            roi_tiers=[(Decimal("0.10"), 3)],
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1100,
+            last_trade_price=Decimal("10.00"),
+            event_type="agg_trade",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1200,
+            last_trade_price=Decimal("10.20"),
+            event_type="agg_trade",
+        ))
+
+        position = Position(
+            symbol=symbol,
+            position_side=PositionSide.LONG,
+            position_amt=Decimal("5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("1"),
+            leverage=5,
+        )
+
+        signal = engine.evaluate(symbol, PositionSide.LONG, position, current_ms=1300)
+
+        assert signal is not None
+        assert signal.reason == SignalReason.LONG_ASK_PRESSURE_PASSIVE
+        assert signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT
+        assert signal.base_mult_override == 5
+        assert signal.roi_mult == 3
+        assert signal.accel_mult == 4
+        assert signal.roi == Decimal("0.1")
+        assert signal.ret_window == Decimal("0.02")
 
     def test_pressure_mode_requires_sustain_before_aggressive_signal(self, pressure_engine):
         symbol = "DASH/USDT:USDT"
@@ -451,7 +624,7 @@ class TestOrderbookPressureSignals:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -525,7 +698,7 @@ class TestOrderbookPressureSignals:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -704,7 +877,7 @@ class TestOrderbookPressureSignals:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=5,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -752,7 +925,7 @@ class TestOrderbookPressureSignals:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=5,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -1337,7 +1510,7 @@ class TestPressureSignalLogging:
                 threshold_qty=Decimal("100"),
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=5,
+                base_mult=5,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=Decimal("0"),
@@ -1412,6 +1585,80 @@ class TestPressureSignalLogging:
         assert second is not None
         assert second.execution_preference == SignalExecutionPreference.PASSIVE
 
+        assert len(logged) == 2
+
+    def test_pressure_signal_log_emits_when_enabled_modifier_changes(self, monkeypatch):
+        engine = SignalEngine(min_signal_interval_ms=0)
+        symbol = "DASH/USDT:USDT"
+        engine.configure_symbol(
+            symbol,
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            pressure_config=PressureSignalConfig(
+                threshold_qty=Decimal("100"),
+                sustain_ms=2000,
+                passive_level=3,
+                base_mult=5,
+                active_recheck_cooldown_ms=1000,
+                passive_ttl_ms=10000,
+                use_roi_mult=True,
+                active_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
+                qty_jitter_pct=Decimal("0"),
+            ),
+            roi_tiers=[(Decimal("0.10"), 3)],
+        )
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1000,
+            best_bid=Decimal("10.0"),
+            best_ask=Decimal("10.1"),
+            best_bid_qty=Decimal("50"),
+            best_ask_qty=Decimal("80"),
+            event_type="book_ticker",
+        ))
+        engine.update_market(MarketEvent(
+            symbol=symbol,
+            timestamp_ms=1001,
+            bid_levels=[
+                (Decimal("10.0"), Decimal("30")),
+                (Decimal("9.9"), Decimal("40")),
+                (Decimal("9.8"), Decimal("50")),
+            ],
+            ask_levels=[
+                (Decimal("10.1"), Decimal("20")),
+                (Decimal("10.2"), Decimal("30")),
+                (Decimal("10.3"), Decimal("40")),
+            ],
+            event_type="depth",
+        ))
+
+        logged: list[dict[str, object]] = []
+        monkeypatch.setattr("src.signal.engine.log_signal", lambda **kwargs: logged.append(kwargs))
+
+        low_roi_position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("0"),
+            leverage=5,
+        )
+        high_roi_position = Position(
+            symbol=symbol,
+            position_side=PositionSide.SHORT,
+            position_amt=Decimal("-5"),
+            entry_price=Decimal("10"),
+            unrealized_pnl=Decimal("1"),
+            leverage=5,
+        )
+
+        first = engine.evaluate(symbol, PositionSide.SHORT, low_roi_position, current_ms=1100)
+        second = engine.evaluate(symbol, PositionSide.SHORT, high_roi_position, current_ms=1400)
+
+        assert first is not None
+        assert second is not None
+        assert first.roi_mult == 1
+        assert second.roi_mult == 3
         assert len(logged) == 2
 
 
@@ -1528,7 +1775,7 @@ class TestQtyJitter:
     def _make_engine(
         self,
         *,
-        lot_mult: int,
+        base_mult: int,
         qty_jitter_pct: Decimal,
         threshold_qty: Decimal = Decimal("100"),
         best_ask_qty: Decimal = Decimal("80"),
@@ -1544,7 +1791,7 @@ class TestQtyJitter:
                 threshold_qty=threshold_qty,
                 sustain_ms=2000,
                 passive_level=3,
-                lot_mult=lot_mult,
+                base_mult=base_mult,
                 active_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
                 active_recheck_cooldown_jitter_pct=active_recheck_cooldown_jitter_pct,
@@ -1588,30 +1835,30 @@ class TestQtyJitter:
             leverage=5,
         )
 
-    def test_jitter_zero_always_returns_exact_lot_mult(self):
-        engine = self._make_engine(lot_mult=20, qty_jitter_pct=Decimal("0"))
+    def test_jitter_zero_always_returns_exact_base_mult(self):
+        engine = self._make_engine(base_mult=20, qty_jitter_pct=Decimal("0"))
         position = self._make_position()
         for ms in range(1100, 1200):
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
-                assert signal.fixed_lot_mult == 20
+                assert signal.base_mult_override == 20
                 assert signal.fixed_qty_jitter_pct == Decimal("0")
 
-    def test_signal_lot_mult_stays_exact_even_when_qty_jitter_enabled(self):
-        engine = self._make_engine(lot_mult=20, qty_jitter_pct=Decimal("0.15"))
+    def test_signal_base_mult_stays_exact_even_when_qty_jitter_enabled(self):
+        engine = self._make_engine(base_mult=20, qty_jitter_pct=Decimal("0.15"))
         position = self._make_position()
         observed = set()
         for ms in range(1100, 1200):
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
-                observed.add(signal.fixed_lot_mult)
+                observed.add(signal.base_mult_override)
                 assert signal.fixed_qty_jitter_pct == Decimal("0.15")
                 assert signal.fixed_qty_anti_repeat_lookback == 3
         assert observed == {20}
 
     def test_passive_ttl_jitter_applies_to_signal(self):
         engine = self._make_engine(
-            lot_mult=5,
+            base_mult=5,
             qty_jitter_pct=Decimal("0.15"),
             passive_ttl_jitter_pct=Decimal("0.15"),
         )
@@ -1621,11 +1868,11 @@ class TestQtyJitter:
         assert signal is not None
         assert signal.execution_preference == SignalExecutionPreference.PASSIVE
         assert signal.ttl_override_ms == 8765
-        assert signal.fixed_lot_mult == 5
+        assert signal.base_mult_override == 5
 
     def test_active_cooldown_jitter_applies_to_signal(self):
         engine = self._make_engine(
-            lot_mult=5,
+            base_mult=5,
             qty_jitter_pct=Decimal("0.15"),
             best_ask_qty=Decimal("150"),
             active_recheck_cooldown_jitter_pct=Decimal("0.15"),
@@ -1641,4 +1888,4 @@ class TestQtyJitter:
         assert signal is not None
         assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
         assert signal.cooldown_override_ms == 912
-        assert signal.fixed_lot_mult == 5
+        assert signal.base_mult_override == 5

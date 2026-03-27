@@ -1746,7 +1746,13 @@ class Application:
                 threshold_qty = cfg.pressure_exit_threshold_qty
                 sustain_ms = cfg.pressure_exit_sustain_ms
                 passive_level = cfg.pressure_exit_passive_level
-                lot_mult = cfg.pressure_exit_lot_mult
+                base_mult = (
+                    cfg.pressure_exit_base_mult
+                    if cfg.pressure_exit_base_mult is not None
+                    else cfg.default_base_mult
+                )
+                use_roi_mult = cfg.pressure_exit_use_roi_mult
+                use_accel_mult = cfg.pressure_exit_use_accel_mult
                 active_recheck_cooldown_ms = cfg.pressure_exit_active_recheck_cooldown_ms
                 active_recheck_cooldown_jitter_pct = cfg.pressure_exit_active_recheck_cooldown_jitter_pct
                 active_burst_window_ms = cfg.pressure_exit_active_burst_window_ms
@@ -1762,7 +1768,7 @@ class Application:
                     threshold_qty is None
                     or sustain_ms is None
                     or passive_level is None
-                    or lot_mult is None
+                    or base_mult is None
                     or active_recheck_cooldown_ms is None
                     or passive_ttl_ms is None
                 ):
@@ -1772,7 +1778,9 @@ class Application:
                     threshold_qty=threshold_qty,
                     sustain_ms=sustain_ms,
                     passive_level=passive_level,
-                    lot_mult=lot_mult,
+                    base_mult=base_mult,
+                    use_roi_mult=bool(use_roi_mult),
+                    use_accel_mult=bool(use_accel_mult),
                     active_recheck_cooldown_ms=active_recheck_cooldown_ms,
                     passive_ttl_ms=passive_ttl_ms,
                     active_recheck_cooldown_jitter_pct=(
@@ -1819,6 +1827,8 @@ class Application:
                 strategy_mode=StrategyMode(cfg.strategy_mode),
                 pressure_config=pressure_config,
                 min_signal_interval_ms=cfg.min_signal_interval_ms,
+                use_roi_mult=cfg.execution_use_roi_mult,
+                use_accel_mult=cfg.execution_use_accel_mult,
                 accel_window_ms=cfg.accel_window_ms,
                 accel_tiers=[(t.ret, t.mult) for t in cfg.accel_tiers],
                 roi_tiers=[(t.roi, t.mult) for t in cfg.roi_tiers],
@@ -1832,7 +1842,7 @@ class Application:
                 inspect_reduce_only_block=self._inspect_reduce_only_block,
                 order_ttl_ms=cfg.order_ttl_ms,
                 repost_cooldown_ms=cfg.repost_cooldown_ms,
-                base_lot_mult=cfg.base_lot_mult,
+                default_base_mult=cfg.default_base_mult,
                 maker_price_mode=cfg.maker_price_mode,
                 maker_n_ticks=cfg.maker_n_ticks,
                 maker_safety_ticks=cfg.maker_safety_ticks,

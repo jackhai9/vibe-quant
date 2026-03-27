@@ -175,7 +175,8 @@ maker 订单要求：
 ## 6. 拆单片大小（数量）与倍数系统
 
 ### 6.1 基准片大小
-- `base_qty = base_lot_mult * minQty`（默认 base_lot_mult=1）
+- `orderbook_price`：`base_qty = default_base_mult * minQty`（默认 `execution.default_base_mult=1`）
+- `orderbook_pressure`：`base_qty = base_mult * minQty`（来自 `pressure_exit.base_mult`）
 
 ### 6.2 ROI 档位倍数（多档可配置）
 - ROI 定义：该侧仓位投资回报率（按交易所/ccxt 可获得口径实现）
@@ -187,6 +188,10 @@ maker 订单要求：
 - 取满足条件的最高档位
 
 ### 6.4 倍数合成（用户确认：乘法）+ 双保险
+- `roi_mult / accel_mult` 是公共 sizing modifiers，不绑定特定策略
+- 不同策略先确定自己的 `base_mult`，再决定是否叠加 `roi_mult / accel_mult`
+- `orderbook_price` 默认叠加两者；通过 `execution.use_roi_mult` / `execution.use_accel_mult` 可单独关闭
+- `orderbook_pressure` 默认不叠加；通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式启用，且 `max_mult` 只限制向上放大，不会把固定基准片大小压到低于 `base_mult`
 - `final_mult = base_mult * roi_mult * accel_mult`
 - 保险 1：`final_mult = min(final_mult, max_mult)`（每 symbol 可覆盖；用户可设很高，但建议更保守）
 - 保险 2：`max_order_notional`（强烈建议启用）
@@ -366,7 +371,9 @@ symbols:
       threshold_qty: 100
       sustain_ms: 2000
       passive_level: 3
-      lot_mult: 5
+      base_mult: 5
+      use_roi_mult: false
+      use_accel_mult: false
       active_recheck_cooldown_ms: 1000
       passive_ttl_ms: 10000
 ```
@@ -378,12 +385,13 @@ symbols:
 - `strategy.mode=orderbook_pressure` 时必须提供 `pressure_exit`
 - `pressure_exit.enabled` 缺省为 `true`；若显式设为 `false`，配置校验直接拒绝启动
 - `orderbook_pressure` 未达阈值时只挂 1 笔固定档位被动单；真正的强制执行兜底由 `panic_close` 负责
+- `roi_mult / accel_mult` 是公共 sizing modifiers；`orderbook_pressure` 默认不叠加，需通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式启用
 
 ---
 
 ## 11. 伪代码（简化）
 
-以下伪代码聚焦 `orderbook_price` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
+以下伪代码聚焦 `orderbook_price` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；其基准片大小来自 `pressure_exit.base_mult`，并可按配置显式叠加公共 `roi_mult / accel_mult`；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
 
 ```python
 def build_maker_price(side, best_bid, best_ask, tick, mode, n_ticks):
@@ -426,6 +434,7 @@ def tick_side(side):
     risk_flag = risk_liq_close(side)
     mode = choose_mode(side_state, cfg, risk_flag)
 
+    base_mult = strategy_base_mult(side)  # 例如 orderbook_price=default_base_mult，pressure=pressure_exit.base_mult
     mult = base_mult * roi_mult(side) * accel_mult(side)
     qty = compute_qty(abs(pos.amt), minQty, stepSize, last_trade_price, mult, cfg)
     if qty <= 0: return

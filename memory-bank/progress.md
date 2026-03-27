@@ -102,11 +102,11 @@
 **状态**：✅ 已完成<br>
 **日期**：2026-03-27
 
-**动机**：`orderbook_pressure` 旧实现只会在 `lot_mult` 上做窄幅、单边抖动，公开成交数量和节拍仍然容易暴露同一程序的模式。<br>
+**动机**：`orderbook_pressure` 旧实现只会在固定基准片大小上做窄幅、单边抖动，公开成交数量和节拍仍然容易暴露同一程序的模式。<br>
 **产出**：
 
 - `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `qty_anti_repeat_lookback`、`active_recheck_cooldown_jitter_pct`、`passive_ttl_jitter_pct`，并补齐 symbol 级合并字段
-- `src/signal/engine.py`：`orderbook_pressure` 不再直接改写 `lot_mult`，而是把固定数量 jitter 参数与 TTL/cooldown jitter 注入 ExitSignal
+- `src/signal/engine.py`：`orderbook_pressure` 不再直接改写固定基准片大小，而是把固定数量 jitter 参数与 TTL/cooldown jitter 注入 ExitSignal
 - `src/execution/engine.py`：固定片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
 - `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 TTL/cooldown jitter、execution-layer two-sided qty jitter、anti-repeat 与配置合并
 - `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步当前语义与配置说明
@@ -135,9 +135,23 @@
 **动机**：`[SIGNAL]` INFO 日志原本按 `reason + bid + ask + last_trade` 去重；`orderbook_pressure` 在 `WAITING` 期间会被盘口微小波动持续重打同类 passive signal，`orderbook_price` 也存在同类机制风险。<br>
 **产出**：
 
-- `src/signal/engine.py`：`orderbook_pressure` 的 signal log 改成按“`reason + execution_preference + price_override` 语义变化”去重，`orderbook_price` 改成按“`reason + roi_mult + accel_mult`”去重，两者统一补 `5s` 心跳
+- `src/signal/engine.py`：`orderbook_pressure` 的 signal log 改成按“`reason + execution_preference + price_override + roi_mult + accel_mult`”语义变化去重，`orderbook_price` 改成按“`reason + roi_mult + accel_mult`”去重，两者统一补 `5s` 心跳
 - `tests/test_signal.py`：覆盖“忽略盘口/成交微抖”“倍率变化立即重打”“同一语义按心跳重打”三类回归
 - `src/signal/README.md`：同步两条策略路径的 signal 日志降噪语义
+
+## Milestone/附加改进：公共 sizing modifiers 接入 `orderbook_pressure`
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`roi_mult / accel_mult` 在概念上属于公共 sizing context，不应只由 `orderbook_price` 独占；`orderbook_pressure` 需要能显式选择是否在固定基准片大小上叠加这些公共倍数，同时保持默认行为不变。<br>
+**产出**：
+
+- `src/config/models.py` / `src/config/loader.py`：`execution` 增加 `use_roi_mult` / `use_accel_mult` 开关，`pressure_exit` 也增加同名开关，并补齐 merged symbol 字段
+- `src/signal/engine.py` / `src/main.py`：`orderbook_price` 默认通过 `execution.use_*` 使用公共倍数；`orderbook_pressure` 在 `pressure_exit.use_*` 启用时产出公共 `roi_mult / accel_mult / roi / ret_window`，未启用时保持固定片默认语义
+- `src/execution/engine.py`：`FIXED_MIN_QTY_MULT` 接入与动态数量同源的公共 roi/accel modifiers；固定基准片大小仍受 `max_mult` 与剩余仓位约束
+- `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 pressure 配置合并、pressure signal 产出公共倍数、fixed qty 叠加公共倍数并受 `max_mult` 截断
+- `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`、`memory-bank/design-document.md`：同步“公共 modifiers + 策略自选启用”的当前语义
 
 ## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
 
@@ -918,7 +932,7 @@ class SignalEngine:
 
 4. 数量计算
    - `compute_qty()`: 计算下单数量
-   - base_qty = min_qty × base_lot_mult
+   - base_qty = min_qty × default_base_mult
    - 受仓位、max_order_notional 限制
    - 按 step_size 规整
 
@@ -948,7 +962,7 @@ class ExecutionEngine:
         cancel_order: Callable[[str, str], Awaitable[OrderResult]],
         order_ttl_ms: int = 800,
         repost_cooldown_ms: int = 100,
-        base_lot_mult: int = 1,
+        default_base_mult: int = 1,
         maker_price_mode: str = "inside_spread_1tick",
         maker_n_ticks: int = 1,
         max_mult: int = 50,
@@ -1215,7 +1229,7 @@ pytest -q: 178 passed
 **产出**：`src/execution/engine.py`、`tests/test_execution.py`
 
 ### 完成内容
-- `final_mult = base_lot_mult × roi_mult × accel_mult`（cap 到 `max_mult`）
+- `final_mult = base_mult × roi_mult × accel_mult`（cap 到 `max_mult`）
 - `max_order_notional` 限制名义价值后得到最终 qty
 
 ### 测试结果

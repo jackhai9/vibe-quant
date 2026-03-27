@@ -178,7 +178,9 @@ class ExecutionConfig(BaseModel):
     order_ttl_ms: int = Field(default=800, description="订单 TTL(ms)")
     repost_cooldown_ms: int = Field(default=100, description="撤单后冷却(ms)")
     min_signal_interval_ms: int = Field(default=200, description="最小信号间隔(ms)")
-    base_lot_mult: int = Field(default=1, description="基础片大小倍数")
+    default_base_mult: int = Field(default=1, description="默认基准片大小倍数")
+    use_roi_mult: bool = Field(default=True, description="动态数量策略是否启用公共 ROI 倍数")
+    use_accel_mult: bool = Field(default=True, description="动态数量策略是否启用公共 accel 倍数")
 
     # maker 定价策略
     maker_price_mode: Literal["at_touch", "inside_spread_1tick", "custom_ticks"] = Field(
@@ -242,7 +244,15 @@ class PressureExitConfig(BaseModel):
     threshold_qty: Decimal = Field(gt=Decimal("0"), description="顶档量阈值")
     sustain_ms: int = Field(default=2000, ge=1, description="顶档量持续阈值(ms)")
     passive_level: int = Field(default=3, ge=1, le=10, description="被动挂单使用的固定档位")
-    lot_mult: int = Field(default=1, ge=1, description="固定平仓量倍数（minQty × lot_mult）")
+    base_mult: int = Field(default=1, ge=1, description="pressure 策略基准片大小倍数（minQty × base_mult）")
+    use_roi_mult: bool = Field(
+        default=False,
+        description="是否对 pressure 基准片大小叠加公共 ROI 倍数",
+    )
+    use_accel_mult: bool = Field(
+        default=False,
+        description="是否对 pressure 基准片大小叠加公共 accel 倍数",
+    )
     qty_jitter_pct: Decimal = Field(
         default=Decimal("0.15"),
         ge=Decimal("0"),
@@ -315,7 +325,9 @@ class SymbolExecutionConfig(BaseModel):
     order_ttl_ms: Optional[int] = None
     repost_cooldown_ms: Optional[int] = None
     min_signal_interval_ms: Optional[int] = None
-    base_lot_mult: Optional[int] = None
+    default_base_mult: Optional[int] = None
+    use_roi_mult: Optional[bool] = None
+    use_accel_mult: Optional[bool] = None
     maker_price_mode: Optional[Literal["at_touch", "inside_spread_1tick", "custom_ticks"]] = None
     maker_n_ticks: Optional[int] = None
     maker_safety_ticks: Optional[int] = Field(default=None, ge=1)
@@ -440,7 +452,9 @@ class MergedSymbolConfig(BaseModel):
     pressure_exit_threshold_qty: Optional[Decimal]
     pressure_exit_sustain_ms: Optional[int]
     pressure_exit_passive_level: Optional[int]
-    pressure_exit_lot_mult: Optional[int]
+    pressure_exit_base_mult: Optional[int]
+    pressure_exit_use_roi_mult: Optional[bool]
+    pressure_exit_use_accel_mult: Optional[bool]
     pressure_exit_active_recheck_cooldown_ms: Optional[int]
     pressure_exit_active_recheck_cooldown_jitter_pct: Optional[Decimal]
     pressure_exit_active_burst_window_ms: Optional[int]
@@ -463,7 +477,9 @@ class MergedSymbolConfig(BaseModel):
     order_ttl_ms: int
     repost_cooldown_ms: int
     min_signal_interval_ms: int
-    base_lot_mult: int
+    default_base_mult: int
+    execution_use_roi_mult: bool
+    execution_use_accel_mult: bool
     maker_price_mode: str
     maker_n_ticks: int
     maker_safety_ticks: int

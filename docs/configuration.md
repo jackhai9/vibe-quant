@@ -199,12 +199,24 @@ symbols:
   - **通用场景**: `200ms`（推荐，平衡响应性和稳定性）
   - 稳健大仓位: `500-1000ms`（减少频繁触发）
 
-##### base_lot_mult
+##### default_base_mult
 - **类型**: `int`
 - **默认值**: `1`
-- **说明**: 基础片大小倍数，最终下单量 = `minQty × base_lot_mult × roi_mult × accel_mult`
-- **用途**: 全局调整每次平仓的基础仓位大小
+- **说明**: 动态数量策略的基础片大小倍数；`orderbook_price` 默认使用它作为 `base_mult`，再叠加公共 `roi_mult × accel_mult`
+- **用途**: 全局调整动态数量策略每次平仓的基础仓位大小
 - **示例**: 设为 `2` 表示每次至少平 `2 × minQty`
+
+##### use_roi_mult
+- **类型**: `bool`
+- **默认值**: `true`
+- **说明**: 动态数量策略是否启用公共 `roi_mult`
+- **用途**: 允许 `orderbook_price` 单独关闭 ROI 对片大小的放大
+
+##### use_accel_mult
+- **类型**: `bool`
+- **默认值**: `true`
+- **说明**: 动态数量策略是否启用公共 `accel_mult`
+- **用途**: 允许 `orderbook_price` 单独关闭短窗动能对片大小的放大
 
 ---
 
@@ -625,7 +637,9 @@ symbols:
       threshold_qty: 100
       sustain_ms: 2000
       # 下单数量
-      lot_mult: 5
+      base_mult: 5
+      use_roi_mult: false
+      use_accel_mult: false
       qty_jitter_pct: 0.15
       qty_anti_repeat_lookback: 3
       # 主动路径节奏
@@ -643,6 +657,8 @@ symbols:
     execution:
       order_ttl_ms: 3000          # 覆盖全局配置
       max_order_notional: 500
+      use_roi_mult: false         # 可按 symbol 关闭 orderbook_price 的 ROI 倍数
+      use_accel_mult: true        # 可按 symbol 保留 accel 倍数
     accel:
       window_ms: 1500
       tiers: [...]                # 完全覆盖档位
@@ -670,8 +686,8 @@ symbols:
 - **可选值**: `"orderbook_price"` | `"orderbook_pressure"`
 - **默认值**: `"orderbook_price"`
 - **说明**:
-  - `orderbook_price`：沿用原有 trade/best bid/ask 触发逻辑、ROI/accel 数量体系与执行模式轮转
-  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `orderbook_price` 互斥，不并行运行
+  - `orderbook_price`：沿用原有 trade/best bid/ask 触发逻辑、执行模式轮转，并默认启用 `execution.use_roi_mult` / `execution.use_accel_mult`
+  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `orderbook_price` 互斥，不并行运行；其固定基准片大小可按配置显式启用公共 ROI/accel sizing modifiers
 
 #### pressure_exit
 - **生效条件**: 仅当 `strategy.mode == "orderbook_pressure"` 时参与运行
@@ -685,8 +701,11 @@ symbols:
   - `threshold_qty`: 顶档量阈值；LONG 看 `best_bid_qty`，SHORT 看 `best_ask_qty`
   - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
   - 下单数量
-  - `lot_mult`: 固定下单量倍率；最终数量为 `min_qty × lot_mult`，按 `step_size` 规整并 clamp 到剩余仓位
-  - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的 `min_qty × lot_mult` 为中心做双边 jitter，再 clamp 到剩余仓位
+  - `base_mult`: 固定基准下单量倍率；基准数量为 `min_qty × base_mult`
+  - `use_roi_mult`: 是否对固定基准片大小叠加公共 `roi_mult`
+  - `use_accel_mult`: 是否对固定基准片大小叠加公共 `accel_mult`
+  - 当上述开关启用时，固定片会在 `base_mult` 基准上叠加公共倍数，并继续受 `execution.max_mult` 约束；该约束只限制向上放大，不会把固定基准片大小压到低于 `base_mult`
+  - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的固定片最终数量为中心做双边 jitter，再 clamp 到剩余仓位
   - `qty_anti_repeat_lookback`: 固定片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）
   - 主动路径节奏
   - `active_recheck_cooldown_ms`: 主动单终态后的重检冷却
@@ -714,7 +733,9 @@ symbols:
       threshold_qty: 100         # LONG 看 best_bid_qty；SHORT 看 best_ask_qty
       sustain_ms: 2000           # 顶档量连续超过阈值至少 2000ms 后才主动吃单
       # 下单数量
-      lot_mult: 5                # 固定片大小 = min_qty × 5
+      base_mult: 5           # 固定基准片大小 = min_qty × 5
+      use_roi_mult: false        # 是否对固定基准片大小叠加公共 ROI 倍数
+      use_accel_mult: false      # 是否对固定基准片大小叠加公共 accel 倍数
       qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小双边抖动 15%
       qty_anti_repeat_lookback: 3  # 尽量避开最近 3 笔已成功提交的相同数量
       # 主动路径节奏
@@ -737,8 +758,8 @@ symbols:
 - 主动条件未成立时，仅挂 1 笔固定档位的被动单
 - 被动档位不存在或盘口数据不完整时，本轮跳过，不猜价格
 - `bookTicker` 与 `depth10` 任一来源 stale 时，本轮跳过，并重置主动条件 dwell
-- 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
-- `qty_jitter_pct` 作用在最终规整后的固定片大小，不再通过缩窄 `lot_mult` 来单边抖动
+- 新模式默认只使用 `min_qty × base_mult`；若显式开启 `use_roi_mult` / `use_accel_mult`，则在固定基准片大小上叠加公共倍数，但仍受 `execution.max_mult` 约束
+- `qty_jitter_pct` 作用在最终规整后的固定片大小，不再通过缩窄 `base_mult` 来单边抖动
 - `qty_anti_repeat_lookback` 只参考最近几笔已成功提交的 `orderbook_pressure` 固定数量订单
 - `active_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
 - `active_burst_*` 只作用于 `orderbook_pressure` 的主动单；触发后不会停掉整个 symbol，而是把 active 临时回落到 passive

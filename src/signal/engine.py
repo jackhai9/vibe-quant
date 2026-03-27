@@ -10,8 +10,8 @@
 - 维护每个 symbol 的 MarketState（best_bid/ask, last/prev trade price）
 - 评估 LONG/SHORT 平仓触发条件
 - 实现触发节流（min_signal_interval_ms）
-- 维护滑动窗口回报率（accel）并计算 accel_mult
-- 计算 ROI 并匹配 roi_mult
+- 维护滑动窗口回报率（accel）并生成公共 accel sizing context
+- 计算 ROI 并生成公共 roi sizing context
 - 为 orderbook_pressure 维护 depth/book freshness 与 dwell 状态
 
 输入：
@@ -50,9 +50,11 @@ class PressureSignalConfig:
     threshold_qty: Decimal
     sustain_ms: int
     passive_level: int
-    lot_mult: int
+    base_mult: int
     active_recheck_cooldown_ms: int
     passive_ttl_ms: int
+    use_roi_mult: bool = False
+    use_accel_mult: bool = False
     active_recheck_cooldown_jitter_pct: Decimal = Decimal("0.15")
     passive_ttl_jitter_pct: Decimal = Decimal("0.15")
     active_burst_window_ms: int = 10000
@@ -88,6 +90,8 @@ class SignalEngine:
         self._symbol_strategy_modes: Dict[str, StrategyMode] = {}
         self._symbol_pressure_configs: Dict[str, PressureSignalConfig] = {}
         self._symbol_min_signal_interval_ms: Dict[str, int] = {}
+        self._symbol_use_roi_mult: Dict[str, bool] = {}
+        self._symbol_use_accel_mult: Dict[str, bool] = {}
         self._symbol_accel_window_ms: Dict[str, int] = {}
         self._symbol_accel_tiers: Dict[str, List[Tuple[Decimal, int]]] = {}
         self._symbol_roi_tiers: Dict[str, List[Tuple[Decimal, int]]] = {}
@@ -107,6 +111,8 @@ class SignalEngine:
         strategy_mode: StrategyMode = StrategyMode.ORDERBOOK_PRICE,
         pressure_config: Optional[PressureSignalConfig] = None,
         min_signal_interval_ms: Optional[int] = None,
+        use_roi_mult: Optional[bool] = None,
+        use_accel_mult: Optional[bool] = None,
         accel_window_ms: Optional[int] = None,
         accel_tiers: Optional[List[Tuple[Decimal, int]]] = None,
         roi_tiers: Optional[List[Tuple[Decimal, int]]] = None,
@@ -119,6 +125,14 @@ class SignalEngine:
             del self._symbol_pressure_configs[symbol]
         if min_signal_interval_ms is not None:
             self._symbol_min_signal_interval_ms[symbol] = min_signal_interval_ms
+        if use_roi_mult is not None:
+            self._symbol_use_roi_mult[symbol] = use_roi_mult
+        elif symbol not in self._symbol_use_roi_mult:
+            self._symbol_use_roi_mult[symbol] = True
+        if use_accel_mult is not None:
+            self._symbol_use_accel_mult[symbol] = use_accel_mult
+        elif symbol not in self._symbol_use_accel_mult:
+            self._symbol_use_accel_mult[symbol] = True
         if accel_window_ms is not None:
             self._symbol_accel_window_ms[symbol] = accel_window_ms
         if accel_tiers is not None:
@@ -256,11 +270,14 @@ class SignalEngine:
         if reason is None:
             return None
 
+        use_accel_mult = self._symbol_use_accel_mult.get(symbol, True)
+        use_roi_mult = self._symbol_use_roi_mult.get(symbol, True)
+
         ret_window = self._compute_accel_ret(symbol, current_ms, state.last_trade_price)
-        accel_mult = self._select_accel_mult(symbol, position_side, ret_window)
+        accel_mult = self._select_accel_mult(symbol, position_side, ret_window) if use_accel_mult else 1
 
         roi = self._compute_roi(position)
-        roi_mult = self._select_roi_mult(symbol, roi)
+        roi_mult = self._select_roi_mult(symbol, roi) if use_roi_mult else 1
 
         # 更新最后信号时间
         key = f"{symbol}:{position_side.value}"
@@ -300,6 +317,19 @@ class SignalEngine:
 
         dwell_key = f"{symbol}:{position_side.value}"
         active_paused = False
+        pressure_last_trade = state.last_trade_price if state.last_trade_price > Decimal("0") else None
+        ret_window = (
+            self._compute_accel_ret(symbol, current_ms, pressure_last_trade)
+            if cfg.use_accel_mult and pressure_last_trade is not None
+            else None
+        )
+        accel_mult = (
+            self._select_accel_mult(symbol, position_side, ret_window)
+            if cfg.use_accel_mult
+            else 1
+        )
+        roi = self._compute_roi(position) if cfg.use_roi_mult else None
+        roi_mult = self._select_roi_mult(symbol, roi) if cfg.use_roi_mult else 1
         active_qty = state.best_bid_qty if position_side == PositionSide.LONG else state.best_ask_qty
         if active_qty > cfg.threshold_qty:
             start_ms = self._pressure_dwell_start_ms.get(dwell_key)
@@ -343,7 +373,7 @@ class SignalEngine:
                         cfg.active_recheck_cooldown_jitter_pct,
                         minimum_ms=0,
                     ),
-                    fixed_lot_mult=cfg.lot_mult,
+                    base_mult_override=cfg.base_mult,
                     fixed_qty_jitter_pct=cfg.qty_jitter_pct,
                     fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
                     active_burst_window_ms=cfg.active_burst_window_ms,
@@ -351,6 +381,10 @@ class SignalEngine:
                     active_burst_max_fills=cfg.active_burst_max_fills,
                     active_burst_pause_min_ms=cfg.active_burst_pause_min_ms,
                     active_burst_pause_max_ms=cfg.active_burst_pause_max_ms,
+                    roi_mult=roi_mult,
+                    accel_mult=accel_mult,
+                    roi=roi,
+                    ret_window=ret_window,
                 )
                 self._log_signal_if_changed(dwell_key, signal)
                 return signal
@@ -397,9 +431,13 @@ class SignalEngine:
                 minimum_ms=1,
             ),
             cooldown_override_ms=0,
-            fixed_lot_mult=cfg.lot_mult,
+            base_mult_override=cfg.base_mult,
             fixed_qty_jitter_pct=cfg.qty_jitter_pct,
             fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
+            roi_mult=roi_mult,
+            accel_mult=accel_mult,
+            roi=roi,
+            ret_window=ret_window,
         )
         self._log_signal_if_changed(dwell_key, signal)
         return signal
@@ -589,6 +627,8 @@ class SignalEngine:
                 signal.reason,
                 signal.execution_preference,
                 signal.price_override,
+                signal.roi_mult,
+                signal.accel_mult,
             )
         return (
             signal.strategy_mode,
@@ -896,6 +936,10 @@ class SignalEngine:
             del self._has_depth_data[symbol]
         if symbol in self._trade_history:
             del self._trade_history[symbol]
+        if symbol in self._symbol_use_roi_mult:
+            del self._symbol_use_roi_mult[symbol]
+        if symbol in self._symbol_use_accel_mult:
+            del self._symbol_use_accel_mult[symbol]
         keys_to_remove = [k for k in self._pressure_dwell_start_ms if k.startswith(f"{symbol}:")]
         for key in keys_to_remove:
             del self._pressure_dwell_start_ms[key]

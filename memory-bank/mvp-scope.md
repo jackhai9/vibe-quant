@@ -27,7 +27,7 @@ WS 行情 → 信号判断 → 下单/撤单 → 仓位收敛
 - [x] global 默认值 + symbol 覆盖
 - [x] API 密钥从环境变量读取（`BINANCE_API_KEY`、`BINANCE_API_SECRET`）
 - [x] 配置项：stale_data_ms、order_ttl_ms、repost_cooldown_ms、min_signal_interval_ms
-- [x] 配置项：maker_price_mode、maker_n_ticks、base_lot_mult
+- [x] 配置项：maker_price_mode、maker_n_ticks、default_base_mult
 - [x] 配置项：max_mult、max_order_notional
 
 ### 2. 交易所适配（ccxt）

@@ -75,7 +75,7 @@ def engine(mock_place_order, mock_cancel_order):
         cancel_order=mock_cancel_order,
         order_ttl_ms=800,
         repost_cooldown_ms=100,
-        base_lot_mult=1,
+        default_base_mult=1,
         maker_price_mode="inside_spread_1tick",
         maker_n_ticks=1,
         max_mult=50,
@@ -135,7 +135,7 @@ class TestExecutionEngineInit:
         )
         assert engine.order_ttl_ms == 800
         assert engine.repost_cooldown_ms == 100
-        assert engine.base_lot_mult == 1
+        assert engine.default_base_mult == 1
         assert engine.maker_price_mode == "inside_spread_1tick"
         assert engine.maker_n_ticks == 1
         assert engine.max_mult == 50
@@ -148,7 +148,7 @@ class TestExecutionEngineInit:
             cancel_order=mock_cancel_order,
             order_ttl_ms=1000,
             repost_cooldown_ms=200,
-            base_lot_mult=2,
+            default_base_mult=2,
             maker_price_mode="at_touch",
             maker_n_ticks=3,
             max_mult=100,
@@ -156,7 +156,7 @@ class TestExecutionEngineInit:
         )
         assert engine.order_ttl_ms == 1000
         assert engine.repost_cooldown_ms == 200
-        assert engine.base_lot_mult == 2
+        assert engine.default_base_mult == 2
         assert engine.maker_price_mode == "at_touch"
         assert engine.maker_n_ticks == 3
         assert engine.max_mult == 100
@@ -278,7 +278,7 @@ class TestOrderbookPressureExecution:
             qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("50001"),
             cooldown_override_ms=1000,
-            fixed_lot_mult=5,
+            base_mult_override=5,
         )
 
         intent = await engine.on_signal(
@@ -315,7 +315,7 @@ class TestOrderbookPressureExecution:
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
-            fixed_lot_mult=1,
+            base_mult_override=1,
         )
 
         intent = await engine.on_signal(
@@ -334,7 +334,7 @@ class TestOrderbookPressureExecution:
             position_amt=Decimal("0.0024"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
-            lot_mult=5,
+            base_mult=5,
         )
         assert qty == Decimal("0.002")
 
@@ -344,7 +344,7 @@ class TestOrderbookPressureExecution:
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
-                lot_mult=20,
+                base_mult=20,
                 qty_jitter_pct=Decimal("0.15"),
             )
         assert qty == Decimal("0.023")
@@ -355,12 +355,42 @@ class TestOrderbookPressureExecution:
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
-                lot_mult=20,
+                base_mult=20,
                 qty_jitter_pct=Decimal("0.15"),
                 anti_repeat_lookback=3,
                 recent_qtys=[Decimal("0.020")],
             )
         assert qty == Decimal("0.021")
+
+    def test_compute_fixed_qty_can_use_roi_and_accel_mult_and_caps_by_max_mult(self, engine):
+        engine.max_mult = 20
+
+        qty = engine.compute_fixed_qty(
+            position_amt=Decimal("10"),
+            min_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+            base_mult=5,
+            roi_mult=3,
+            accel_mult=4,
+        )
+
+        # final_mult = min(5*3*4, 20) = 20 => qty = 0.001 * 20 = 0.02
+        assert qty == Decimal("0.020")
+
+    def test_compute_fixed_qty_never_caps_below_fixed_base_mult(self, engine):
+        engine.max_mult = 20
+
+        qty = engine.compute_fixed_qty(
+            position_amt=Decimal("10"),
+            min_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+            base_mult=31,
+            roi_mult=2,
+            accel_mult=2,
+        )
+
+        # 启用共享倍数后，max_mult 只限制“向上放大”，不能把固定基准片大小压到 31 以下
+        assert qty == Decimal("0.031")
 
     @pytest.mark.asyncio
     async def test_fixed_qty_anti_repeat_tracks_successful_pressure_orders_only(self, engine, symbol_rules, market_state):
@@ -378,7 +408,7 @@ class TestOrderbookPressureExecution:
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
-            fixed_lot_mult=20,
+            base_mult_override=20,
             fixed_qty_jitter_pct=Decimal("0.15"),
             fixed_qty_anti_repeat_lookback=3,
         )
@@ -440,7 +470,7 @@ class TestOrderbookPressureExecution:
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
-            fixed_lot_mult=20,
+            base_mult_override=20,
             fixed_qty_jitter_pct=Decimal("0.15"),
             fixed_qty_anti_repeat_lookback=3,
         )
@@ -495,7 +525,7 @@ class TestOrderbookPressureExecution:
             qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("50001"),
             cooldown_override_ms=1000,
-            fixed_lot_mult=1,
+            base_mult_override=1,
         )
         intent = await engine.on_signal(
             signal=signal,
@@ -883,7 +913,7 @@ class TestComputeQty:
             last_trade_price=Decimal("50000"),
         )
 
-        # base_lot_mult=1, min_qty=0.001, base_qty=0.001
+        # default_base_mult=1, min_qty=0.001, base_qty=0.001
         assert qty == Decimal("0.001")
 
     def test_qty_limited_by_position(self, engine):
@@ -901,7 +931,7 @@ class TestComputeQty:
     def test_qty_limited_by_notional(self, engine):
         """测试数量受名义价值限制"""
         engine.max_order_notional = Decimal("100")  # 限制 100 USDT
-        engine.base_lot_mult = 10  # 增大 base_qty 以触发 notional 限制
+        engine.default_base_mult = 10  # 增大 base_qty 以触发 notional 限制
 
         qty = engine.compute_qty(
             position_amt=Decimal("1"),
@@ -918,7 +948,7 @@ class TestComputeQty:
         engine = ExecutionEngine(
             place_order=mock_place_order,
             cancel_order=mock_cancel_order,
-            base_lot_mult=10,
+            default_base_mult=10,
             max_order_notional=Decimal("1000"),  # 更大的 notional 限制
         )
 
@@ -929,14 +959,14 @@ class TestComputeQty:
             last_trade_price=Decimal("50000"),
         )
 
-        # base_lot_mult=10, base_qty=0.01, max_notional/price = 1000/50000 = 0.02
+        # default_base_mult=10, base_qty=0.01, max_notional/price = 1000/50000 = 0.02
         # min(0.01, 0.1, 0.02) = 0.01
         assert qty == Decimal("0.01")
 
     def test_qty_step_size_rounding(self, engine):
         """测试数量步进规整"""
         engine.max_order_notional = Decimal("150")
-        engine.base_lot_mult = 10  # base_qty = 0.01
+        engine.default_base_mult = 10  # base_qty = 0.01
 
         qty = engine.compute_qty(
             position_amt=Decimal("1"),
@@ -950,7 +980,7 @@ class TestComputeQty:
 
     def test_qty_uses_roi_and_accel_mult_and_caps_by_max_mult(self, engine):
         """测试 ROI/加速倍数叠加并受 max_mult 截断"""
-        engine.base_lot_mult = 10
+        engine.default_base_mult = 10
         engine.max_mult = 50
         engine.max_order_notional = Decimal("1000000")
 
@@ -968,7 +998,7 @@ class TestComputeQty:
 
     def test_qty_returns_zero_when_notional_cap_below_min_qty(self, engine):
         """测试 max_order_notional 太小导致无法满足 min_qty 时返回 0"""
-        engine.base_lot_mult = 1
+        engine.default_base_mult = 1
         engine.max_order_notional = Decimal("20")
 
         qty = engine.compute_qty(
@@ -1719,7 +1749,7 @@ class TestCheckTimeout:
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
             qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
-            fixed_lot_mult=1,
+            base_mult_override=1,
             price_override=Decimal("50000"),
             cooldown_override_ms=0,
         )

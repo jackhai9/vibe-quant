@@ -256,7 +256,7 @@ class ExitSignal:
     price_override: Optional[Decimal] = None
     ttl_override_ms: Optional[int] = None
     cooldown_override_ms: Optional[int] = None
-    fixed_lot_mult: Optional[int] = None
+    base_mult_override: Optional[int] = None
     fixed_qty_jitter_pct: Optional[Decimal] = None
     fixed_qty_anti_repeat_lookback: Optional[int] = None
     active_burst_window_ms: Optional[int] = None
