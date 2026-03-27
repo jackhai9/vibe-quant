@@ -46,13 +46,21 @@
 **状态**：📝 已记录<br>
 **日期**：2026-03-27
 
-**背景**：基于 `2026-03-27 11:26:03` 之后的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。样本当前集中在 `DASH LONG`，并已拆分为 `same-window` 与 `lead-lag` 两套口径。<br>
+**背景**：基于 `logs/vibe-quant_2026-03-27.log` 中 `2026-03-27 11:26:03` 到 `2026-03-27 15:34:45` 的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。当前主统计窗口为 `5m`；样本量为 `DASH LONG 5m = 48`、`DASH SHORT 5m = 22`。样本当前集中在 `DASH LONG`，并已拆分为 `same-window` 与 `lead-lag` 两套口径。<br>
 **当前结论定位**：工作假设，仅用于辅助执行判断；后续应随样本扩大持续复核，不作为已固化策略逻辑。
+
+**分析检查点**：
+
+- 已纳入统计的最后一条新口径日志时间：`2026-03-27 15:34:45`
+- 下次增量统计默认从 `2026-03-27 15:34:45` 之后继续
+- `same-window` 可直接按新增样本续算
+- `lead-lag` 续算时保留上一条 `5m` 样本，与新增区间里的第一条 `5m` 样本组成首个 `t -> t+1`
 
 **same-window 当前经验性规则**：
 
 - 在线主观察窗口优先看 `5m`
 - 当前指标优先级：`5m passive_fill_rate` > `5m active_triggers / active_attempts` > `5m passive_triggers`
+- 当前 `DASH LONG 5m` 相关系数：`passive_fill_rate=+0.522`，`active_triggers=+0.293`，`active_attempts=+0.289`，`passive_triggers=-0.319`
 - `passive_fill_rate > 0` 且 `active_triggers > 0`：当前最值得继续信 `orderbook_pressure`
 - `passive_fill_rate > 0` 但 `active_triggers = 0`：仍可参考，但信心降低
 - `passive_fill_rate = 0` 且 `passive_triggers` 很高：不把它视为利好，更像拥挤或磨损
@@ -62,6 +70,7 @@
 
 - 口径：当前 `5m` 指标 `t` 对应下一条 `5m` 日志的 `price_chg(t+1)`
 - 当前排序：`5m active_attempts / active_triggers` > `5m passive_triggers`（反向参考） >> `5m passive_fill_rate`
+- 当前 `DASH LONG 5m` 相关系数：`active_attempts=+0.187`，`active_triggers=+0.172`，`passive_triggers=-0.267`，`passive_fill_rate=-0.032`
 - `active_attempts / active_triggers` 更像下一窗口延续改善的先行项
 - `passive_triggers` 仍然更像拥挤或磨损，不像延续利好
 - `passive_fill_rate` 更像当前窗口有效性的确认项，而不是下一窗口预测项
@@ -72,6 +81,7 @@
 - `lead-lag` 规则回答的是“下一窗口是否更可能延续改善”
 - 这两套规则都服务于“是否继续依赖 `orderbook_pressure` 平仓”，不是开仓方向预测
 - `1m` 噪音更大，适合观察短时切换；`15m` 滞后更重，容易混入前一段 regime 惯性
+- `DASH SHORT` 当前样本量仍偏小，不按 `DASH LONG` 的规则直接外推
 - 后续有更多新口径样本和 `market_data_*.jsonl` 回放结果后，需要重新计算相关性并修订本结论
 
 **下一步分析计划**：

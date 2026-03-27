@@ -85,8 +85,18 @@ aggTrade：
 - 观察对象：`[PRESSURE_STATS]` 日志
 - 当前主样本：`DASH LONG`
 - 当前样本口径：带 `active_triggers / passive_triggers / attempts / fills` 的新口径日志
-- 当前样本范围：`2026-03-27 11:26:03` 之后的新口径 `5m` 样本
+- 当前样本范围：`2026-03-27 11:26:03` 到 `2026-03-27 15:34:45` 的新口径日志
+- 当前主统计窗口：`window=5m`
+- 当前样本量：`DASH LONG 5m = 48`，`DASH SHORT 5m = 22`
 - 当前结论定位：工作假设，后续应随样本扩大持续复核
+
+### 最近分析检查点
+
+- 来源文件：`logs/vibe-quant_2026-03-27.log`
+- 已纳入统计的最后一条新口径日志时间：`2026-03-27 15:34:45`
+- 下次增量统计默认从 `2026-03-27 15:34:45` 之后继续
+- 对 `same-window` 统计，不必每次从头重算
+- 对 `lead-lag` 统计，增量续算时保留上一条 `5m` 样本即可，用来和新进入的第一条 `5m` 样本组成 `t -> t+1`
 
 ### 当前优先观察窗口
 
@@ -99,6 +109,13 @@ aggTrade：
 经验上，当前样本中的解释力排序为：
 
 `5m passive_fill_rate` > `5m active_triggers / active_attempts` > `5m passive_triggers`
+
+当前 `DASH LONG 5m` 的相关系数约为：
+
+- `passive_fill_rate` vs `price_chg`: `+0.522`
+- `active_triggers` vs `price_chg`: `+0.293`
+- `active_attempts` vs `price_chg`: `+0.289`
+- `passive_triggers` vs `price_chg`: `-0.319`
 
 其中：
 
@@ -123,6 +140,13 @@ aggTrade：
 
 `5m active_attempts / active_triggers` > `5m passive_triggers`（反向参考） >> `5m passive_fill_rate`
 
+当前 `DASH LONG 5m` 的相关系数约为：
+
+- `active_attempts(t)` vs `next_5m price_chg(t+1)`: `+0.187`
+- `active_triggers(t)` vs `next_5m price_chg(t+1)`: `+0.172`
+- `passive_triggers(t)` vs `next_5m price_chg(t+1)`: `-0.267`
+- `passive_fill_rate(t)` vs `next_5m price_chg(t+1)`: `-0.032`
+
 其中：
 
 - `active_attempts / active_triggers`：更像下一窗口是否还会延续 pressure 推进的先行指标
@@ -145,6 +169,7 @@ aggTrade：
 - 这两套规则都更适合回答“现在还值不值得继续依赖 `orderbook_pressure` 平仓”
 - 这套规则不应替代后续基于 `market_data_*.jsonl` 的离线回放分析
 - 当线上样本显著增加后，应重新统计相关性，并按新数据修正本节内容
+- `DASH SHORT` 当前样本量仍偏小，不按 `DASH LONG` 的规则直接外推
 
 ## 下一步分析计划
 
