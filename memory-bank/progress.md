@@ -26,6 +26,20 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：`orderbook_pressure` 旁路统计收集器
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-25
+
+**动机**：探索 orderbook_pressure 主动触发率、被动成交率、价格走势三者的相关性，为后续参数调优提供数据基础。<br>
+**产出**：
+
+- `src/stats/pressure_stats.py`：`PressureStatsCollector`，纯内存 deque 环形缓冲区收集信号/成交/价格事件，按 1m/5m/15m 窗口聚合
+- `src/stats/__init__.py`：模块导出
+- `src/main.py`：4 个集成点（bookTicker 价格采样、信号记录、成交记录、5 分钟周期输出）
+- `src/utils/logger.py`：EVENT_TYPE_CN 添加 `pressure_stats`
+- `tests/test_pressure_stats.py`：16 个测试用例
+
 ## Milestone/附加改进：`orderbook_pressure` 平仓量随机抖动
 
 **状态**：✅ 已完成<br>

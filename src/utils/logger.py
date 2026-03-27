@@ -55,6 +55,7 @@ EVENT_TYPE_CN = {
     "reject": "拒单",
     "order_retry": "重试",
     "fill_rate": "成交率",
+    "pressure_stats": "盘口量统计",
     "error": "错误",
 }
 

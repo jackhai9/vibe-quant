@@ -38,6 +38,7 @@ from src.exchange.adapter import ExchangeAdapter
 from src.ws.market import MarketWSClient
 from src.ws.user_data import UserDataWSClient
 from src.signal.engine import SignalEngine, PressureSignalConfig
+from src.stats.pressure_stats import PressureStatsCollector
 from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
@@ -94,6 +95,18 @@ class ExternalTakeoverState:
     pending_release: bool = False
 
 
+# pressure 信号 reason 显式集合（用于统计收集器的 reason 匹配）
+_PRESSURE_ACTIVE_REASONS: frozenset[str] = frozenset({
+    SignalReason.LONG_BID_PRESSURE_ACTIVE.value,
+    SignalReason.SHORT_ASK_PRESSURE_ACTIVE.value,
+})
+_PRESSURE_PASSIVE_REASONS: frozenset[str] = frozenset({
+    SignalReason.LONG_ASK_PRESSURE_PASSIVE.value,
+    SignalReason.SHORT_BID_PRESSURE_PASSIVE.value,
+})
+_PRESSURE_REASONS: frozenset[str] = _PRESSURE_ACTIVE_REASONS | _PRESSURE_PASSIVE_REASONS
+
+
 class Application:
     """应用主类"""
 
@@ -139,6 +152,7 @@ class Application:
         self._main_loop_task: Optional[asyncio.Task[None]] = None
         self._timeout_check_task: Optional[asyncio.Task[None]] = None
         self._fill_rate_log_task: Optional[asyncio.Task[None]] = None
+        self._pressure_stats_task: Optional[asyncio.Task[None]] = None
         self._position_refresh_loop_task: Optional[asyncio.Task[None]] = None
         self._market_ws_task: Optional[asyncio.Task[None]] = None
         self._user_data_ws_task: Optional[asyncio.Task[None]] = None
@@ -165,6 +179,7 @@ class Application:
         self._position_last_change: dict[tuple[str, PositionSide], tuple[Decimal, Decimal]] = {}
         self._no_position_logged: set[tuple[str, PositionSide]] = set()
         self._fill_rate_last_log_ms: dict[tuple[str, PositionSide], int] = {}
+        self._pressure_stats: Optional[PressureStatsCollector] = None
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
         self._external_takeover: dict[tuple[str, PositionSide], ExternalTakeoverState] = {}
         self._symbol_init_lock = asyncio.Lock()
@@ -662,6 +677,16 @@ class Application:
         fee_asset: Optional[str],
     ) -> None:
         """ExecutionEngine 成交回调：用于触发 Telegram 通知（不得阻塞）。"""
+        # 旁路记录 pressure 成交（O(1) deque append，不阻塞）
+        if self._pressure_stats and reason in _PRESSURE_REASONS:
+            self._pressure_stats.record_outcome(
+                symbol=symbol,
+                side=position_side.value,
+                is_active=(reason in _PRESSURE_ACTIVE_REASONS),
+                is_filled=True,
+                ts_ms=current_time_ms(),
+            )
+
         if not self.config_loader or not self.telegram_notifier:
             return
         telegram_cfg = self.config_loader.config.global_.telegram
@@ -993,6 +1018,7 @@ class Application:
         self.signal_engine = SignalEngine(
             min_signal_interval_ms=global_config.execution.min_signal_interval_ms,
         )
+        self._pressure_stats = PressureStatsCollector()
 
         # 4. 初始化 WebSocket 客户端（User Data 始终连接，Market WS 运行时按需创建）
         logger.info("初始化 WebSocket 客户端...")
@@ -1173,6 +1199,18 @@ class Application:
 
         # 更新信号引擎的市场状态
         self.signal_engine.update_market(event)
+
+        # bookTicker：采样 mid-price 用于 pressure 统计
+        if (
+            event.event_type == "book_ticker"
+            and self._pressure_stats
+            and event.best_bid is not None
+            and event.best_ask is not None
+            and event.best_bid > 0
+            and event.best_ask > 0
+        ):
+            mid = (event.best_bid + event.best_ask) / 2
+            self._pressure_stats.record_price(event.symbol, mid, event.timestamp_ms)
 
         # markPrice：同步到仓位缓存（用于 dist_to_liq 风控）
         if event.event_type == "mark_price" and event.mark_price is not None:
@@ -1823,6 +1861,7 @@ class Application:
             self._main_loop_task = asyncio.create_task(self._main_loop())
             self._timeout_check_task = asyncio.create_task(self._timeout_check_loop())
             self._fill_rate_log_task = asyncio.create_task(self._fill_rate_log_loop())
+            self._pressure_stats_task = asyncio.create_task(self._pressure_stats_loop())
             if self.exchange:
                 self._position_refresh_loop_task = asyncio.create_task(self._position_refresh_loop())
 
@@ -2156,6 +2195,16 @@ class Application:
         )
 
         if signal:
+            # 旁路记录 pressure 信号（用于统计，不影响交易路径）
+            if signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE and self._pressure_stats:
+                self._pressure_stats.record_signal(
+                    symbol=symbol,
+                    side=position_side.value,
+                    is_active=(signal.execution_preference == SignalExecutionPreference.AGGRESSIVE),
+                    mid_price=(signal.best_bid + signal.best_ask) / 2,
+                    ts_ms=current_ms,
+                )
+
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
             # orderbook_price：切换执行模式到 AGGRESSIVE_LIMIT
             # orderbook_pressure：仅做日志/告警，不改写信号的主动/被动语义（panic_close 兜底）
@@ -2354,6 +2403,23 @@ class Application:
                 log_error(f"成交率日志循环错误: {e}")
                 await asyncio.sleep(1)
 
+    async def _pressure_stats_loop(self) -> None:
+        """周期性输出 orderbook_pressure 统计指标。"""
+        interval_s = 300  # 5 分钟
+        while self._running:
+            try:
+                await asyncio.sleep(interval_s)
+                if not self._running or not self._pressure_stats:
+                    break
+                if self.pause_manager.is_paused():
+                    continue
+                self._pressure_stats.log_all_windows(current_time_ms())
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_error(f"盘口量统计循环错误: {e}")
+                await asyncio.sleep(1)
+
     async def _position_refresh_loop(self) -> None:
         """低频全量仓位刷新（B：兜底）。"""
         while self._running:
@@ -2393,6 +2459,7 @@ class Application:
                 self._main_loop_task,
                 self._timeout_check_task,
                 self._fill_rate_log_task,
+                self._pressure_stats_task,
                 self._position_refresh_loop_task,
                 self._calibration_task,
             ]

@@ -289,6 +289,10 @@ vibe-quant/
 │   │   ├── telegram.py       # Telegram 通知（成交/重连/风险/开仓告警）
 │   │   ├── bot.py            # Telegram Bot 命令接收器（getUpdates long polling）
 │   │   └── pause_manager.py  # 暂停状态管理器（全局/per-symbol，支持定时暂停）
+│   ├── stats/
+│   │   ├── README.md         # src/stats 目录说明
+│   │   ├── __init__.py
+│   │   └── pressure_stats.py # orderbook_pressure 旁路统计（主动触发率/被动成交率/价格走势）
 │   └── utils/
 │       ├── README.md         # src/utils 目录说明
 │       ├── __init__.py
@@ -307,6 +311,7 @@ vibe-quant/
     ├── test_ws_market.py     # 市场 WS 测试（23 用例）
     ├── test_ws_user_data.py  # 用户数据 WS 测试（27 用例）
     ├── test_signal.py        # 信号引擎测试（18 用例）
+    ├── test_pressure_stats.py # 盘口量统计收集器测试（16 用例）
     ├── test_pause_manager.py # PauseManager 测试（29 用例）
     ├── test_telegram_bot.py  # TelegramBot 测试（14 用例）
     └── test_execution.py     # 执行引擎测试（83 用例）
@@ -326,6 +331,7 @@ vibe-quant/
 | `src/ws/market.py` | 477 | MarketWSClient 类，bookTicker/aggTrade/markPrice@1s 解析，指数退避重连，陈旧检测，重连回调 |
 | `src/ws/user_data.py` | 744 | UserDataWSClient 类，listenKey 管理 + ORDER_TRADE_UPDATE/ALGO_UPDATE/ACCOUNT_UPDATE 解析，指数退避重连，重连回调 |
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
+| `src/stats/pressure_stats.py` | 285 | PressureStatsCollector，orderbook_pressure 旁路统计（信号/成交/价格窗口聚合） |
 | `src/execution/engine.py` | 1688 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
 | `src/risk/protective_stop.py` | 848 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |

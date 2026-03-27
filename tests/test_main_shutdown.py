@@ -162,6 +162,7 @@ def _make_pressure_eval_app(
     app.pause_manager = MagicMock()
     app.pause_manager.is_paused.return_value = False
     app.telegram_notifier = None
+    app._pressure_stats = None
     app.market_ws = MagicMock()
     app.market_ws.is_stale.return_value = False
     app.exchange = MagicMock()
