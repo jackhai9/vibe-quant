@@ -40,6 +40,18 @@
 - `docs/configuration.md` / `config/config.example.yaml`：`pressure_exit` 示例不再出现 `base_mult`，symbol 级基准量统一在 `execution.base_mult`
 - `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两个策略共用同一基准片大小真源”的当前语义
 
+## Milestone/附加改进：`max_order_notional` 收口到 fixed qty 路径
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`orderbook_pressure` 的固定片路径此前没有应用 `max_order_notional`，导致执行层的单笔名义价值上限只对动态数量路径生效，策略语义不一致。<br>
+**产出**：
+
+- `src/execution/engine.py`：`compute_fixed_qty()` 增加 `last_trade_price` 入参，在固定片基准量和 jitter 候选区间两处都受 `max_order_notional` 约束
+- `tests/test_execution.py`：新增 fixed qty 直接受 notional 限制、以及 jitter 不突破 notional 上限的回归
+- `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步“两条主策略最终 qty 都受 `max_order_notional` 约束”的当前语义
+
 ## Milestone/附加改进：原始市场数据录制器
 
 **状态**：✅ 已完成<br>

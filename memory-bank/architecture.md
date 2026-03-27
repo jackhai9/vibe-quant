@@ -194,7 +194,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 - `roi_mult / accel_mult` 是公共 sizing modifiers；不同策略先决定自己的基准片大小，再选择是否叠加这两个倍数
 - `orderbook_price` 的基准倍数是 `execution.base_mult`，默认通过 `execution.use_roi_mult` / `execution.use_accel_mult` 启用公共倍数
 - `orderbook_pressure` 的基准倍数也是 `execution.base_mult`，默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；若在 `pressure_exit.use_*` 显式配置，则以 pressure 自己的值为准
-- 最终倍数受 `max_mult` 和 `max_order_notional` 约束
+- 最终倍数受 `max_mult` 约束；两条主策略的最终 qty 都受 `max_order_notional` 约束
 
 ### 风控与限速（已实现）
 

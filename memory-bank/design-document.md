@@ -196,6 +196,7 @@ maker 订单要求：
 - 保险 1：`final_mult = min(final_mult, max_mult)`（每 symbol 可覆盖；用户可设很高，但建议更保守）
 - 保险 2：`max_order_notional`（强烈建议启用）
   - `order_notional = qty * last_trade_price`
+  - `orderbook_price` 与 `orderbook_pressure` 的正常下单路径都受此约束
   - 若超限：缩小 `qty` 直至满足
 - 最终目标数量：
   - `target_qty = clamp_to_step(min(abs(position_amt), base_qty * final_mult), stepSize)`

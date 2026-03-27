@@ -495,6 +495,7 @@ class ExecutionEngine:
                 position_amt=position_amt,
                 min_qty=rules.min_qty,
                 step_size=rules.step_size,
+                last_trade_price=market_state.last_trade_price,
                 base_mult=signal.base_mult_override or 1,
                 roi_mult=signal.roi_mult,
                 accel_mult=signal.accel_mult,
@@ -1665,6 +1666,7 @@ class ExecutionEngine:
         position_amt: Decimal,
         min_qty: Decimal,
         step_size: Decimal,
+        last_trade_price: Decimal,
         base_mult: int,
         roi_mult: int = 1,
         accel_mult: int = 1,
@@ -1672,7 +1674,7 @@ class ExecutionEngine:
         anti_repeat_lookback: int = 0,
         recent_qtys: Optional[Sequence[Decimal]] = None,
     ) -> Decimal:
-        """按固定基准片大小计算数量，并可叠加公共 roi/accel modifiers 后做 jitter/anti-repeat。"""
+        """按固定基准片大小计算数量，并受 notional/jitter/anti-repeat 约束。"""
         abs_position = abs(position_amt)
         if abs_position < min_qty:
             return Decimal("0")
@@ -1686,6 +1688,9 @@ class ExecutionEngine:
             final_mult = max(fixed_mult, max_mult)
 
         base_qty = min(min_qty * final_mult, abs_position)
+        if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0"):
+            max_qty_by_notional = self.max_order_notional / last_trade_price
+            base_qty = min(base_qty, max_qty_by_notional)
         base_qty = round_to_step(base_qty, step_size)
         if base_qty < min_qty:
             return Decimal("0")
@@ -1698,7 +1703,15 @@ class ExecutionEngine:
             step_size,
         )
         max_qty_candidate = round_to_step(
-            min(abs_position, base_qty * (Decimal("1") + qty_jitter_pct)),
+            min(
+                abs_position,
+                (
+                    self.max_order_notional / last_trade_price
+                    if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0")
+                    else abs_position
+                ),
+                base_qty * (Decimal("1") + qty_jitter_pct),
+            ),
             step_size,
         )
 

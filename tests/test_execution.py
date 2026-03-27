@@ -265,6 +265,7 @@ class TestOrderbookPressureExecution:
 
     @pytest.mark.asyncio
     async def test_on_signal_uses_fixed_qty_and_price_override(self, engine, symbol_rules, market_state):
+        engine.max_order_notional = Decimal("1000000")
         signal = ExitSignal(
             symbol="BTC/USDT:USDT",
             position_side=PositionSide.SHORT,
@@ -334,6 +335,7 @@ class TestOrderbookPressureExecution:
             position_amt=Decimal("0.0024"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
+            last_trade_price=Decimal("100"),
             base_mult=5,
         )
         assert qty == Decimal("0.002")
@@ -344,6 +346,7 @@ class TestOrderbookPressureExecution:
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
+                last_trade_price=Decimal("100"),
                 base_mult=20,
                 qty_jitter_pct=Decimal("0.15"),
             )
@@ -355,6 +358,7 @@ class TestOrderbookPressureExecution:
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
+                last_trade_price=Decimal("100"),
                 base_mult=20,
                 qty_jitter_pct=Decimal("0.15"),
                 anti_repeat_lookback=3,
@@ -369,6 +373,7 @@ class TestOrderbookPressureExecution:
             position_amt=Decimal("10"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
+            last_trade_price=Decimal("100"),
             base_mult=5,
             roi_mult=3,
             accel_mult=4,
@@ -384,6 +389,7 @@ class TestOrderbookPressureExecution:
             position_amt=Decimal("10"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
+            last_trade_price=Decimal("100"),
             base_mult=31,
             roi_mult=2,
             accel_mult=2,
@@ -392,8 +398,37 @@ class TestOrderbookPressureExecution:
         # 启用共享倍数后，max_mult 只限制“向上放大”，不能把固定基准片大小压到 31 以下
         assert qty == Decimal("0.031")
 
+    def test_compute_fixed_qty_limited_by_notional(self, engine):
+        engine.max_order_notional = Decimal("100")
+
+        qty = engine.compute_fixed_qty(
+            position_amt=Decimal("1"),
+            min_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+            last_trade_price=Decimal("50000"),
+            base_mult=10,
+        )
+
+        assert qty == Decimal("0.002")
+
+    def test_compute_fixed_qty_jitter_respects_notional_cap(self, engine):
+        engine.max_order_notional = Decimal("100")
+
+        with patch("src.execution.engine.randint", return_value=2):
+            qty = engine.compute_fixed_qty(
+                position_amt=Decimal("1"),
+                min_qty=Decimal("0.001"),
+                step_size=Decimal("0.001"),
+                last_trade_price=Decimal("50000"),
+                base_mult=10,
+                qty_jitter_pct=Decimal("0.50"),
+            )
+
+        assert qty == Decimal("0.002")
+
     @pytest.mark.asyncio
     async def test_fixed_qty_anti_repeat_tracks_successful_pressure_orders_only(self, engine, symbol_rules, market_state):
+        engine.max_order_notional = Decimal("1000000")
         signal = ExitSignal(
             symbol="BTC/USDT:USDT",
             position_side=PositionSide.SHORT,
@@ -456,6 +491,7 @@ class TestOrderbookPressureExecution:
 
     @pytest.mark.asyncio
     async def test_failed_pressure_order_does_not_poison_anti_repeat_history(self, engine, symbol_rules, market_state):
+        engine.max_order_notional = Decimal("1000000")
         signal = ExitSignal(
             symbol="BTC/USDT:USDT",
             position_side=PositionSide.SHORT,
