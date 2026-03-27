@@ -27,59 +27,89 @@ class TestWindowLabel:
 # ---------------------------------------------------------------------------
 
 class TestRecordAndCompute:
-    def _make(self, **kw) -> PressureStatsCollector:
-        defaults = dict(price_sample_interval_ms=0)  # 关闭节流
-        defaults.update(kw)
-        return PressureStatsCollector(**defaults)
+    def _make(self) -> PressureStatsCollector:
+        return PressureStatsCollector(price_sample_interval_ms=0)  # 关闭节流
 
     def test_empty_window(self):
         c = self._make()
         stats = c.compute_window("BTC/USDT:USDT", "LONG", 60_000, 100_000)
-        assert stats["active_signals"] == 0
-        assert stats["passive_signals"] == 0
+        assert stats["active_triggers"] == 0
+        assert stats["passive_triggers"] == 0
+        assert stats["active_attempts"] == 0
+        assert stats["passive_attempts"] == 0
         assert stats["passive_fill_rate"] is None
         assert stats["price_change_pct"] is None
 
     def test_signal_counting(self):
         c = self._make()
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=2000)
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("102"), ts_ms=3000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=2000)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("102"), ts_ms=3000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=2000)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("102"), ts_ms=3000)
 
         stats = c.compute_window("BTC", "LONG", 60_000, 10_000)
-        assert stats["active_signals"] == 2
-        assert stats["passive_signals"] == 1
+        assert stats["active_triggers"] == 2
+        assert stats["passive_triggers"] == 1
+        assert stats["active_attempts"] == 2
+        assert stats["passive_attempts"] == 1
 
     def test_signal_window_filtering(self):
         """窗口外的事件不计入。"""
         c = self._make()
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=5000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=5000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("101"), ts_ms=5000)
 
         # 窗口 = 3000ms，current = 6000 → cutoff = 3000 → 只有 ts=5000 计入
         stats = c.compute_window("BTC", "LONG", 3000, 6000)
-        assert stats["active_signals"] == 1
+        assert stats["active_triggers"] == 1
+        assert stats["active_attempts"] == 1
 
     def test_outcome_fill_rate(self):
         c = self._make()
-        # 5 passive signals, 2 filled
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=500)
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=600)
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=700)
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=800)
-        c.record_signal("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=900)
+        # 5 passive triggers, 5 passive attempts, 2 filled
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=400)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=500)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=600)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=700)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=800)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=500)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=600)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=700)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=800)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=900)
         c.record_outcome("BTC", "LONG", is_active=False, is_filled=True, ts_ms=1000)
         c.record_outcome("BTC", "LONG", is_active=False, is_filled=True, ts_ms=2000)
-        # 2 active signals, 1 filled
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3500)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3600)
+        # 2 active triggers, 2 active attempts, 1 filled
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3400)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3500)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3500)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=3600)
         c.record_outcome("BTC", "LONG", is_active=True, is_filled=True, ts_ms=4000)
 
         stats = c.compute_window("BTC", "LONG", 60_000, 10_000)
+        assert stats["passive_triggers"] == 5
         assert stats["passive_fills"] == 2
         assert stats["passive_fill_rate"] == Decimal("0.400")  # 2/5
+        assert stats["active_triggers"] == 2
         assert stats["active_fills"] == 1
         assert stats["active_fill_rate"] == Decimal("0.500")  # 1/2
+
+    def test_trigger_and_attempt_counts_are_distinct(self):
+        c = self._make()
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=2000)
+        c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=3000)
+        c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=3000)
+        c.record_outcome("BTC", "LONG", is_active=False, is_filled=True, ts_ms=3500)
+
+        stats = c.compute_window("BTC", "LONG", 60_000, 10_000)
+        assert stats["passive_triggers"] == 3
+        assert stats["passive_attempts"] == 1
+        assert stats["passive_fill_rate"] == Decimal("1.000")
 
     def test_price_change(self):
         c = self._make()
@@ -125,27 +155,37 @@ class TestPriceSampling:
 class TestIsolation:
     def test_different_sides(self):
         c = PressureStatsCollector(price_sample_interval_ms=0)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
-        c.record_signal("BTC", "SHORT", is_active=False, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "SHORT", is_active=False, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("BTC", "SHORT", is_active=False, mid_price=Decimal("100"), ts_ms=1000)
 
         long_stats = c.compute_window("BTC", "LONG", 60_000, 10_000)
         short_stats = c.compute_window("BTC", "SHORT", 60_000, 10_000)
 
-        assert long_stats["active_signals"] == 1
-        assert long_stats["passive_signals"] == 0
-        assert short_stats["active_signals"] == 0
-        assert short_stats["passive_signals"] == 1
+        assert long_stats["active_triggers"] == 1
+        assert long_stats["passive_triggers"] == 0
+        assert short_stats["active_triggers"] == 0
+        assert short_stats["passive_triggers"] == 1
+        assert long_stats["active_attempts"] == 1
+        assert long_stats["passive_attempts"] == 0
+        assert short_stats["active_attempts"] == 0
+        assert short_stats["passive_attempts"] == 1
 
     def test_different_symbols(self):
         c = PressureStatsCollector(price_sample_interval_ms=0)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
-        c.record_signal("ETH", "LONG", is_active=True, mid_price=Decimal("50"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("ETH", "LONG", is_active=True, mid_price=Decimal("50"), ts_ms=1000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("ETH", "LONG", is_active=True, mid_price=Decimal("50"), ts_ms=1000)
 
         btc = c.compute_window("BTC", "LONG", 60_000, 10_000)
         eth = c.compute_window("ETH", "LONG", 60_000, 10_000)
 
-        assert btc["active_signals"] == 1
-        assert eth["active_signals"] == 1
+        assert btc["active_triggers"] == 1
+        assert eth["active_triggers"] == 1
+        assert btc["active_attempts"] == 1
+        assert eth["active_attempts"] == 1
 
     def test_price_shared_across_sides(self):
         """价格采样 per symbol，不区分 side。"""
@@ -169,11 +209,13 @@ class TestRingBuffer:
     def test_max_events(self):
         c = PressureStatsCollector(max_events=5, price_sample_interval_ms=0)
         for i in range(10):
-            c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=i * 1000)
+            c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=i * 1000)
+            c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=i * 1000)
 
         # 只保留最近 5 条
         stats = c.compute_window("BTC", "LONG", 100_000, 20_000)
-        assert stats["active_signals"] == 5
+        assert stats["active_triggers"] == 5
+        assert stats["active_attempts"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -189,14 +231,16 @@ class TestLogAllWindows:
         """窗口内无事件时跳过输出。"""
         c = PressureStatsCollector(price_sample_interval_ms=0)
         # 只在很早的时间记录，1min 窗口内不会有事件
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=1000)
         c.log_all_windows(current_ms=1_000_000)  # 1000s 之后
         # 1min 窗口应该没有输出（信号在 1s 远超 1min 前）
         # 但 15min 窗口有
 
     def test_outputs_when_data_present(self):
         c = PressureStatsCollector(price_sample_interval_ms=0)
-        c.record_signal("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=5000)
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=5000)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=5000)
         c.record_price("BTC", Decimal("100"), ts_ms=5000)
         c.record_price("BTC", Decimal("101"), ts_ms=6000)
         # 不应抛异常

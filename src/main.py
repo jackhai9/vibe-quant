@@ -61,6 +61,7 @@ from src.models import (
     SymbolRules,
     ExecutionState,
     ExecutionMode,
+    ExitSignal,
     SignalReason,
     StrategyMode,
     SignalExecutionPreference,
@@ -105,6 +106,7 @@ _PRESSURE_PASSIVE_REASONS: frozenset[str] = frozenset({
     SignalReason.SHORT_BID_PRESSURE_PASSIVE.value,
 })
 _PRESSURE_REASONS: frozenset[str] = _PRESSURE_ACTIVE_REASONS | _PRESSURE_PASSIVE_REASONS
+_PressureTriggerSignature = tuple[str, Decimal, Decimal, Decimal, Optional[Decimal]]
 
 
 class Application:
@@ -180,6 +182,8 @@ class Application:
         self._no_position_logged: set[tuple[str, PositionSide]] = set()
         self._fill_rate_last_log_ms: dict[tuple[str, PositionSide], int] = {}
         self._pressure_stats: Optional[PressureStatsCollector] = None
+        self._pressure_fill_recorded_orders: set[tuple[str, str]] = set()
+        self._pressure_trigger_signatures: dict[tuple[str, PositionSide], _PressureTriggerSignature] = {}
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
         self._external_takeover: dict[tuple[str, PositionSide], ExternalTakeoverState] = {}
         self._symbol_init_lock = asyncio.Lock()
@@ -663,10 +667,65 @@ class Application:
         for symbol in list(self._active_symbols):
             await self._sync_protective_stop(symbol=symbol, reason=reason)
 
+    def _record_pressure_fill_once(
+        self,
+        *,
+        symbol: str,
+        position_side: PositionSide,
+        order_id: str,
+        reason: str,
+        ts_ms: Optional[int] = None,
+    ) -> None:
+        """按 order_id 去重记录 pressure 订单的首次成交。"""
+        if not self._pressure_stats or reason not in _PRESSURE_REASONS or not order_id:
+            return
+
+        key = (symbol, order_id)
+        if key in self._pressure_fill_recorded_orders:
+            return
+        self._pressure_fill_recorded_orders.add(key)
+
+        self._pressure_stats.record_outcome(
+            symbol=symbol,
+            side=position_side.value,
+            is_active=(reason in _PRESSURE_ACTIVE_REASONS),
+            is_filled=True,
+            ts_ms=ts_ms if ts_ms is not None else current_time_ms(),
+        )
+
+    def _clear_pressure_trigger_signature(self, symbol: str, position_side: PositionSide) -> None:
+        self._pressure_trigger_signatures.pop((symbol, position_side), None)
+
+    def _record_pressure_trigger_edge(self, signal: ExitSignal, *, ts_ms: int) -> None:
+        """仅在 pressure signal 快照发生变化时记录 trigger。"""
+        if not self._pressure_stats or signal.strategy_mode != StrategyMode.ORDERBOOK_PRESSURE:
+            return
+
+        key = (signal.symbol, signal.position_side)
+        signature: _PressureTriggerSignature = (
+            signal.reason.value,
+            signal.best_bid,
+            signal.best_ask,
+            signal.last_trade_price,
+            signal.price_override,
+        )
+        if self._pressure_trigger_signatures.get(key) == signature:
+            return
+
+        self._pressure_trigger_signatures[key] = signature
+        self._pressure_stats.record_trigger(
+            symbol=signal.symbol,
+            side=signal.position_side.value,
+            is_active=(signal.execution_preference == SignalExecutionPreference.AGGRESSIVE),
+            mid_price=(signal.best_bid + signal.best_ask) / 2,
+            ts_ms=ts_ms,
+        )
+
     def _on_engine_fill(
         self,
         symbol: str,
         position_side: PositionSide,
+        order_id: str,
         mode: ExecutionMode,
         filled_qty: Decimal,
         avg_price: Decimal,
@@ -676,16 +735,13 @@ class Application:
         fee: Optional[Decimal],
         fee_asset: Optional[str],
     ) -> None:
-        """ExecutionEngine 成交回调：用于触发 Telegram 通知（不得阻塞）。"""
-        # 旁路记录 pressure 成交（O(1) deque append，不阻塞）
-        if self._pressure_stats and reason in _PRESSURE_REASONS:
-            self._pressure_stats.record_outcome(
-                symbol=symbol,
-                side=position_side.value,
-                is_active=(reason in _PRESSURE_ACTIVE_REASONS),
-                is_filled=True,
-                ts_ms=current_time_ms(),
-            )
+        """ExecutionEngine 完全成交回调：用于去重记录 stats 首次成交并触发 Telegram。"""
+        self._record_pressure_fill_once(
+            symbol=symbol,
+            position_side=position_side,
+            order_id=order_id,
+            reason=reason,
+        )
 
         if not self.config_loader or not self.telegram_notifier:
             return
@@ -1559,7 +1615,22 @@ class Application:
         """异步处理订单更新"""
         engine = self.execution_engines.get(update.symbol)
         if engine:
+            partial_fill_reason: Optional[str] = None
+            if update.status == OrderStatus.PARTIALLY_FILLED and update.filled_qty > Decimal("0"):
+                state = engine.get_state(update.symbol, update.position_side)
+                if state.current_order_id == update.order_id and state.current_order_reason in _PRESSURE_REASONS:
+                    partial_fill_reason = state.current_order_reason
+
             await engine.on_order_update(update, current_time_ms())
+
+            if partial_fill_reason is not None:
+                self._record_pressure_fill_once(
+                    symbol=update.symbol,
+                    position_side=update.position_side,
+                    order_id=update.order_id,
+                    reason=partial_fill_reason,
+                    ts_ms=update.timestamp_ms,
+                )
         if self.protective_stop_manager:
             await self.protective_stop_manager.on_order_update(update)
             if update.client_order_id.startswith(PROTECTIVE_STOP_PREFIX):
@@ -2194,17 +2265,12 @@ class Application:
             current_ms=current_ms,
         )
 
-        if signal:
-            # 旁路记录 pressure 信号（用于统计，不影响交易路径）
-            if signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE and self._pressure_stats:
-                self._pressure_stats.record_signal(
-                    symbol=symbol,
-                    side=position_side.value,
-                    is_active=(signal.execution_preference == SignalExecutionPreference.AGGRESSIVE),
-                    mid_price=(signal.best_bid + signal.best_ask) / 2,
-                    ts_ms=current_ms,
-                )
+        if signal and signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE:
+            self._record_pressure_trigger_edge(signal, ts_ms=current_ms)
+        else:
+            self._clear_pressure_trigger_signature(symbol, position_side)
 
+        if signal:
             # 风险兜底：接近强平时强制更激进的执行模式（优先级高于普通 maker）
             # orderbook_price：切换执行模式到 AGGRESSIVE_LIMIT
             # orderbook_pressure：仅做日志/告警，不改写信号的主动/被动语义（panic_close 兜底）
@@ -2272,9 +2338,18 @@ class Application:
 
                 # 更新仓位
                 if result.success:
+                    if signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE and self._pressure_stats:
+                        self._pressure_stats.record_attempt(
+                            symbol=symbol,
+                            side=position_side.value,
+                            is_active=(signal.execution_preference == SignalExecutionPreference.AGGRESSIVE),
+                            mid_price=(signal.best_bid + signal.best_ask) / 2,
+                            ts_ms=current_ms,
+                        )
                     await self._refresh_position(symbol)
 
     def _reset_pressure_dwell(self, symbol: str, position_side: PositionSide, *, reason: str) -> None:
+        self._clear_pressure_trigger_signature(symbol, position_side)
         if not self.signal_engine:
             return
         self.signal_engine.reset_pressure_dwell(symbol, position_side, reason=reason)

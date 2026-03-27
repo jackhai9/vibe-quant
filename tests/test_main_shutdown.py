@@ -11,6 +11,7 @@ import asyncio
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,7 +23,10 @@ from src.models import (
     ExecutionState,
     ExitSignal,
     MarketState,
+    OrderSide,
+    OrderStatus,
     OrderResult,
+    OrderUpdate,
     SignalExecutionPreference,
     SignalReason,
     StrategyMode,
@@ -61,6 +65,7 @@ class DummyWS:
 @pytest.mark.asyncio
 async def test_evaluate_symbol_side_resets_pressure_dwell_on_market_stale():
     app = Application.__new__(Application)
+    app._pressure_trigger_signatures = {}
     app.signal_engine = MagicMock()
     app.signal_engine.is_strategy_data_stale.return_value = False
     app.config_loader = MagicMock()
@@ -95,6 +100,7 @@ async def test_evaluate_symbol_side_resets_pressure_dwell_on_market_stale():
 @pytest.mark.asyncio
 async def test_evaluate_symbol_side_resets_pressure_dwell_on_flat_position():
     app = Application.__new__(Application)
+    app._pressure_trigger_signatures = {}
     app.signal_engine = MagicMock()
     app.config_loader = MagicMock()
     app._calibrating = False
@@ -163,6 +169,8 @@ def _make_pressure_eval_app(
     app.pause_manager.is_paused.return_value = False
     app.telegram_notifier = None
     app._pressure_stats = None
+    app._pressure_fill_recorded_orders = set()
+    app._pressure_trigger_signatures = {}
     app.market_ws = MagicMock()
     app.market_ws.is_stale.return_value = False
     app.exchange = MagicMock()
@@ -309,6 +317,246 @@ async def test_evaluate_side_risk_does_not_trigger_preempt_for_pressure_passive(
 
 
 @pytest.mark.asyncio
+async def test_evaluate_side_pressure_stats_skip_repeated_waiting_signal():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.PASSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("9.8"),
+        ttl_override_ms=10_000,
+        cooldown_override_ms=0,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=False,
+        state_preset=ExecutionState.WAITING,
+        current_passive_order=True,
+    )
+    app._pressure_stats = MagicMock()
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        current_ms=1000,
+    )
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        current_ms=1100,
+    )
+
+    app._pressure_stats.record_trigger.assert_called_once_with(
+        symbol=symbol,
+        side=PositionSide.SHORT.value,
+        is_active=False,
+        mid_price=Decimal("9.95"),
+        ts_ms=1000,
+    )
+    app._pressure_stats.record_attempt.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_pressure_stats_record_only_successful_attempt():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.PASSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("9.8"),
+        ttl_override_ms=10_000,
+        cooldown_override_ms=0,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=False,
+    )
+    app._pressure_stats = MagicMock()
+
+    async def place_order_stub(_intent):
+        return OrderResult(success=True, order_id="order-1", status=OrderStatus.NEW)
+
+    async def retry_passthrough(**kwargs):
+        return kwargs["intent"], kwargs["result"], False
+
+    app._place_order = place_order_stub  # type: ignore[method-assign]
+    app._maybe_retry_post_only_reject = retry_passthrough  # type: ignore[method-assign]
+    app._refresh_position = AsyncMock()  # type: ignore[method-assign]
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        current_ms=1000,
+    )
+
+    app._pressure_stats.record_attempt.assert_called_once_with(
+        symbol=symbol,
+        side=PositionSide.SHORT.value,
+        is_active=False,
+        mid_price=Decimal("9.95"),
+        ts_ms=1000,
+    )
+    app._pressure_stats.record_trigger.assert_called_once_with(
+        symbol=symbol,
+        side=PositionSide.SHORT.value,
+        is_active=False,
+        mid_price=Decimal("9.95"),
+        ts_ms=1000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_pressure_trigger_rearms_after_signal_clears():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.1"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+        execution_preference=SignalExecutionPreference.PASSIVE,
+        qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+        price_override=Decimal("9.8"),
+        ttl_override_ms=10_000,
+        cooldown_override_ms=0,
+        fixed_lot_mult=5,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.SHORT,
+        position_amt=Decimal("-5"),
+        signal=signal,
+        risk_triggered=False,
+        state_preset=ExecutionState.WAITING,
+        current_passive_order=True,
+    )
+    app._pressure_stats = MagicMock()
+    signal_engine = cast(MagicMock, app.signal_engine)
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=signal_engine.get_market_state(symbol),
+        current_ms=1000,
+    )
+
+    signal_engine.evaluate.return_value = None
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=signal_engine.get_market_state(symbol),
+        current_ms=1100,
+    )
+
+    signal_engine.evaluate.return_value = signal
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.SHORT,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=signal_engine.get_market_state(symbol),
+        current_ms=1200,
+    )
+
+    assert app._pressure_stats.record_trigger.call_count == 2
+    assert app._pressure_stats.record_attempt.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_order_update_pressure_partial_fill_recorded_once():
+    app = Application.__new__(Application)
+    app._pressure_stats = MagicMock()
+    app._pressure_fill_recorded_orders = set()
+    app._pressure_trigger_signatures = {}
+    app.config_loader = None
+    app.telegram_notifier = None
+    app.protective_stop_manager = None
+    app.execution_engines = {}
+
+    engine = ExecutionEngine(
+        place_order=AsyncMock(return_value=OrderResult(success=True, order_id="order-1")),
+        cancel_order=AsyncMock(return_value=OrderResult(success=True, order_id="order-1")),
+        on_fill=app._on_engine_fill,  # type: ignore[arg-type]
+    )
+    app.execution_engines["DASH/USDT:USDT"] = engine
+
+    state = engine.get_state("DASH/USDT:USDT", PositionSide.SHORT)
+    state.state = ExecutionState.WAITING
+    state.current_order_id = "order-1"
+    state.current_order_reason = SignalReason.SHORT_BID_PRESSURE_PASSIVE.value
+    state.current_order_mode = ExecutionMode.MAKER_ONLY
+
+    partial = OrderUpdate(
+        symbol="DASH/USDT:USDT",
+        order_id="order-1",
+        client_order_id="client-1",
+        side=OrderSide.BUY,
+        position_side=PositionSide.SHORT,
+        status=OrderStatus.PARTIALLY_FILLED,
+        filled_qty=Decimal("0.001"),
+        avg_price=Decimal("10"),
+        timestamp_ms=1000,
+    )
+    filled = OrderUpdate(
+        symbol="DASH/USDT:USDT",
+        order_id="order-1",
+        client_order_id="client-1",
+        side=OrderSide.BUY,
+        position_side=PositionSide.SHORT,
+        status=OrderStatus.FILLED,
+        filled_qty=Decimal("0.002"),
+        avg_price=Decimal("10"),
+        timestamp_ms=1100,
+    )
+
+    await app._handle_order_update(partial)
+    await app._handle_order_update(filled)
+
+    app._pressure_stats.record_outcome.assert_called_once_with(
+        symbol="DASH/USDT:USDT",
+        side=PositionSide.SHORT.value,
+        is_active=False,
+        is_filled=True,
+        ts_ms=partial.timestamp_ms,
+    )
+
+
+@pytest.mark.asyncio
 async def test_evaluate_side_liq_distance_logs_only_on_entry():
     symbol = "DASH/USDT:USDT"
     signal = ExitSignal(
@@ -384,7 +632,8 @@ async def test_evaluate_side_liq_distance_logs_recovery_once():
         signal=signal,
         risk_triggered=True,
     )
-    app.signal_engine.evaluate.return_value = None
+    signal_engine = cast(MagicMock, app.signal_engine)
+    signal_engine.evaluate.return_value = None
     state = engine.get_state(symbol, PositionSide.SHORT)
 
     await app._evaluate_side(
@@ -392,12 +641,13 @@ async def test_evaluate_side_liq_distance_logs_recovery_once():
         position_side=PositionSide.SHORT,
         engine=engine,
         rules=app._rules[symbol],
-        market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+        market_state=signal_engine.get_market_state(symbol),
         current_ms=1000,
     )
     assert state.liq_distance_active is True
 
-    app.risk_manager.check_risk.return_value = RiskFlag(
+    risk_manager = cast(MagicMock, app.risk_manager)
+    risk_manager.check_risk.return_value = RiskFlag(
         symbol=symbol,
         position_side=PositionSide.SHORT,
         is_triggered=False,
@@ -411,7 +661,7 @@ async def test_evaluate_side_liq_distance_logs_recovery_once():
             position_side=PositionSide.SHORT,
             engine=engine,
             rules=app._rules[symbol],
-            market_state=app.signal_engine.get_market_state(symbol),  # type: ignore[union-attr]
+            market_state=signal_engine.get_market_state(symbol),
             current_ms=1100,
         )
 

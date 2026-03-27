@@ -70,6 +70,7 @@ class ExecutionEngine:
                 [
                     str,
                     PositionSide,
+                    str,
                     ExecutionMode,
                     Decimal,
                     Decimal,
@@ -841,6 +842,7 @@ class ExecutionEngine:
                     self._on_fill(
                         state.symbol,
                         state.position_side,
+                        state.last_completed_order_id or "",
                         state.last_completed_mode or state.mode,
                         state.last_completed_filled_qty,
                         state.last_completed_avg_price,
@@ -898,6 +900,7 @@ class ExecutionEngine:
                         self._on_fill(
                             update.symbol,
                             update.position_side,
+                            update.order_id,
                             state.last_completed_mode or state.mode,
                             state.last_completed_filled_qty,
                             state.last_completed_avg_price,
@@ -1022,6 +1025,7 @@ class ExecutionEngine:
                 self._on_fill(
                     symbol,
                     position_side,
+                    order_id,
                     order_mode,
                     filled_qty,
                     avg_price,
