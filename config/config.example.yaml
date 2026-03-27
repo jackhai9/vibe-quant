@@ -160,7 +160,7 @@ symbols:
   #     # 下单数量
   #     use_roi_mult: false        # 显式覆盖 pressure 的 ROI 倍数开关；不写时继承 execution.use_roi_mult
   #     use_accel_mult: false      # 显式覆盖 pressure 的 accel 倍数开关；不写时继承 execution.use_accel_mult
-  #     qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小做双边抖动，0 = 关闭
+  #     qty_jitter_pct: 0.15       # 最终下单量围绕基准片大小做双边抖动，0 = 关闭
   #     qty_anti_repeat_lookback: 3  # 尽量避开最近 N 笔已成功提交的相同数量，0 = 关闭
   #     # 主动路径节奏
   #     active_recheck_cooldown_ms: 1000  # 主动单终态后的重检冷却（毫秒）

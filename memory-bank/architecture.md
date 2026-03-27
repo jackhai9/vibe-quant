@@ -89,8 +89,8 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **ConfigManager** | 加载 YAML 配置，支持 global + symbol 覆盖 | config.yaml | 配置对象 |
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断；在 `-4118` 后复核同侧普通平仓挂单是否已覆盖剩余可交易仓位 | 配置, OrderIntent | OrderResult, Position |
-| **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；产出公共 ROI/accel sizing context；`orderbook_pressure` 生成带 TTL/cooldown jitter、固定数量 jitter 与 burst pacing 元数据的 ExitSignal，并可显式启用公共倍数 | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 固定片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
+| **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；产出公共 ROI/accel sizing context；`orderbook_pressure` 生成带 TTL/cooldown jitter、基准片大小 jitter 与 burst pacing 元数据的 ExitSignal，并可显式启用公共倍数 | MarketEvent, Position | ExitSignal |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 的基准片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |

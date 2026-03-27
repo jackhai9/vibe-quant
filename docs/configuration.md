@@ -687,7 +687,7 @@ symbols:
 - **默认值**: `"orderbook_price"`
 - **说明**:
   - `orderbook_price`：沿用原有 trade/best bid/ask 触发逻辑、执行模式轮转，并默认启用 `execution.use_roi_mult` / `execution.use_accel_mult`；可在 `symbols.<symbol>.execution.use_*` 单独覆盖
-  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `orderbook_price` 互斥，不并行运行；其固定基准片大小默认也来自 `execution.base_mult`，并可按配置显式启用公共 ROI/accel sizing modifiers
+  - `orderbook_pressure`：启用盘口量平仓路径；同一 symbol 上与 `orderbook_price` 互斥，不并行运行；其基准片大小默认也来自 `execution.base_mult`，并可按配置显式启用公共 ROI/accel sizing modifiers
 
 #### pressure_exit
 - **生效条件**: 仅当 `strategy.mode == "orderbook_pressure"` 时参与运行
@@ -702,12 +702,12 @@ symbols:
   - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
   - 下单数量
   - 基准片大小来自 `execution.base_mult`；若需按 symbol 调整基准量，在 `symbols.<symbol>.execution.base_mult` 覆盖
-  - `use_roi_mult`: 是否对固定基准片大小叠加公共 `roi_mult`；未配置时继承 `execution.use_roi_mult`
-  - `use_accel_mult`: 是否对固定基准片大小叠加公共 `accel_mult`；未配置时继承 `execution.use_accel_mult`
-  - 当上述开关启用时，固定片会在 `execution.base_mult` 基准上叠加公共倍数，并继续受 `execution.max_mult` 硬上限约束
-  - 固定片路径同样受 `execution.max_order_notional` 约束；若单笔名义价值上限过低，规整后数量可能直接变成 `0`
-  - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的固定片最终数量为中心做双边 jitter，再 clamp 到剩余仓位
-  - `qty_anti_repeat_lookback`: 固定片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）
+  - `use_roi_mult`: 是否对基准片大小叠加公共 `roi_mult`；未配置时继承 `execution.use_roi_mult`
+  - `use_accel_mult`: 是否对基准片大小叠加公共 `accel_mult`；未配置时继承 `execution.use_accel_mult`
+  - 当上述开关启用时，数量会在 `execution.base_mult` 对应的基准片大小上叠加公共倍数，并继续受 `execution.max_mult` 硬上限约束
+  - 该路径同样受 `execution.max_order_notional` 约束；若单笔名义价值上限过低，规整后数量可能直接变成 `0`
+  - `qty_jitter_pct`: 基准片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的最终数量为中心做双边 jitter，再 clamp 到剩余仓位
+  - `qty_anti_repeat_lookback`: 基准片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）
   - 主动路径节奏
   - `active_recheck_cooldown_ms`: 主动单终态后的重检冷却
   - `active_recheck_cooldown_jitter_pct`: 主动单重检冷却的随机抖动比例（`0` = 关闭）
@@ -738,7 +738,7 @@ symbols:
       # 下单数量
       use_roi_mult: false        # 显式覆盖 pressure 的 ROI 倍数开关；不写时继承 execution.use_roi_mult
       use_accel_mult: false      # 显式覆盖 pressure 的 accel 倍数开关；不写时继承 execution.use_accel_mult
-      qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小双边抖动 15%
+      qty_jitter_pct: 0.15       # 最终下单量围绕基准片大小双边抖动 15%
       qty_anti_repeat_lookback: 3  # 尽量避开最近 3 笔已成功提交的相同数量
       # 主动路径节奏
       active_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
@@ -760,9 +760,9 @@ symbols:
 - 主动条件未成立时，仅挂 1 笔固定档位的被动单
 - 被动档位不存在或盘口数据不完整时，本轮跳过，不猜价格
 - `bookTicker` 与 `depth10` 任一来源 stale 时，本轮跳过，并重置主动条件 dwell
-- 新模式默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；若在 `pressure_exit.use_*` 显式配置，则以 pressure 自己的值为准。启用后会在 `execution.base_mult` 的固定基准片大小上叠加公共倍数，并同时受 `execution.max_mult` 与 `execution.max_order_notional` 约束
-- `qty_jitter_pct` 作用在最终规整后的固定片大小，不再通过缩窄 `base_mult` 来单边抖动
-- `qty_anti_repeat_lookback` 只参考最近几笔已成功提交的 `orderbook_pressure` 固定数量订单
+- 新模式默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`；若在 `pressure_exit.use_*` 显式配置，则以 pressure 自己的值为准。启用后会在 `execution.base_mult` 对应的基准片大小上叠加公共倍数，并同时受 `execution.max_mult` 与 `execution.max_order_notional` 约束
+- `qty_jitter_pct` 作用在最终规整后的基准片大小，不再通过缩窄 `base_mult` 来单边抖动
+- `qty_anti_repeat_lookback` 只参考最近几笔已成功提交的 `orderbook_pressure` 订单数量
 - `active_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
 - `active_burst_*` 只作用于 `orderbook_pressure` 的主动单；触发后不会停掉整个 symbol，而是把 active 临时回落到 passive
 - active burst 统计使用“成功下单”和“首次成交”两类事件，窗口内任一阈值命中都可触发 pause
