@@ -8,10 +8,10 @@
 信号评估与节流。<br>
 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估退出条件。<br>
 `orderbook_price` 基于 trade 动能 + bookTicker 判断，计算 accel/ROI 倍数。<br>
-`orderbook_pressure` 基于 bookTicker 顶档量 + depth10 档位，生成带 `price/ttl/cooldown/qty_policy` 覆盖的信号。<br>
+`orderbook_pressure` 基于 bookTicker 顶档量 + depth10 档位，生成带 `price/ttl/cooldown/qty_policy` 覆盖的信号，并附带固定片大小 jitter/anti-repeat 元数据。<br>
 输出 ExitSignal 给执行引擎。
 
 ## 文件清单
 
-- `engine.py`：信号判断、倍数计算、盘口量 dwell 与来源 freshness 维护
+- `engine.py`：信号判断、倍数计算、盘口量 dwell 与来源 freshness 维护，以及 pressure TTL/cooldown jitter
 - `__init__.py`：模块导出

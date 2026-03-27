@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, and liq-distance-aware mode holding)
-# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, and liq-distance-aware mode holding
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, liq-distance-aware mode holding, and pressure qty jitter/anti-repeat)
+# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, liq-distance-aware mode holding, and pressure anti-repeat sizing
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -25,7 +25,8 @@ IDLE → PLACING → WAITING → (FILLED|TIMEOUT) → CANCELING → COOLDOWN →
 """
 
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Callable, Dict, Optional, Awaitable
+from random import randint
+from typing import Callable, Dict, Optional, Awaitable, Sequence
 
 from src.models import (
     ExitSignal,
@@ -55,7 +56,7 @@ from src.utils.logger import (
     log_order_timeout,
     log_event,
 )
-from src.utils.helpers import round_to_tick, round_to_step
+from src.utils.helpers import round_to_tick, round_to_step, round_up_to_step
 
 
 class ExecutionEngine:
@@ -495,6 +496,9 @@ class ExecutionEngine:
                 min_qty=rules.min_qty,
                 step_size=rules.step_size,
                 lot_mult=signal.fixed_lot_mult or 1,
+                qty_jitter_pct=signal.fixed_qty_jitter_pct or Decimal("0"),
+                anti_repeat_lookback=signal.fixed_qty_anti_repeat_lookback or 0,
+                recent_qtys=state.recent_fixed_order_qtys,
             )
         else:
             qty = self.compute_qty(
@@ -713,6 +717,11 @@ class ExecutionEngine:
             state.current_order_id = result.order_id
             state.current_order_placed_ms = current_ms
             state.current_order_filled_qty = result.filled_qty
+            if (
+                not intent.is_risk
+                and state.current_order_strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
+            ):
+                state.recent_fixed_order_qtys.append(intent.qty)
 
             log_order_place(
                 symbol=intent.symbol,
@@ -1655,18 +1664,65 @@ class ExecutionEngine:
         min_qty: Decimal,
         step_size: Decimal,
         lot_mult: int,
+        qty_jitter_pct: Decimal = Decimal("0"),
+        anti_repeat_lookback: int = 0,
+        recent_qtys: Optional[Sequence[Decimal]] = None,
     ) -> Decimal:
-        """按 min_qty × lot_mult 计算固定片大小，只受仓位与步进约束。"""
+        """按 min_qty × lot_mult 计算固定片大小，并在最终可下单量上做 jitter/anti-repeat。"""
         abs_position = abs(position_amt)
         if abs_position < min_qty:
             return Decimal("0")
 
         fixed_mult = max(int(lot_mult), 1)
-        qty = min(min_qty * fixed_mult, abs_position)
-        qty = round_to_step(qty, step_size)
-        if qty < min_qty:
+        base_qty = min(min_qty * fixed_mult, abs_position)
+        base_qty = round_to_step(base_qty, step_size)
+        if base_qty < min_qty:
             return Decimal("0")
-        return qty
+
+        if qty_jitter_pct <= Decimal("0"):
+            return base_qty
+
+        min_qty_candidate = round_up_to_step(
+            max(min_qty, base_qty * (Decimal("1") - qty_jitter_pct)),
+            step_size,
+        )
+        max_qty_candidate = round_to_step(
+            min(abs_position, base_qty * (Decimal("1") + qty_jitter_pct)),
+            step_size,
+        )
+
+        if max_qty_candidate < min_qty:
+            return Decimal("0")
+        if min_qty_candidate > max_qty_candidate:
+            return base_qty
+
+        min_step = int(min_qty_candidate / step_size)
+        max_step = int(max_qty_candidate / step_size)
+        if min_step >= max_step:
+            return min_qty_candidate
+
+        blocked_qtys: set[Decimal] = set()
+        lookback = max(int(anti_repeat_lookback), 0)
+        if recent_qtys is not None and lookback > 0:
+            blocked_qtys = {
+                qty
+                for qty in list(recent_qtys)[-lookback:]
+                if min_qty_candidate <= qty <= max_qty_candidate
+            }
+
+        step_span = max_step - min_step + 1
+        all_candidates_blocked = step_span <= len(blocked_qtys)
+        max_attempts = min(8, step_span)
+
+        candidate = base_qty
+        for _ in range(max_attempts):
+            candidate = step_size * randint(min_step, max_step)
+            if candidate < min_qty or candidate > abs_position:
+                continue
+            if all_candidates_blocked or candidate not in blocked_qtys:
+                return candidate
+
+        return candidate if candidate >= min_qty else base_qty
 
     def is_position_done(self, position_amt: Decimal, min_qty: Decimal, step_size: Decimal) -> bool:
         """

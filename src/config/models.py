@@ -247,14 +247,32 @@ class PressureExitConfig(BaseModel):
         default=Decimal("0.15"),
         ge=Decimal("0"),
         le=Decimal("1"),
-        description="平仓量随机抖动比例，0 = 关闭",
+        description="固定平仓量的实际下单量随机抖动比例，0 = 关闭",
+    )
+    qty_anti_repeat_lookback: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="固定平仓量 anti-repeat 回看笔数，0 = 关闭",
     )
     aggressive_recheck_cooldown_ms: int = Field(
         default=1000,
         ge=0,
         description="主动单终态后的重检冷却(ms)",
     )
+    aggressive_recheck_cooldown_jitter_pct: Decimal = Field(
+        default=Decimal("0.15"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+        description="主动单重检冷却随机抖动比例，0 = 关闭",
+    )
     passive_ttl_ms: int = Field(default=10000, ge=1, description="被动单 TTL(ms)")
+    passive_ttl_jitter_pct: Decimal = Field(
+        default=Decimal("0.15"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+        description="被动单 TTL 随机抖动比例，0 = 关闭",
+    )
 
 
 # ============================================================
@@ -393,8 +411,11 @@ class MergedSymbolConfig(BaseModel):
     pressure_exit_passive_level: Optional[int]
     pressure_exit_lot_mult: Optional[int]
     pressure_exit_aggressive_recheck_cooldown_ms: Optional[int]
+    pressure_exit_aggressive_recheck_cooldown_jitter_pct: Optional[Decimal]
     pressure_exit_passive_ttl_ms: Optional[int]
+    pressure_exit_passive_ttl_jitter_pct: Optional[Decimal]
     pressure_exit_qty_jitter_pct: Optional[Decimal]
+    pressure_exit_qty_anti_repeat_lookback: Optional[int]
 
     # WS
     stale_data_ms: int

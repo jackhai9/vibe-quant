@@ -1,6 +1,6 @@
 # Input: MarketEvent, Position, config
-# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure
-# Pos: signal evaluation engine
+# Output: ExitSignal and per-symbol runtime gating for orderbook_price/orderbook_pressure (including pressure timing jitter)
+# Pos: signal evaluation engine with pressure dwell/freshness and TTL/cooldown jitter
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -51,7 +51,10 @@ class PressureSignalConfig:
     lot_mult: int
     aggressive_recheck_cooldown_ms: int
     passive_ttl_ms: int
+    aggressive_recheck_cooldown_jitter_pct: Decimal = Decimal("0.15")
+    passive_ttl_jitter_pct: Decimal = Decimal("0.15")
     qty_jitter_pct: Decimal = Decimal("0.15")
+    qty_anti_repeat_lookback: int = 3
 
 
 class SignalEngine:
@@ -300,12 +303,6 @@ class SignalEngine:
         if cfg is None:
             return None
 
-        if cfg.qty_jitter_pct > 0 and cfg.lot_mult > 1:
-            jitter_range = max(1, round(cfg.lot_mult * float(cfg.qty_jitter_pct)))
-            actual_mult = randint(max(1, cfg.lot_mult - jitter_range), cfg.lot_mult)
-        else:
-            actual_mult = cfg.lot_mult
-
         dwell_key = f"{symbol}:{position_side.value}"
         active_qty = state.best_bid_qty if position_side == PositionSide.LONG else state.best_ask_qty
         if active_qty > cfg.threshold_qty:
@@ -337,8 +334,14 @@ class SignalEngine:
                 qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
                 price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
                 ttl_override_ms=None,
-                cooldown_override_ms=cfg.aggressive_recheck_cooldown_ms,
-                fixed_lot_mult=actual_mult,
+                cooldown_override_ms=self._jitter_duration_ms(
+                    cfg.aggressive_recheck_cooldown_ms,
+                    cfg.aggressive_recheck_cooldown_jitter_pct,
+                    minimum_ms=0,
+                ),
+                fixed_lot_mult=cfg.lot_mult,
+                fixed_qty_jitter_pct=cfg.qty_jitter_pct,
+                fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
             )
             self._log_signal_if_changed(dwell_key, signal, state)
             return signal
@@ -378,12 +381,30 @@ class SignalEngine:
             execution_preference=SignalExecutionPreference.PASSIVE,
             qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=passive_price,
-            ttl_override_ms=cfg.passive_ttl_ms,
+            ttl_override_ms=self._jitter_duration_ms(
+                cfg.passive_ttl_ms,
+                cfg.passive_ttl_jitter_pct,
+                minimum_ms=1,
+            ),
             cooldown_override_ms=0,
-            fixed_lot_mult=actual_mult,
+            fixed_lot_mult=cfg.lot_mult,
+            fixed_qty_jitter_pct=cfg.qty_jitter_pct,
+            fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
         )
         self._log_signal_if_changed(dwell_key, signal, state)
         return signal
+
+    @staticmethod
+    def _jitter_duration_ms(base_ms: int, jitter_pct: Decimal, *, minimum_ms: int) -> int:
+        if base_ms <= 0:
+            return 0 if minimum_ms == 0 else minimum_ms
+        if jitter_pct <= 0:
+            return max(base_ms, minimum_ms)
+
+        jitter_range = max(1, round(base_ms * float(jitter_pct)))
+        lower = max(minimum_ms, base_ms - jitter_range)
+        upper = max(lower, base_ms + jitter_range)
+        return randint(lower, upper)
 
     def _resolve_passive_price(
         self,

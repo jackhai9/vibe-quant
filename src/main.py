@@ -1742,8 +1742,11 @@ class Application:
                 passive_level = cfg.pressure_exit_passive_level
                 lot_mult = cfg.pressure_exit_lot_mult
                 aggressive_recheck_cooldown_ms = cfg.pressure_exit_aggressive_recheck_cooldown_ms
+                aggressive_recheck_cooldown_jitter_pct = cfg.pressure_exit_aggressive_recheck_cooldown_jitter_pct
                 passive_ttl_ms = cfg.pressure_exit_passive_ttl_ms
+                passive_ttl_jitter_pct = cfg.pressure_exit_passive_ttl_jitter_pct
                 qty_jitter_pct = cfg.pressure_exit_qty_jitter_pct
+                qty_anti_repeat_lookback = cfg.pressure_exit_qty_anti_repeat_lookback
                 if (
                     threshold_qty is None
                     or sustain_ms is None
@@ -1761,7 +1764,18 @@ class Application:
                     lot_mult=lot_mult,
                     aggressive_recheck_cooldown_ms=aggressive_recheck_cooldown_ms,
                     passive_ttl_ms=passive_ttl_ms,
+                    aggressive_recheck_cooldown_jitter_pct=(
+                        aggressive_recheck_cooldown_jitter_pct
+                        if aggressive_recheck_cooldown_jitter_pct is not None
+                        else Decimal("0.15")
+                    ),
+                    passive_ttl_jitter_pct=(
+                        passive_ttl_jitter_pct
+                        if passive_ttl_jitter_pct is not None
+                        else Decimal("0.15")
+                    ),
                     qty_jitter_pct=qty_jitter_pct if qty_jitter_pct is not None else Decimal("0.15"),
+                    qty_anti_repeat_lookback=qty_anti_repeat_lookback if qty_anti_repeat_lookback is not None else 3,
                 )
 
             self.signal_engine.configure_symbol(

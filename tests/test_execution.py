@@ -11,7 +11,7 @@ import pytest
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from src.execution.engine import ExecutionEngine
 from src.models import (
@@ -337,6 +337,148 @@ class TestOrderbookPressureExecution:
             lot_mult=5,
         )
         assert qty == Decimal("0.002")
+
+    def test_compute_fixed_qty_supports_two_sided_jitter(self, engine):
+        with patch("src.execution.engine.randint", return_value=23):
+            qty = engine.compute_fixed_qty(
+                position_amt=Decimal("0.050"),
+                min_qty=Decimal("0.001"),
+                step_size=Decimal("0.001"),
+                lot_mult=20,
+                qty_jitter_pct=Decimal("0.15"),
+            )
+        assert qty == Decimal("0.023")
+
+    def test_compute_fixed_qty_avoids_recent_repeated_sizes(self, engine):
+        with patch("src.execution.engine.randint", side_effect=[20, 21]):
+            qty = engine.compute_fixed_qty(
+                position_amt=Decimal("0.050"),
+                min_qty=Decimal("0.001"),
+                step_size=Decimal("0.001"),
+                lot_mult=20,
+                qty_jitter_pct=Decimal("0.15"),
+                anti_repeat_lookback=3,
+                recent_qtys=[Decimal("0.020")],
+            )
+        assert qty == Decimal("0.021")
+
+    @pytest.mark.asyncio
+    async def test_fixed_qty_anti_repeat_tracks_successful_pressure_orders_only(self, engine, symbol_rules, market_state):
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.PASSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=Decimal("49999.5"),
+            ttl_override_ms=10000,
+            cooldown_override_ms=0,
+            fixed_lot_mult=20,
+            fixed_qty_jitter_pct=Decimal("0.15"),
+            fixed_qty_anti_repeat_lookback=3,
+        )
+
+        with patch("src.execution.engine.randint", return_value=20):
+            first_intent = await engine.on_signal(
+                signal=signal,
+                position_amt=Decimal("-0.050"),
+                rules=symbol_rules,
+                market_state=market_state,
+                current_ms=1000,
+            )
+        assert first_intent is not None
+        assert first_intent.qty == Decimal("0.020")
+
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        assert list(state.recent_fixed_order_qtys) == []
+
+        await engine.on_order_placed(
+            intent=first_intent,
+            result=OrderResult(
+                success=True,
+                order_id="pressure_1",
+                status=OrderStatus.NEW,
+                filled_qty=Decimal("0"),
+                avg_price=Decimal("0"),
+            ),
+            current_ms=1001,
+        )
+        assert list(state.recent_fixed_order_qtys) == [Decimal("0.020")]
+
+        state.state = ExecutionState.IDLE
+        state.current_order_id = None
+
+        with patch("src.execution.engine.randint", side_effect=[20, 21]):
+            second_intent = await engine.on_signal(
+                signal=signal,
+                position_amt=Decimal("-0.050"),
+                rules=symbol_rules,
+                market_state=market_state,
+                current_ms=1200,
+            )
+        assert second_intent is not None
+        assert second_intent.qty == Decimal("0.021")
+
+    @pytest.mark.asyncio
+    async def test_failed_pressure_order_does_not_poison_anti_repeat_history(self, engine, symbol_rules, market_state):
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.SHORT,
+            reason=SignalReason.SHORT_BID_PRESSURE_PASSIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("50000"),
+            best_ask=Decimal("50001"),
+            last_trade_price=Decimal("50000.5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.PASSIVE,
+            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
+            price_override=Decimal("49999.5"),
+            ttl_override_ms=10000,
+            cooldown_override_ms=0,
+            fixed_lot_mult=20,
+            fixed_qty_jitter_pct=Decimal("0.15"),
+            fixed_qty_anti_repeat_lookback=3,
+        )
+
+        with patch("src.execution.engine.randint", return_value=20):
+            first_intent = await engine.on_signal(
+                signal=signal,
+                position_amt=Decimal("-0.050"),
+                rules=symbol_rules,
+                market_state=market_state,
+                current_ms=1000,
+            )
+        assert first_intent is not None
+
+        await engine.on_order_placed(
+            intent=first_intent,
+            result=OrderResult(
+                success=False,
+                error_message="network",
+            ),
+            current_ms=1001,
+        )
+
+        state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
+        assert list(state.recent_fixed_order_qtys) == []
+
+        state.state = ExecutionState.IDLE
+
+        with patch("src.execution.engine.randint", return_value=20):
+            second_intent = await engine.on_signal(
+                signal=signal,
+                position_amt=Decimal("-0.050"),
+                rules=symbol_rules,
+                market_state=market_state,
+                current_ms=1200,
+            )
+        assert second_intent is not None
+        assert second_intent.qty == Decimal("0.020")
 
     @pytest.mark.asyncio
     async def test_filled_order_enters_strategy_cooldown(self, engine, symbol_rules, market_state):

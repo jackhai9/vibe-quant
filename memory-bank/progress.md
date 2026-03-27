@@ -94,15 +94,16 @@
 ## Milestone/附加改进：`orderbook_pressure` 平仓量随机抖动
 
 **状态**：✅ 已完成<br>
-**日期**：2026-03-24
+**日期**：2026-03-27
 
-**动机**：`orderbook_pressure` 每次平仓量固定为 `min_qty × lot_mult`，容易在公开成交记录中被识别为程序化交易模式。<br>
+**动机**：`orderbook_pressure` 旧实现只会在 `lot_mult` 上做窄幅、单边抖动，公开成交数量和节拍仍然容易暴露同一程序的模式。<br>
 **产出**：
 
-- `src/config/models.py`：`PressureExitConfig` 新增 `qty_jitter_pct`（默认 `0.15`，`0` = 关闭）
-- `src/signal/engine.py`：`_evaluate_orderbook_pressure` 在方法顶部按 `qty_jitter_pct` 随机化 `lot_mult`，active 和 passive 两条路径统一适用
-- `docs/configuration.md`、`config/config.yaml`、`config/config.example.yaml`：同步配置说明
-- `tests/test_signal.py`：补充 jitter=0 / lot_mult=1 / lot_mult=20 边界测试
+- `src/config/models.py` / `src/config/loader.py`：`PressureExitConfig` 增加 `qty_anti_repeat_lookback`、`aggressive_recheck_cooldown_jitter_pct`、`passive_ttl_jitter_pct`，并补齐 symbol 级合并字段
+- `src/signal/engine.py`：`orderbook_pressure` 不再直接改写 `lot_mult`，而是把固定数量 jitter 参数与 TTL/cooldown jitter 注入 ExitSignal
+- `src/execution/engine.py`：固定片大小在最终可下单量上做双边 jitter，并尽量避开最近几笔已成功提交的相同数量；anti-repeat 历史只记录成功提交到交易所的 pressure 订单
+- `tests/test_signal.py` / `tests/test_execution.py` / `tests/test_config.py`：覆盖 TTL/cooldown jitter、execution-layer two-sided qty jitter、anti-repeat 与配置合并
+- `docs/configuration.md`、`config/config.example.yaml`、`src/signal/README.md`、`memory-bank/architecture.md`：同步当前语义与配置说明
 
 ## Milestone/附加改进：收口 `liq_distance` 风险日志刷屏与模式抖动
 

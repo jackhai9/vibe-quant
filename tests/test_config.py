@@ -80,8 +80,12 @@ symbols:
       sustain_ms: 2000
       passive_level: 3
       lot_mult: 5
+      qty_jitter_pct: 0.15
+      qty_anti_repeat_lookback: 4
       aggressive_recheck_cooldown_ms: 1000
+      aggressive_recheck_cooldown_jitter_pct: 0.2
       passive_ttl_ms: 10000
+      passive_ttl_jitter_pct: 0.25
 """
         with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(content)
@@ -196,7 +200,11 @@ symbols:
         assert dash_config.pressure_exit_passive_level == 3
         assert dash_config.pressure_exit_lot_mult == 5
         assert dash_config.pressure_exit_aggressive_recheck_cooldown_ms == 1000
+        assert dash_config.pressure_exit_aggressive_recheck_cooldown_jitter_pct == Decimal("0.2")
         assert dash_config.pressure_exit_passive_ttl_ms == 10000
+        assert dash_config.pressure_exit_passive_ttl_jitter_pct == Decimal("0.25")
+        assert dash_config.pressure_exit_qty_jitter_pct == Decimal("0.15")
+        assert dash_config.pressure_exit_qty_anti_repeat_lookback == 4
 
         btc_config = loader.get_symbol_config("BTC/USDT:USDT")
         assert btc_config.strategy_mode == "orderbook_price"

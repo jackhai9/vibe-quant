@@ -11,6 +11,7 @@ import pytest
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 from pathlib import Path
+from unittest.mock import patch
 
 from src.signal.engine import SignalEngine, PressureSignalConfig
 from src.models import (
@@ -89,6 +90,8 @@ class TestUpdateMarket:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                aggressive_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
                 qty_jitter_pct=Decimal("0"),
             ),
         )
@@ -355,6 +358,8 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                aggressive_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
                 qty_jitter_pct=Decimal("0"),
             ),
         )
@@ -559,6 +564,8 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                aggressive_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
                 qty_jitter_pct=Decimal("0"),
             ),
         )
@@ -605,6 +612,8 @@ class TestOrderbookPressureSignals:
                 lot_mult=5,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                aggressive_recheck_cooldown_jitter_pct=Decimal("0"),
+                passive_ttl_jitter_pct=Decimal("0"),
                 qty_jitter_pct=Decimal("0"),
             ),
         )
@@ -1175,19 +1184,30 @@ class TestSignalContent:
 class TestQtyJitter:
     """平仓量随机抖动测试"""
 
-    def _make_engine(self, lot_mult: int, qty_jitter_pct: Decimal) -> SignalEngine:
+    def _make_engine(
+        self,
+        *,
+        lot_mult: int,
+        qty_jitter_pct: Decimal,
+        threshold_qty: Decimal = Decimal("100"),
+        best_ask_qty: Decimal = Decimal("80"),
+        aggressive_recheck_cooldown_jitter_pct: Decimal = Decimal("0.15"),
+        passive_ttl_jitter_pct: Decimal = Decimal("0.15"),
+    ) -> SignalEngine:
         engine = SignalEngine(min_signal_interval_ms=200)
         symbol = "DASH/USDT:USDT"
         engine.configure_symbol(
             symbol,
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             pressure_config=PressureSignalConfig(
-                threshold_qty=Decimal("100"),
+                threshold_qty=threshold_qty,
                 sustain_ms=2000,
                 passive_level=3,
                 lot_mult=lot_mult,
                 aggressive_recheck_cooldown_ms=1000,
                 passive_ttl_ms=10000,
+                aggressive_recheck_cooldown_jitter_pct=aggressive_recheck_cooldown_jitter_pct,
+                passive_ttl_jitter_pct=passive_ttl_jitter_pct,
                 qty_jitter_pct=qty_jitter_pct,
             ),
         )
@@ -1197,7 +1217,7 @@ class TestQtyJitter:
             best_bid=Decimal("10"),
             best_ask=Decimal("10.1"),
             best_bid_qty=Decimal("50"),
-            best_ask_qty=Decimal("80"),
+            best_ask_qty=best_ask_qty,
             event_type="book_ticker",
         ))
         engine.update_market(MarketEvent(
@@ -1234,22 +1254,50 @@ class TestQtyJitter:
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
                 assert signal.fixed_lot_mult == 20
+                assert signal.fixed_qty_jitter_pct == Decimal("0")
 
-    def test_jitter_lot_mult_1_always_returns_1(self):
-        engine = self._make_engine(lot_mult=1, qty_jitter_pct=Decimal("0.15"))
-        position = self._make_position()
-        for ms in range(1100, 1200):
-            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
-            if signal is not None:
-                assert signal.fixed_lot_mult == 1
-
-    def test_jitter_lot_mult_20_stays_in_expected_range(self):
+    def test_signal_lot_mult_stays_exact_even_when_qty_jitter_enabled(self):
         engine = self._make_engine(lot_mult=20, qty_jitter_pct=Decimal("0.15"))
         position = self._make_position()
         observed = set()
-        for ms in range(1100, 2000):
+        for ms in range(1100, 1200):
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
                 observed.add(signal.fixed_lot_mult)
-        assert all(17 <= v <= 20 for v in observed), f"out of range: {observed}"
-        assert len(observed) > 1, f"no variance: {observed}"
+                assert signal.fixed_qty_jitter_pct == Decimal("0.15")
+                assert signal.fixed_qty_anti_repeat_lookback == 3
+        assert observed == {20}
+
+    def test_passive_ttl_jitter_applies_to_signal(self):
+        engine = self._make_engine(
+            lot_mult=5,
+            qty_jitter_pct=Decimal("0.15"),
+            passive_ttl_jitter_pct=Decimal("0.15"),
+        )
+        position = self._make_position()
+        with patch("src.signal.engine.randint", return_value=8765):
+            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=1100)
+        assert signal is not None
+        assert signal.execution_preference == SignalExecutionPreference.PASSIVE
+        assert signal.ttl_override_ms == 8765
+        assert signal.fixed_lot_mult == 5
+
+    def test_active_cooldown_jitter_applies_to_signal(self):
+        engine = self._make_engine(
+            lot_mult=5,
+            qty_jitter_pct=Decimal("0.15"),
+            best_ask_qty=Decimal("150"),
+            aggressive_recheck_cooldown_jitter_pct=Decimal("0.15"),
+        )
+        position = self._make_position()
+
+        first = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=1100)
+        assert first is None
+
+        with patch("src.signal.engine.randint", return_value=912):
+            signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=3200)
+
+        assert signal is not None
+        assert signal.execution_preference == SignalExecutionPreference.AGGRESSIVE
+        assert signal.cooldown_override_ms == 912
+        assert signal.fixed_lot_mult == 5

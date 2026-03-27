@@ -154,9 +154,12 @@ symbols:
   #     sustain_ms: 2000           # 顶档量连续超过阈值至少多久才主动吃单（毫秒）
   #     passive_level: 3           # 主动条件不成立时挂单使用的固定盘口档位（1=一档）
   #     lot_mult: 5                # 固定下单量倍率，实际数量 = min_qty × lot_mult
+  #     qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小做双边抖动，0 = 关闭
+  #     qty_anti_repeat_lookback: 3  # 尽量避开最近 N 笔已成功提交的相同数量，0 = 关闭
   #     aggressive_recheck_cooldown_ms: 1000  # 主动单终态后的重检冷却（毫秒）
+  #     aggressive_recheck_cooldown_jitter_pct: 0.15  # 主动单重检冷却双边抖动，0 = 关闭
   #     passive_ttl_ms: 10000      # 被动单 TTL，超时自动撤单（毫秒）
-  #     qty_jitter_pct: 0.15       # 平仓量随机抖动比例，0 = 关闭
+  #     passive_ttl_jitter_pct: 0.15  # 被动单 TTL 双边抖动，0 = 关闭
   #
   # 示例：统一缩放 accel 档位倍数（不需要逐档配置）
   # SOL/USDT:USDT:

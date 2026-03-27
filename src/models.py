@@ -1,6 +1,6 @@
 # Input: none
-# Output: shared enums and dataclasses for module contracts, account events, execution feedback, reduce-only block state, and liq-distance risk latch state
-# Pos: core data contracts, events, per-side execution state, same-side open-order block metadata, and liq-distance risk latch metadata
+# Output: shared enums and dataclasses for module contracts, account events, execution feedback, reduce-only block state, liq-distance risk latch state, and pressure jitter metadata
+# Pos: core data contracts, events, per-side execution state, same-side open-order block metadata, liq-distance risk latch metadata, and pressure anti-repeat state
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -257,6 +257,8 @@ class ExitSignal:
     ttl_override_ms: Optional[int] = None
     cooldown_override_ms: Optional[int] = None
     fixed_lot_mult: Optional[int] = None
+    fixed_qty_jitter_pct: Optional[Decimal] = None
+    fixed_qty_anti_repeat_lookback: Optional[int] = None
     roi_mult: int = 1
     accel_mult: int = 1
     roi: Optional[Decimal] = None
@@ -438,6 +440,9 @@ class SideExecutionState:
     fill_rate: Optional[Decimal] = None
     fill_rate_bucket: Optional[str] = None
     fill_rate_ttl_override: Optional[int] = None
+
+    # 固定片大小 anti-repeat：仅用于 orderbook_pressure 的固定数量路径
+    recent_fixed_order_qtys: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=16))
 
     # `-4118` 后的“同侧平仓挂单已占满可交易仓位”锁存
     reduce_only_block: Optional[ReduceOnlyBlockInfo] = None

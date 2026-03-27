@@ -625,9 +625,12 @@ symbols:
       sustain_ms: 2000
       passive_level: 3
       lot_mult: 5
-      aggressive_recheck_cooldown_ms: 1000
-      passive_ttl_ms: 10000
       qty_jitter_pct: 0.15
+      qty_anti_repeat_lookback: 3
+      aggressive_recheck_cooldown_ms: 1000
+      aggressive_recheck_cooldown_jitter_pct: 0.15
+      passive_ttl_ms: 10000
+      passive_ttl_jitter_pct: 0.15
     execution:
       order_ttl_ms: 3000          # 覆盖全局配置
       max_order_notional: 500
@@ -673,9 +676,12 @@ symbols:
   - `sustain_ms`: 顶档量连续超过阈值的最短持续时间；跌破阈值、数据 stale、仓位归零后重置 dwell
   - `passive_level`: 主动条件不成立时使用的固定档位；LONG 取 `ask[passive_level]`，SHORT 取 `bid[passive_level]`
   - `lot_mult`: 固定下单量倍率；最终数量为 `min_qty × lot_mult`，按 `step_size` 规整并 clamp 到剩余仓位
+  - `qty_jitter_pct`: 固定片大小的最终下单量随机抖动比例（`0` = 关闭）；以规整后的 `min_qty × lot_mult` 为中心做双边 jitter，再 clamp 到剩余仓位
+  - `qty_anti_repeat_lookback`: 固定片大小 anti-repeat 回看笔数；会尽量避开最近几笔已成功提交的相同数量（`0` = 关闭）
   - `aggressive_recheck_cooldown_ms`: 主动单终态后的重检冷却
+  - `aggressive_recheck_cooldown_jitter_pct`: 主动单重检冷却的随机抖动比例（`0` = 关闭）
   - `passive_ttl_ms`: 被动单 TTL；超时撤单后不额外附加策略冷却
-  - `qty_jitter_pct`: 平仓量随机抖动比例（`0` = 关闭）；实际下单倍率在 `[max(1, lot_mult - round(lot_mult × qty_jitter_pct)), lot_mult]` 范围内均匀随机
+  - `passive_ttl_jitter_pct`: 被动单 TTL 的随机抖动比例（`0` = 关闭）
 
 ### 示例：按 symbol 启用盘口量模式
 
@@ -690,9 +696,12 @@ symbols:
       sustain_ms: 2000           # 顶档量连续超过阈值至少 2000ms 后才主动吃单
       passive_level: 3           # 主动条件不成立时挂在第 3 档
       lot_mult: 5                # 固定片大小 = min_qty × 5
+      qty_jitter_pct: 0.15       # 最终下单量围绕固定片大小双边抖动 15%
+      qty_anti_repeat_lookback: 3  # 尽量避开最近 3 笔已成功提交的相同数量
       aggressive_recheck_cooldown_ms: 1000  # 主动单终态后冷却 1000ms 再检查
+      aggressive_recheck_cooldown_jitter_pct: 0.15  # 主动重检冷却双边抖动 15%
       passive_ttl_ms: 10000      # 被动单 10000ms 未成交则自动撤单
-      qty_jitter_pct: 0.15       # 平仓量随机抖动 15%，0 = 关闭
+      passive_ttl_jitter_pct: 0.15  # 被动单 TTL 双边抖动 15%
 ```
 
 运行时语义：
@@ -702,6 +711,9 @@ symbols:
 - 被动档位不存在或盘口数据不完整时，本轮跳过，不猜价格
 - `bookTicker` 与 `depth10` 任一来源 stale 时，本轮跳过，并重置主动条件 dwell
 - 新模式数量只使用 `min_qty × lot_mult`，不叠加 `base_lot_mult`、`roi_mult`、`accel_mult`
+- `qty_jitter_pct` 作用在最终规整后的固定片大小，不再通过缩窄 `lot_mult` 来单边抖动
+- `qty_anti_repeat_lookback` 只参考最近几笔已成功提交的 `orderbook_pressure` 固定数量订单
+- `aggressive_recheck_cooldown_jitter_pct` / `passive_ttl_jitter_pct` 分别作用于主动冷却和被动 TTL，避免固定节拍过于显眼
 
 风控补充：
 - `orderbook_price` 在 `dist_to_liq <= liq_distance_threshold` 时，会把当前执行模式至少提升到 `AGGRESSIVE_LIMIT`
