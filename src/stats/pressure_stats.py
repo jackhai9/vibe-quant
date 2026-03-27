@@ -1,19 +1,22 @@
 # Input: pressure trigger/attempt/outcome events, price ticks from bookTicker
-# Output: windowed statistics correlating trigger frequency, fill rate, and price movement
-# Pos: side-channel stats collector for orderbook_pressure strategy analysis
+# Output: windowed statistics correlating trigger frequency, fill rate, and price movement, plus rolling pressure regime state
+# Pos: side-channel stats collector for orderbook_pressure strategy analysis and regime tracking
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
 orderbook_pressure 策略统计收集器
 
 旁路收集主动/被动 trigger、成功下单、订单结果、价格快照，按窗口聚合输出，
-用于探索主动触发频率、被动成交率与价格走势之间的相关性。
+用于探索主动触发频率、被动成交率与价格走势之间的相关性，并基于配置指定的
+滚动窗口维护 `effective / degrading / failed / recovering` 的经验性 regime 状态。
 
 不侵入核心交易路径，纯内存 deque，进程重启后清零。
 """
 
 from collections import deque
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
+from math import sqrt
 from typing import Deque, Dict, List, Literal, Optional, Tuple
 
 from src.utils.logger import log_event
@@ -31,6 +34,7 @@ AttemptRecord = Tuple[int, PressurePath, Decimal]
 OutcomeRecord = Tuple[int, PressurePath, bool]
 # (timestamp_ms, mid_price)
 PriceTick = Tuple[int, Decimal]
+PressureRegime = Literal["effective", "degrading", "failed", "recovering"]
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -43,6 +47,36 @@ _DEFAULT_WINDOWS_MS: List[int] = [
     300_000,    # 5 min
     900_000,    # 15 min
 ]
+_REGIME_HISTORY_MAX = 48
+
+
+@dataclass
+class RegimeSnapshot:
+    ts_ms: int
+    active_triggers: int
+    passive_triggers: int
+    active_attempts: int
+    passive_fill_rate: Optional[Decimal]
+    price_change_pct: Decimal
+
+
+@dataclass
+class RegimeTracker:
+    state: Optional[PressureRegime] = None
+    strong_streak: int = 0
+    weak_streak: int = 0
+
+
+@dataclass
+class RegimeEvaluation:
+    state: PressureRegime
+    score: int
+    samples: int
+    active_attempts_corr: Optional[float]
+    active_triggers_corr: Optional[float]
+    passive_triggers_corr: Optional[float]
+    passive_fill_rate_corr: Optional[float]
+    prev_state: Optional[PressureRegime]
 
 
 def _window_label(ms: int) -> str:
@@ -69,10 +103,14 @@ class PressureStatsCollector:
         max_events: int = _MAX_EVENTS,
         price_sample_interval_ms: int = _PRICE_SAMPLE_INTERVAL_MS,
         windows_ms: Optional[List[int]] = None,
+        regime_window_ms: int = 300_000,
+        regime_samples: int = 12,
     ) -> None:
         self._max_events = max_events
         self._price_sample_interval_ms = price_sample_interval_ms
         self._windows_ms = windows_ms or list(_DEFAULT_WINDOWS_MS)
+        self._regime_window_ms = regime_window_ms
+        self._regime_samples = regime_samples
 
         # keyed by "SYMBOL:SIDE"
         self._triggers: Dict[str, Deque[TriggerRecord]] = {}
@@ -82,6 +120,8 @@ class PressureStatsCollector:
         # price ticks keyed by symbol only (与 side 无关)
         self._price_ticks: Dict[str, Deque[PriceTick]] = {}
         self._last_price_sample_ms: Dict[str, int] = {}
+        self._regime_snapshots: Dict[str, Deque[RegimeSnapshot]] = {}
+        self._regime_trackers: Dict[str, RegimeTracker] = {}
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -118,6 +158,181 @@ class PressureStatsCollector:
             buf = deque(maxlen=self._max_events)
             self._price_ticks[symbol] = buf
         return buf
+
+    def _get_regime_snapshots(self, key: str) -> Deque[RegimeSnapshot]:
+        buf = self._regime_snapshots.get(key)
+        if buf is None:
+            buf = deque(maxlen=_REGIME_HISTORY_MAX)
+            self._regime_snapshots[key] = buf
+        return buf
+
+    def _get_regime_tracker(self, key: str) -> RegimeTracker:
+        tracker = self._regime_trackers.get(key)
+        if tracker is None:
+            tracker = RegimeTracker()
+            self._regime_trackers[key] = tracker
+        return tracker
+
+    @staticmethod
+    def _corr(xs: List[float], ys: List[float]) -> Optional[float]:
+        if len(xs) != len(ys) or len(xs) < 2:
+            return None
+        mean_x = sum(xs) / len(xs)
+        mean_y = sum(ys) / len(ys)
+        cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+        std_x = sqrt(sum((x - mean_x) ** 2 for x in xs))
+        std_y = sqrt(sum((y - mean_y) ** 2 for y in ys))
+        if std_x == 0 or std_y == 0:
+            return None
+        return cov / (std_x * std_y)
+
+    def _record_regime_snapshot(
+        self,
+        symbol: str,
+        side: str,
+        *,
+        ts_ms: int,
+        active_triggers: int,
+        passive_triggers: int,
+        active_attempts: int,
+        passive_fill_rate: Optional[Decimal],
+        price_change_pct: Decimal,
+    ) -> None:
+        key = self._key(symbol, side)
+        buf = self._get_regime_snapshots(key)
+        if buf and buf[-1].ts_ms == ts_ms:
+            buf[-1] = RegimeSnapshot(
+                ts_ms=ts_ms,
+                active_triggers=active_triggers,
+                passive_triggers=passive_triggers,
+                active_attempts=active_attempts,
+                passive_fill_rate=passive_fill_rate,
+                price_change_pct=price_change_pct,
+            )
+            return
+        buf.append(
+            RegimeSnapshot(
+                ts_ms=ts_ms,
+                active_triggers=active_triggers,
+                passive_triggers=passive_triggers,
+                active_attempts=active_attempts,
+                passive_fill_rate=passive_fill_rate,
+                price_change_pct=price_change_pct,
+            )
+        )
+
+    @staticmethod
+    def _score_regime(
+        *,
+        active_attempts_corr: Optional[float],
+        active_triggers_corr: Optional[float],
+        passive_triggers_corr: Optional[float],
+        passive_fill_rate_corr: Optional[float],
+    ) -> int:
+        score = 0
+
+        if active_attempts_corr is not None:
+            if active_attempts_corr >= 0.15:
+                score += 2
+            elif active_attempts_corr >= 0.05:
+                score += 1
+            elif active_attempts_corr < 0:
+                score -= 1
+
+        if active_triggers_corr is not None:
+            if active_triggers_corr >= 0.10:
+                score += 1
+            elif active_triggers_corr < 0:
+                score -= 1
+
+        if passive_triggers_corr is not None:
+            if passive_triggers_corr <= -0.15:
+                score += 2
+            elif passive_triggers_corr <= -0.05:
+                score += 1
+            elif passive_triggers_corr > 0:
+                score -= 1
+
+        if passive_fill_rate_corr is not None:
+            if passive_fill_rate_corr >= 0.10:
+                score += 1
+            elif passive_fill_rate_corr <= -0.10:
+                score -= 1
+
+        return score
+
+    @staticmethod
+    def _advance_regime_state(tracker: RegimeTracker, score: int) -> tuple[PressureRegime, Optional[PressureRegime]]:
+        prev_state = tracker.state
+
+        if score >= 4:
+            tracker.strong_streak += 1
+            tracker.weak_streak = 0
+            if prev_state in (None, "effective"):
+                tracker.state = "effective"
+            else:
+                tracker.state = "recovering" if tracker.strong_streak < 2 else "effective"
+            return tracker.state, prev_state
+
+        if score <= 0:
+            tracker.weak_streak += 1
+            tracker.strong_streak = 0
+            if prev_state in ("effective", "recovering") and tracker.weak_streak < 2:
+                tracker.state = "degrading"
+            else:
+                tracker.state = "failed"
+            return tracker.state, prev_state
+
+        tracker.strong_streak = 0
+        tracker.weak_streak = 0
+        if prev_state in ("failed", "recovering"):
+            tracker.state = "recovering"
+        else:
+            tracker.state = "degrading"
+        return tracker.state, prev_state
+
+    def _evaluate_regime(self, symbol: str, side: str) -> Optional[RegimeEvaluation]:
+        key = self._key(symbol, side)
+        snapshots = list(self._get_regime_snapshots(key))
+        if len(snapshots) < self._regime_samples:
+            return None
+
+        price_changes = [float(s.price_change_pct) for s in snapshots]
+        active_attempts = [float(s.active_attempts) for s in snapshots]
+        active_triggers = [float(s.active_triggers) for s in snapshots]
+        passive_triggers = [float(s.passive_triggers) for s in snapshots]
+
+        active_attempts_corr = self._corr(active_attempts, price_changes)
+        active_triggers_corr = self._corr(active_triggers, price_changes)
+        passive_triggers_corr = self._corr(passive_triggers, price_changes)
+
+        pfr_xs: List[float] = []
+        pfr_ys: List[float] = []
+        for snapshot in snapshots:
+            if snapshot.passive_fill_rate is None:
+                continue
+            pfr_xs.append(float(snapshot.passive_fill_rate))
+            pfr_ys.append(float(snapshot.price_change_pct))
+        passive_fill_rate_corr = self._corr(pfr_xs, pfr_ys) if len(pfr_xs) >= max(6, self._regime_samples // 2) else None
+
+        score = self._score_regime(
+            active_attempts_corr=active_attempts_corr,
+            active_triggers_corr=active_triggers_corr,
+            passive_triggers_corr=passive_triggers_corr,
+            passive_fill_rate_corr=passive_fill_rate_corr,
+        )
+        tracker = self._get_regime_tracker(key)
+        state, prev_state = self._advance_regime_state(tracker, score)
+        return RegimeEvaluation(
+            state=state,
+            score=score,
+            samples=len(snapshots),
+            active_attempts_corr=active_attempts_corr,
+            active_triggers_corr=active_triggers_corr,
+            passive_triggers_corr=passive_triggers_corr,
+            passive_fill_rate_corr=passive_fill_rate_corr,
+            prev_state=prev_state,
+        )
 
     # ------------------------------------------------------------------
     # 公开方法：事件记录
@@ -318,3 +533,52 @@ class PressureStatsCollector:
                     if stats["price_change_pct"] is not None
                     else None,
                 )
+
+            regime_stats = self.compute_window(symbol, side, self._regime_window_ms, current_ms)
+            regime_total_events = (
+                regime_stats["active_triggers"]
+                + regime_stats["passive_triggers"]
+                + regime_stats["active_attempts"]
+                + regime_stats["passive_attempts"]
+                + regime_stats["active_fills"]
+                + regime_stats["passive_fills"]
+            )
+            if regime_total_events == 0 or regime_stats["price_change_pct"] is None:
+                continue
+
+            self._record_regime_snapshot(
+                symbol,
+                side,
+                ts_ms=current_ms,
+                active_triggers=regime_stats["active_triggers"],
+                passive_triggers=regime_stats["passive_triggers"],
+                active_attempts=regime_stats["active_attempts"],
+                passive_fill_rate=regime_stats["passive_fill_rate"],
+                price_change_pct=regime_stats["price_change_pct"],
+            )
+            regime = self._evaluate_regime(symbol, side)
+            if regime is None:
+                continue
+
+            log_event(
+                "pressure_regime",
+                symbol=symbol,
+                side=side,
+                window=_window_label(self._regime_window_ms),
+                regime=regime.state,
+                prev_regime=regime.prev_state if regime.prev_state != regime.state else None,
+                regime_score=regime.score,
+                samples=regime.samples,
+                active_attempts_corr=round(regime.active_attempts_corr, 3)
+                if regime.active_attempts_corr is not None
+                else None,
+                active_triggers_corr=round(regime.active_triggers_corr, 3)
+                if regime.active_triggers_corr is not None
+                else None,
+                passive_triggers_corr=round(regime.passive_triggers_corr, 3)
+                if regime.passive_triggers_corr is not None
+                else None,
+                passive_fill_rate_corr=round(regime.passive_fill_rate_corr, 3)
+                if regime.passive_fill_rate_corr is not None
+                else None,
+            )

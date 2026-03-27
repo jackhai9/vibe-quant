@@ -26,6 +26,24 @@
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
 
+## Milestone/附加改进：`PRESSURE_REGIME` 在线状态机
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：`PRESSURE_STATS` 的早期经验规则在后续样本中出现明显漂移，尤其是 `5m passive_fill_rate` 不再稳定充当最强正向确认项。需要把“规则当前是否仍有效”本身做成在线状态机，用来识别 `orderbook_pressure` 的经验规则是 `effective / degrading / failed / recovering`，作为 regime 预警，而不是继续把单个统计字段当成恒定真理；状态机窗口和样本数后续可通过配置与离线回放调参。<br>
+**产出**：
+
+- `src/stats/pressure_stats.py`：为配置指定窗口维护 rolling snapshots，并基于 `global.stats.pressure_regime_window_ms` / `pressure_regime_samples` 计算 `PRESSURE_REGIME`（默认 `5m × 12`）
+- `src/stats/pressure_stats.py`：状态机使用 `active_attempts_corr`、`active_triggers_corr`、`passive_triggers_corr` 与 `passive_fill_rate_corr` 生成 regime score，并输出 `effective / degrading / failed / recovering`
+- `src/utils/logger.py`：新增 `pressure_regime` 事件类型中文名
+- `tests/test_pressure_stats.py`：覆盖有效态、失效/恢复态转换，以及自定义窗口/样本数下的 regime 日志输出
+- `src/stats/README.md` / `memory-bank/architecture.md`：同步“在线 regime 判读”与 `PRESSURE_REGIME` 的当前语义
+- 当前窗口分工约定：
+  - `1m`：early warning，主要看短时异动和早期背离
+  - `5m`：primary regime judgment，当前所有“规则失效/漂移/恢复”的主结论默认优先基于这一档
+  - `15m`：滞后确认，用来判断变化是否持续，而不是瞬时噪音
+
 ## Milestone/附加改进：统一两种策略的基准片大小入口
 
 **状态**：✅ 已完成<br>

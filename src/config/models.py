@@ -1,5 +1,5 @@
 # Input: raw config values
-# Output: pydantic config models (including protective-stop relax/refresh settings, execution feedback settings, telegram bot config)
+# Output: pydantic config models (including protective-stop relax/refresh settings, execution feedback settings, stats regime config, telegram bot config)
 # Pos: config schema definitions
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -230,6 +230,21 @@ class ExecutionConfig(BaseModel):
     )
 
 
+class StatsConfig(BaseModel):
+    """统计与在线 regime 判读配置"""
+    pressure_regime_window_ms: int = Field(
+        default=300_000,
+        ge=60_000,
+        description="PRESSURE_REGIME 使用的统计窗口(ms)",
+    )
+    pressure_regime_samples: int = Field(
+        default=12,
+        ge=4,
+        le=96,
+        description="PRESSURE_REGIME 至少积累多少个窗口样本后开始判定",
+    )
+
+
 class StrategyConfig(BaseModel):
     """Symbol 级别策略模式选择"""
     mode: Literal["orderbook_price", "orderbook_pressure"] = Field(
@@ -418,6 +433,7 @@ class GlobalConfig(BaseModel):
     proxy: Optional[str] = None  # HTTP 代理地址，如 "http://127.0.0.1:7890"
     ws: WSConfig = Field(default_factory=WSConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    stats: StatsConfig = Field(default_factory=StatsConfig)
     accel: AccelConfig = Field(default_factory=AccelConfig)
     roi: RoiConfig = Field(default_factory=RoiConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)

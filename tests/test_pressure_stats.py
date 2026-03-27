@@ -4,7 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.stats.pressure_stats import PressureStatsCollector, _window_label
+import src.stats.pressure_stats as pressure_stats_module
+from src.stats.pressure_stats import PressureStatsCollector, RegimeTracker, _window_label
 
 
 # ---------------------------------------------------------------------------
@@ -245,3 +246,138 @@ class TestLogAllWindows:
         c.record_price("BTC", Decimal("101"), ts_ms=6000)
         # 不应抛异常
         c.log_all_windows(current_ms=10_000)
+
+
+# ---------------------------------------------------------------------------
+# regime state machine
+# ---------------------------------------------------------------------------
+
+class TestPressureRegime:
+    def _make(self) -> PressureStatsCollector:
+        return PressureStatsCollector(price_sample_interval_ms=0)
+
+    def test_regime_effective_when_recent_correlations_align(self):
+        c = self._make()
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+
+        regime = c._evaluate_regime("BTC", "LONG")
+        assert regime is not None
+        assert regime.state == "effective"
+        assert regime.score >= 4
+        assert regime.active_attempts_corr is not None and regime.active_attempts_corr > 0
+        assert regime.passive_triggers_corr is not None and regime.passive_triggers_corr < 0
+
+    def test_regime_state_transitions_failed_and_recovering(self):
+        tracker = RegimeTracker(state="effective")
+
+        state, prev = PressureStatsCollector._advance_regime_state(tracker, score=0)
+        assert prev == "effective"
+        assert state == "degrading"
+
+        state, prev = PressureStatsCollector._advance_regime_state(tracker, score=0)
+        assert prev == "degrading"
+        assert state == "failed"
+
+        state, prev = PressureStatsCollector._advance_regime_state(tracker, score=4)
+        assert prev == "failed"
+        assert state == "recovering"
+
+        state, prev = PressureStatsCollector._advance_regime_state(tracker, score=4)
+        assert prev == "recovering"
+        assert state == "effective"
+
+    def test_log_all_windows_emits_pressure_regime_after_min_samples(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+
+        def fake_log_event(event_type: str, *, level: str | None = None, **fields):
+            events.append((event_type, fields))
+
+        monkeypatch.setattr(pressure_stats_module, "log_event", fake_log_event)
+
+        c = self._make()
+        for i in range(11):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+
+        base_ts = 11 * 300_000 + 1_000
+        for _ in range(22):
+            c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts)
+        for _ in range(9):
+            c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=base_ts + 100)
+        for _ in range(17):
+            c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts + 200)
+        for _ in range(10):
+            c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=base_ts + 300)
+        for _ in range(3):
+            c.record_outcome("BTC", "LONG", is_active=False, is_filled=True, ts_ms=base_ts + 400)
+        c.record_price("BTC", Decimal("100"), ts_ms=base_ts + 500)
+        c.record_price("BTC", Decimal("112"), ts_ms=base_ts + 600)
+        c.log_all_windows(current_ms=12 * 300_000)
+
+        regime_events = [fields for event_type, fields in events if event_type == "pressure_regime"]
+        assert regime_events
+        assert regime_events[-1]["window"] == "5m"
+        assert regime_events[-1]["regime"] in {"effective", "degrading", "failed", "recovering"}
+
+    def test_log_all_windows_respects_configured_regime_window_and_samples(self, monkeypatch):
+        events: list[tuple[str, dict]] = []
+
+        def fake_log_event(event_type: str, *, level: str | None = None, **fields):
+            events.append((event_type, fields))
+
+        monkeypatch.setattr(pressure_stats_module, "log_event", fake_log_event)
+
+        c = PressureStatsCollector(
+            price_sample_interval_ms=0,
+            regime_window_ms=60_000,
+            regime_samples=4,
+        )
+        for i in range(3):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 60_000,
+                active_triggers=10 + i,
+                passive_triggers=40 - i,
+                active_attempts=6 + i,
+                passive_fill_rate=Decimal(f"0.{30 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+
+        base_ts = 3 * 60_000 + 1_000
+        for _ in range(10):
+            c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts)
+        for _ in range(4):
+            c.record_trigger("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=base_ts + 100)
+        for _ in range(8):
+            c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts + 200)
+        for _ in range(5):
+            c.record_attempt("BTC", "LONG", is_active=False, mid_price=Decimal("100"), ts_ms=base_ts + 300)
+        for _ in range(2):
+            c.record_outcome("BTC", "LONG", is_active=False, is_filled=True, ts_ms=base_ts + 400)
+        c.record_price("BTC", Decimal("100"), ts_ms=base_ts + 500)
+        c.record_price("BTC", Decimal("104"), ts_ms=base_ts + 600)
+        c.log_all_windows(current_ms=4 * 60_000)
+
+        regime_events = [fields for event_type, fields in events if event_type == "pressure_regime"]
+        assert regime_events
+        assert regime_events[-1]["window"] == "1m"
+        assert regime_events[-1]["samples"] == 4

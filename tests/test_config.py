@@ -46,6 +46,9 @@ global:
     maker_timeouts_to_escalate: 3
     aggr_fills_to_deescalate: 2
     aggr_timeouts_to_deescalate: 3
+  stats:
+    pressure_regime_window_ms: 600000
+    pressure_regime_samples: 8
   accel:
     window_ms: 3000
     tiers: []
@@ -132,6 +135,8 @@ symbols:
         assert config.global_.execution.order_ttl_ms == 1000
         assert config.global_.execution.maker_price_mode == "at_touch"
         assert config.global_.execution.maker_safety_ticks == 2
+        assert config.global_.stats.pressure_regime_window_ms == 600000
+        assert config.global_.stats.pressure_regime_samples == 8
 
     def test_api_keys(self, sample_config_yaml, env_vars):
         """测试 API 密钥加载"""

@@ -295,7 +295,7 @@ vibe-quant/
 │   │   ├── README.md         # src/stats 目录说明
 │   │   ├── __init__.py
 │   │   ├── market_recorder.py # 原始市场数据录制（bookTicker/depth10/aggTrade）
-│   │   └── pressure_stats.py # orderbook_pressure 旁路统计（触发频率/成功下单/首次成交/价格走势）
+│   │   └── pressure_stats.py # orderbook_pressure 旁路统计（窗口聚合 + rolling regime 状态）
 │   └── utils/
 │       ├── README.md         # src/utils 目录说明
 │       ├── __init__.py
@@ -335,7 +335,7 @@ vibe-quant/
 | `src/ws/user_data.py` | 744 | UserDataWSClient 类，listenKey 管理 + ORDER_TRADE_UPDATE/ALGO_UPDATE/ACCOUNT_UPDATE 解析，指数退避重连，重连回调 |
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
 | `src/stats/market_recorder.py` | 245 | MarketDataRecorder，原始市场数据录制（采样/日切/gzip/保留清理） |
-| `src/stats/pressure_stats.py` | 320 | PressureStatsCollector，orderbook_pressure 旁路统计（trigger/成功下单/首次成交/价格窗口聚合） |
+| `src/stats/pressure_stats.py` | 320 | PressureStatsCollector，orderbook_pressure 旁路统计（trigger/成功下单/首次成交/价格窗口聚合 + 可配置窗口的 `PRESSURE_REGIME` 状态机） |
 | `src/execution/engine.py` | 1705 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
 | `src/risk/protective_stop.py` | 848 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |

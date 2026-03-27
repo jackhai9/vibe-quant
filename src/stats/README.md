@@ -6,13 +6,13 @@
 # src/stats 目录说明
 
 统计与录制模块。<br>
-`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志。<br>
+`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）。<br>
 `market_recorder.py` 以非阻塞方式录制 `bookTicker + depth10 + aggTrade` 原始事件到 JSONL，供后续离线回放调参。<br>
 两者都不阻塞核心交易路径；前者纯内存，后者通过 queue + writer task 后台落盘。
 
 ## 文件清单
 
-- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、日志输出
+- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、rolling regime 状态评估与日志输出
 - `market_recorder.py`：`MarketDataRecorder` — 原始市场数据录制、日切压缩、保留清理
 - `__init__.py`：模块导出
 
@@ -76,100 +76,76 @@ aggTrade：
 {"ts":1711357200000,"type":"agg_trade","sym":"DASH/USDT:USDT","p":"25.50","q":"10.5","m":true}
 ```
 
-## 当前经验性判读规则
+## 在线 regime 判读
 
-以下内容用于辅助理解 `orderbook_pressure` 统计日志，属于当前样本上的经验性结论，不代表现网已经自动按此规则执行。
+以下内容用于辅助理解 `orderbook_pressure` 的在线统计与 `PRESSURE_REGIME` 日志，属于当前样本上的经验性状态机，不代表现网已经直接按此状态执行交易决策。
 
 ### 适用范围
 
-- 观察对象：`[PRESSURE_STATS]` 日志
+- 观察对象：`[PRESSURE_STATS]` 与 `[PRESSURE_REGIME]` 日志
 - 当前主样本：`DASH LONG`
 - 当前样本口径：带 `active_triggers / passive_triggers / attempts / fills` 的新口径日志
-- 当前样本范围：`2026-03-27 11:26:03` 到 `2026-03-27 15:34:45` 的新口径日志
-- 当前主统计窗口：`window=5m`
-- 当前样本量：`DASH LONG 5m = 48`，`DASH SHORT 5m = 22`
+- 当前样本范围：`2026-03-27 11:26:03` 到 `2026-03-27 21:27:22`
+- 当前样本量：`DASH LONG 5m = 113`，`DASH SHORT 5m = 43`
 - 当前结论定位：工作假设，后续应随样本扩大持续复核
 
 ### 最近分析检查点
 
 - 来源文件：`logs/vibe-quant_2026-03-27.log`
-- 已纳入统计的最后一条新口径日志时间：`2026-03-27 15:34:45`
-- 下次增量统计默认从 `2026-03-27 15:34:45` 之后继续
+- 已纳入统计的最后一条新口径日志时间：`2026-03-27 21:27:22`
+- 下次增量统计默认从 `2026-03-27 21:27:22` 之后继续
 - 对 `same-window` 统计，不必每次从头重算
 - 对 `lead-lag` 统计，增量续算时保留上一条 `5m` 样本即可，用来和新进入的第一条 `5m` 样本组成 `t -> t+1`
 
-### 当前优先观察窗口
+### 当前经验总结
 
-- 在线判读优先看 `window=5m`
-- `1m` 变化快、噪音大，适合看短时切换，不适合作为唯一依据
-- `15m` 滞后明显，容易混入前一段 regime 的惯性，不适合做即时执行判断
-
-### same-window 当前指标优先级
-
-经验上，当前样本中的解释力排序为：
-
-`5m passive_fill_rate` > `5m active_triggers / active_attempts` > `5m passive_triggers`
-
-当前 `DASH LONG 5m` 的相关系数约为：
-
-- `passive_fill_rate` vs `price_chg`: `+0.522`
-- `active_triggers` vs `price_chg`: `+0.293`
-- `active_attempts` vs `price_chg`: `+0.289`
-- `passive_triggers` vs `price_chg`: `-0.319`
-
-其中：
-
-- `passive_fill_rate`：被动挂单是否真的至少成交过，优先代表“这套被动逻辑当前有没有 edge”
-- `active_triggers / active_attempts`：主动 pressure 是否有真实跟进，代表“市场有没有顺着这个方向推进”
-- `passive_triggers`：只表示被动 pressure 形态出现得多，不等于价格更有利；当前样本里更接近反向参考项
-
-### same-window 当前判读方式
-
-- `5m passive_fill_rate > 0` 且 `5m active_triggers > 0`
-  - 当前最强的一档，说明被动单能成交，且主动 pressure 也在推进，可以继续信 `orderbook_pressure`
-- `5m passive_fill_rate > 0` 但 `5m active_triggers = 0`
-  - 仍可参考，但信心次一级，更像“被动还有 edge，主动没明显跟进”
-- `5m passive_fill_rate = 0` 且 `5m passive_triggers` 很高
-  - 不要把“被动 pressure 很多”误判成利好；当前样本里这更像拥挤或磨损
-- `5m passive_fill_rate = 0` 且 `5m active_triggers = 0`
-  - 当前更接近“pressure 没有 edge”，不应继续死等这一路径自行改善
-
-### lead-lag 当前工作假设
-
-当口径切换到 `当前 5m 指标(t) -> 下一个 5m price_chg(t+1)` 时，当前样本中的排序发生变化：
-
-`5m active_attempts / active_triggers` > `5m passive_triggers`（反向参考） >> `5m passive_fill_rate`
-
-当前 `DASH LONG 5m` 的相关系数约为：
-
-- `active_attempts(t)` vs `next_5m price_chg(t+1)`: `+0.187`
-- `active_triggers(t)` vs `next_5m price_chg(t+1)`: `+0.172`
-- `passive_triggers(t)` vs `next_5m price_chg(t+1)`: `-0.267`
-- `passive_fill_rate(t)` vs `next_5m price_chg(t+1)`: `-0.032`
-
-其中：
-
-- `active_attempts / active_triggers`：更像下一窗口是否还会延续 pressure 推进的先行指标
-- `passive_triggers`：当前样本里仍然偏负向，更多表示拥挤和磨损，不像延续性 alpha
-- `passive_fill_rate`：更像“当前窗口里被动逻辑是否有效”的确认项，对下一窗口的预测性明显弱于 same-window 解释力
-
-### lead-lag 当前判读方式
-
-- 当前 `5m active_attempts` 或 `5m active_triggers` 明显抬升
-  - 更偏向“下一窗口继续改善”的工作假设
-- 当前 `5m passive_triggers` 很高，但 `active_triggers` 低
-  - 更偏向“下一窗口继续磨损或拥挤”，不把它视为延续利好
-- 当前 `5m passive_fill_rate > 0`
-  - 更适合解释“现在这 5 分钟是否有效”，不单独拿它预测下一窗口
-
-### 当前使用边界
-
-- `same-window` 规则用于辅助执行判断，不用于价格方向预测
-- `lead-lag` 规则用于辅助判断“下一窗口是否更可能延续”，仍然不是开仓方向信号
-- 这两套规则都更适合回答“现在还值不值得继续依赖 `orderbook_pressure` 平仓”
-- 这套规则不应替代后续基于 `market_data_*.jsonl` 的离线回放分析
-- 当线上样本显著增加后，应重新统计相关性，并按新数据修正本节内容
+- 旧的“`5m passive_fill_rate` 是最强正向确认项”只在早期样本中成立，后续已经出现明显漂移
+- 截至当前检查点，`DASH LONG 5m` 中相对更稳定的信号是：
+  - `active_attempts / active_triggers` 与 `price_chg` 仍保持弱正相关
+  - `passive_triggers` 与 `price_chg` 继续偏负相关
+  - `passive_fill_rate` 不再适合作为唯一核心依据，只保留为辅助项
 - `DASH SHORT` 当前样本量仍偏小，不按 `DASH LONG` 的规则直接外推
+
+### `1m / 5m / 15m` 的使用分工
+
+- 当前“规则是否失效/漂移”的主判断窗口是 `5m`
+- `1m` 也会持续观察，但主要用于 early warning 和短时异动；它对盘口微抖和成交噪音更敏感，不适合单独拿来定义规则失效
+- `15m` 也会持续观察，但主要作为滞后确认；它更容易混入前一段 regime 的惯性，不适合做第一判断
+- 因此，当前文档里提到的“经验规则开始漂移”“规则失效段”“规则恢复段”，默认都是优先基于 `5m` same-window 结果得出的结论
+- `1m` 和 `15m` 的角色是：
+  - `1m`：看是否出现更早的背离或突变
+  - `5m`：做 primary regime judgment
+  - `15m`：确认这种变化是否持续，而不是瞬时噪音
+
+### `PRESSURE_REGIME` 状态机
+
+在线状态机使用 `global.stats.pressure_regime_window_ms` 指定统计窗口，使用 `global.stats.pressure_regime_samples` 指定至少积累多少个窗口样本后开始判定；默认是最近 `12` 个 `5m` 样本。
+
+核心观测量：
+
+- `active_attempts_corr`
+- `active_triggers_corr`
+- `passive_triggers_corr`
+- `passive_fill_rate_corr`（辅助项，不再作为首要依据）
+
+状态定义：
+
+- `effective`
+  - 最近一段窗口里，`active_attempts / active_triggers` 与 `price_chg` 保持正向，`passive_triggers` 保持负向，说明原经验规则仍然成立
+- `degrading`
+  - 原经验关系开始走弱，但还没完全翻转，更像 regime 切换前的衰减段
+- `failed`
+  - 最近窗口里原经验关系已经不成立，说明当前 microstructure 规则失效，应把它视为 regime shift 警报，而不是继续沿用旧规则
+- `recovering`
+  - 在 `failed` 之后，经验关系重新转好，但还没稳定回到 `effective`
+
+### 使用边界
+
+- `PRESSURE_REGIME` 是在线 regime 预警，不是价格方向预测器
+- 它更适合回答“当前这套 `orderbook_pressure` 经验规则还能不能信”
+- `failed` 更像“市场结构在变”，不是“下一根一定下跌”
+- `recovering` 更像“旧关系开始回来”，不是“立即恢复成顺风行情”
+- 这套状态机不应替代后续基于 `market_data_*.jsonl` 的离线回放分析
 
 ## 下一步分析计划
 

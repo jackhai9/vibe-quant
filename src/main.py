@@ -1081,7 +1081,10 @@ class Application:
         self.signal_engine = SignalEngine(
             min_signal_interval_ms=global_config.execution.min_signal_interval_ms,
         )
-        self._pressure_stats = PressureStatsCollector()
+        self._pressure_stats = PressureStatsCollector(
+            regime_window_ms=global_config.stats.pressure_regime_window_ms,
+            regime_samples=global_config.stats.pressure_regime_samples,
+        )
         self._market_recorder = MarketDataRecorder(log_dir=log_dir)
         await self._market_recorder.start()
 

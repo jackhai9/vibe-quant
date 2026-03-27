@@ -64,6 +64,10 @@ global:
     fill_rate_high_threshold: 0.75         # >75% 视为高成交率（execution.order_ttl_ms + 25%）
     fill_rate_log_windows_min: [1, 5, 15]  # 成交率日志窗口（分钟），为空表示关闭日志
 
+  stats:
+    pressure_regime_window_ms: 300000  # PRESSURE_REGIME 使用的统计窗口；当前推荐 5m，1m 太抖、15m 太滞后
+    pressure_regime_samples: 12        # 至少积累多少个窗口样本后开始判定；当前推荐 12 个窗口，约等于最近 1 小时
+
   # 加速倍数
   accel:
     window_ms: 2000       # 2秒窗口
