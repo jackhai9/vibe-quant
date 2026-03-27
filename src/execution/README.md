@@ -6,7 +6,7 @@
 # src/execution 目录说明
 
 执行状态机与下单逻辑。<br>
-复用单套状态机，支持 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖。<br>
+复用单套状态机，支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖。<br>
 支持 maker/aggressive 模式轮转与成交率反馈（含 TTL 覆盖）。<br>
 管理普通订单撤单、冷却与 TTL（含成交角色/盈亏/手续费兜底）。<br>
 支持主动信号抢占被动单（preempt cancel）。

@@ -83,12 +83,6 @@ class SignalExecutionPreference(str, Enum):
     AGGRESSIVE = "aggressive"
 
 
-class QtyPolicy(str, Enum):
-    """信号数量策略"""
-    DYNAMIC = "dynamic"
-    FIXED_MIN_QTY_MULT = "fixed_min_qty_mult"
-
-
 class SignalReason(str, Enum):
     """平仓信号触发原因"""
     LONG_PRIMARY = "long_primary"
@@ -252,13 +246,12 @@ class ExitSignal:
     last_trade_price: Decimal
     strategy_mode: StrategyMode = StrategyMode.ORDERBOOK_PRICE
     execution_preference: SignalExecutionPreference = SignalExecutionPreference.PASSIVE
-    qty_policy: QtyPolicy = QtyPolicy.DYNAMIC
     price_override: Optional[Decimal] = None
     ttl_override_ms: Optional[int] = None
     cooldown_override_ms: Optional[int] = None
     base_mult_override: Optional[int] = None
-    fixed_qty_jitter_pct: Optional[Decimal] = None
-    fixed_qty_anti_repeat_lookback: Optional[int] = None
+    qty_jitter_pct: Optional[Decimal] = None
+    qty_anti_repeat_lookback: Optional[int] = None
     active_burst_window_ms: Optional[int] = None
     active_burst_max_attempts: Optional[int] = None
     active_burst_max_fills: Optional[int] = None
@@ -446,8 +439,8 @@ class SideExecutionState:
     fill_rate_bucket: Optional[str] = None
     fill_rate_ttl_override: Optional[int] = None
 
-    # 固定片大小 anti-repeat：仅用于 orderbook_pressure 的固定数量路径
-    recent_fixed_order_qtys: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=16))
+    # pressure anti-repeat：仅用于 orderbook_pressure 订单的 recent qty 历史
+    recent_pressure_order_qtys: Deque[Decimal] = field(default_factory=lambda: deque(maxlen=16))
 
     # `-4118` 后的“同侧平仓挂单已占满可交易仓位”锁存
     reduce_only_block: Optional[ReduceOnlyBlockInfo] = None

@@ -37,7 +37,6 @@ from src.models import (
     SignalReason,
     StrategyMode,
     SignalExecutionPreference,
-    QtyPolicy,
 )
 from src.utils.logger import get_logger, log_event, log_signal
 from src.utils.helpers import current_time_ms
@@ -365,7 +364,6 @@ class SignalEngine:
                     else (state.best_bid if position_side == PositionSide.LONG else state.best_ask),
                     strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
                     execution_preference=SignalExecutionPreference.AGGRESSIVE,
-                    qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
                     price_override=state.best_bid if position_side == PositionSide.LONG else state.best_ask,
                     ttl_override_ms=None,
                     cooldown_override_ms=self._jitter_duration_ms(
@@ -374,8 +372,8 @@ class SignalEngine:
                         minimum_ms=0,
                     ),
                     base_mult_override=cfg.base_mult,
-                    fixed_qty_jitter_pct=cfg.qty_jitter_pct,
-                    fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
+                    qty_jitter_pct=cfg.qty_jitter_pct,
+                    qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
                     active_burst_window_ms=cfg.active_burst_window_ms,
                     active_burst_max_attempts=cfg.active_burst_max_attempts,
                     active_burst_max_fills=cfg.active_burst_max_fills,
@@ -423,7 +421,6 @@ class SignalEngine:
             else passive_price,
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=passive_price,
             ttl_override_ms=self._jitter_duration_ms(
                 cfg.passive_ttl_ms,
@@ -432,8 +429,8 @@ class SignalEngine:
             ),
             cooldown_override_ms=0,
             base_mult_override=cfg.base_mult,
-            fixed_qty_jitter_pct=cfg.qty_jitter_pct,
-            fixed_qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
+            qty_jitter_pct=cfg.qty_jitter_pct,
+            qty_anti_repeat_lookback=cfg.qty_anti_repeat_lookback,
             roi_mult=roi_mult,
             accel_mult=accel_mult,
             roi=roi,

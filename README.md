@@ -189,7 +189,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 补充：`long_bid_improve` / `short_ask_improve` 信号触发时，系统会直接切换到 `AGGRESSIVE_LIMIT` 并在同一轮信号内提交限价单（仍可能因盘口变化未立即成交）。
 
-`orderbook_pressure` 复用同一套执行状态机，但信号会自带 `price_override` / `ttl_override_ms` / `cooldown_override_ms` / `qty_policy`：
+`orderbook_pressure` 复用同一套执行状态机，但信号会自带 `price_override` / `ttl_override_ms` / `cooldown_override_ms` / `base_mult_override` / `qty_jitter_pct`：
 - 主动条件成立：LONG 下 `SELL @ best_bid`，SHORT 下 `BUY @ best_ask`
 - 主动条件未成立：LONG 挂 `ask[passive_level]`，SHORT 挂 `bid[passive_level]`
 - 被动单保持 `GTX` 语义；若收到 `-5022 post only reject`，不会自动降级成 taker 单

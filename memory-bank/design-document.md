@@ -394,7 +394,7 @@ symbols:
 
 ## 11. 伪代码（简化）
 
-以下伪代码聚焦 `orderbook_price` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/qty_policy` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；其基准片大小同样来自 `execution.base_mult`，并可按配置显式叠加公共 `roi_mult / accel_mult`；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
+以下伪代码聚焦 `orderbook_price` 主路径。`orderbook_pressure` 复用同一状态机，但由 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖：达到顶档量阈值后主动吃一档，未达阈值时只挂 1 笔固定档位被动单；其基准片大小同样来自 `execution.base_mult`，并可按配置显式叠加公共 `roi_mult / accel_mult`；`liq_distance_threshold` 不改写其主动/被动语义，最终执行兜底由 `panic_close` 负责。
 
 ```python
 def build_maker_price(side, best_bid, best_ask, tick, mode, n_ticks):

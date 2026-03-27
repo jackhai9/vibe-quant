@@ -23,7 +23,6 @@ from src.models import (
     SignalReason,
     StrategyMode,
     SignalExecutionPreference,
-    QtyPolicy,
 )
 from src.utils.logger import setup_logger
 
@@ -498,7 +497,6 @@ class TestOrderbookPressureSignals:
         assert signal.reason == SignalReason.SHORT_BID_PRESSURE_PASSIVE
         assert signal.strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
         assert signal.execution_preference == SignalExecutionPreference.PASSIVE
-        assert signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT
         assert signal.price_override == Decimal("9.8")
         assert signal.ttl_override_ms == 10000
         assert signal.cooldown_override_ms == 0
@@ -577,7 +575,6 @@ class TestOrderbookPressureSignals:
 
         assert signal is not None
         assert signal.reason == SignalReason.LONG_ASK_PRESSURE_PASSIVE
-        assert signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT
         assert signal.base_mult_override == 5
         assert signal.roi_mult == 3
         assert signal.accel_mult == 4
@@ -1842,7 +1839,7 @@ class TestQtyJitter:
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
                 assert signal.base_mult_override == 20
-                assert signal.fixed_qty_jitter_pct == Decimal("0")
+                assert signal.qty_jitter_pct == Decimal("0")
 
     def test_signal_base_mult_stays_exact_even_when_qty_jitter_enabled(self):
         engine = self._make_engine(base_mult=20, qty_jitter_pct=Decimal("0.15"))
@@ -1852,8 +1849,8 @@ class TestQtyJitter:
             signal = engine.evaluate("DASH/USDT:USDT", PositionSide.SHORT, position, current_ms=ms)
             if signal is not None:
                 observed.add(signal.base_mult_override)
-                assert signal.fixed_qty_jitter_pct == Decimal("0.15")
-                assert signal.fixed_qty_anti_repeat_lookback == 3
+                assert signal.qty_jitter_pct == Decimal("0.15")
+                assert signal.qty_anti_repeat_lookback == 3
         assert observed == {20}
 
     def test_passive_ttl_jitter_applies_to_signal(self):

@@ -45,7 +45,6 @@ from src.models import (
     SymbolRules,
     StrategyMode,
     SignalExecutionPreference,
-    QtyPolicy,
     ReduceOnlyBlockInfo,
 )
 from src.utils.logger import (
@@ -490,28 +489,18 @@ class ExecutionEngine:
             return None
 
         # 计算下单数量
-        if signal.qty_policy == QtyPolicy.FIXED_MIN_QTY_MULT:
-            qty = self.compute_fixed_qty(
-                position_amt=position_amt,
-                min_qty=rules.min_qty,
-                step_size=rules.step_size,
-                last_trade_price=market_state.last_trade_price,
-                base_mult=signal.base_mult_override or 1,
-                roi_mult=signal.roi_mult,
-                accel_mult=signal.accel_mult,
-                qty_jitter_pct=signal.fixed_qty_jitter_pct or Decimal("0"),
-                anti_repeat_lookback=signal.fixed_qty_anti_repeat_lookback or 0,
-                recent_qtys=state.recent_fixed_order_qtys,
-            )
-        else:
-            qty = self.compute_qty(
-                position_amt=position_amt,
-                min_qty=rules.min_qty,
-                step_size=rules.step_size,
-                last_trade_price=market_state.last_trade_price,
-                roi_mult=signal.roi_mult,
-                accel_mult=signal.accel_mult,
-            )
+        qty = self.compute_qty(
+            position_amt=position_amt,
+            min_qty=rules.min_qty,
+            step_size=rules.step_size,
+            last_trade_price=market_state.last_trade_price,
+            roi_mult=signal.roi_mult,
+            accel_mult=signal.accel_mult,
+            base_mult_override=signal.base_mult_override,
+            qty_jitter_pct=signal.qty_jitter_pct or Decimal("0"),
+            anti_repeat_lookback=signal.qty_anti_repeat_lookback or 0,
+            recent_qtys=state.recent_pressure_order_qtys,
+        )
 
         if qty <= Decimal("0"):
             logger.debug(f"{signal.symbol} {signal.position_side.value} 计算数量为 0")
@@ -724,7 +713,7 @@ class ExecutionEngine:
                 not intent.is_risk
                 and state.current_order_strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
             ):
-                state.recent_fixed_order_qtys.append(intent.qty)
+                state.recent_pressure_order_qtys.append(intent.qty)
 
             log_order_place(
                 symbol=intent.symbol,
@@ -1608,15 +1597,20 @@ class ExecutionEngine:
         last_trade_price: Decimal,
         roi_mult: int = 1,
         accel_mult: int = 1,
+        *,
+        base_mult_override: Optional[int] = None,
+        qty_jitter_pct: Decimal = Decimal("0"),
+        anti_repeat_lookback: int = 0,
+        recent_qtys: Optional[Sequence[Decimal]] = None,
     ) -> Decimal:
         """
         计算下单数量
 
-        MVP 策略：
+        通用策略：
         - 基础数量 = min_qty * base_mult
-        - 确保不超过仓位
-        - 确保不超过 max_order_notional
-        - 按 step_size 规整
+        - 叠加 roi/accel 倍数并受 max_mult 约束
+        - 继续受仓位、max_order_notional 与 step_size 约束
+        - 可选对最终规整后数量应用 jitter / anti-repeat
 
         Args:
             position_amt: 当前仓位
@@ -1632,7 +1626,7 @@ class ExecutionEngine:
         if abs_position < min_qty:
             return Decimal("0")
 
-        base_mult = max(int(self.base_mult), 1)
+        base_mult = max(int(base_mult_override if base_mult_override is not None else self.base_mult), 1)
         roi_mult = max(int(roi_mult), 1)
         accel_mult = max(int(accel_mult), 1)
         max_mult = max(int(self.max_mult), 1)
@@ -1642,8 +1636,6 @@ class ExecutionEngine:
             final_mult = max_mult
 
         base_qty = min_qty * final_mult
-
-        # 不超过仓位
         qty = min(base_qty, abs_position)
 
         # 不超过 max_order_notional
@@ -1658,48 +1650,11 @@ class ExecutionEngine:
         if qty < min_qty:
             return Decimal("0")
 
-        return qty
-
-    def compute_fixed_qty(
-        self,
-        *,
-        position_amt: Decimal,
-        min_qty: Decimal,
-        step_size: Decimal,
-        last_trade_price: Decimal,
-        base_mult: int,
-        roi_mult: int = 1,
-        accel_mult: int = 1,
-        qty_jitter_pct: Decimal = Decimal("0"),
-        anti_repeat_lookback: int = 0,
-        recent_qtys: Optional[Sequence[Decimal]] = None,
-    ) -> Decimal:
-        """按固定基准片大小计算数量，并受 notional/jitter/anti-repeat 约束。"""
-        abs_position = abs(position_amt)
-        if abs_position < min_qty:
-            return Decimal("0")
-
-        fixed_mult = max(int(base_mult), 1)
-        roi_mult = max(int(roi_mult), 1)
-        accel_mult = max(int(accel_mult), 1)
-        max_mult = max(int(self.max_mult), 1)
-        final_mult = fixed_mult * roi_mult * accel_mult
-        if final_mult > max_mult:
-            final_mult = max_mult
-
-        base_qty = min(min_qty * final_mult, abs_position)
-        if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0"):
-            max_qty_by_notional = self.max_order_notional / last_trade_price
-            base_qty = min(base_qty, max_qty_by_notional)
-        base_qty = round_to_step(base_qty, step_size)
-        if base_qty < min_qty:
-            return Decimal("0")
-
         if qty_jitter_pct <= Decimal("0"):
-            return base_qty
+            return qty
 
         min_qty_candidate = round_up_to_step(
-            max(min_qty, base_qty * (Decimal("1") - qty_jitter_pct)),
+            max(min_qty, qty * (Decimal("1") - qty_jitter_pct)),
             step_size,
         )
         max_qty_candidate = round_to_step(
@@ -1710,7 +1665,7 @@ class ExecutionEngine:
                     if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0")
                     else abs_position
                 ),
-                base_qty * (Decimal("1") + qty_jitter_pct),
+                qty * (Decimal("1") + qty_jitter_pct),
             ),
             step_size,
         )
@@ -1718,7 +1673,7 @@ class ExecutionEngine:
         if max_qty_candidate < min_qty:
             return Decimal("0")
         if min_qty_candidate > max_qty_candidate:
-            return base_qty
+            return qty
 
         min_step = int(min_qty_candidate / step_size)
         max_step = int(max_qty_candidate / step_size)
@@ -1738,7 +1693,7 @@ class ExecutionEngine:
         all_candidates_blocked = step_span <= len(blocked_qtys)
         max_attempts = min(8, step_span)
 
-        candidate = base_qty
+        candidate = qty
         for _ in range(max_attempts):
             candidate = step_size * randint(min_step, max_step)
             if candidate < min_qty or candidate > abs_position:
@@ -1746,7 +1701,7 @@ class ExecutionEngine:
             if all_candidates_blocked or candidate not in blocked_qtys:
                 return candidate
 
-        return candidate if candidate >= min_qty else base_qty
+        return candidate if candidate >= min_qty else qty
 
     def is_position_done(self, position_amt: Decimal, min_qty: Decimal, step_size: Decimal) -> bool:
         """

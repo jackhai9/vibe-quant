@@ -29,7 +29,6 @@ from src.models import (
     SignalReason,
     StrategyMode,
     SignalExecutionPreference,
-    QtyPolicy,
     MarketState,
     SymbolRules,
     ReduceOnlyBlockInfo,
@@ -264,7 +263,7 @@ class TestOrderbookPressureExecution:
     """盘口量模式执行测试"""
 
     @pytest.mark.asyncio
-    async def test_on_signal_uses_fixed_qty_and_price_override(self, engine, symbol_rules, market_state):
+    async def test_on_signal_uses_pressure_qty_override_and_price_override(self, engine, symbol_rules, market_state):
         engine.max_order_notional = Decimal("1000000")
         signal = ExitSignal(
             symbol="BTC/USDT:USDT",
@@ -276,7 +275,6 @@ class TestOrderbookPressureExecution:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.AGGRESSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("50001"),
             cooldown_override_ms=1000,
             base_mult_override=5,
@@ -312,7 +310,6 @@ class TestOrderbookPressureExecution:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
@@ -330,51 +327,51 @@ class TestOrderbookPressureExecution:
         assert intent is not None
         assert intent.time_in_force == TimeInForce.GTX
 
-    def test_compute_fixed_qty_clamps_to_position(self, engine):
-        qty = engine.compute_fixed_qty(
+    def test_compute_qty_clamps_to_position_with_base_mult_override(self, engine):
+        qty = engine.compute_qty(
             position_amt=Decimal("0.0024"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
             last_trade_price=Decimal("100"),
-            base_mult=5,
+            base_mult_override=5,
         )
         assert qty == Decimal("0.002")
 
-    def test_compute_fixed_qty_supports_two_sided_jitter(self, engine):
+    def test_compute_qty_supports_two_sided_jitter(self, engine):
         with patch("src.execution.engine.randint", return_value=23):
-            qty = engine.compute_fixed_qty(
+            qty = engine.compute_qty(
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
                 last_trade_price=Decimal("100"),
-                base_mult=20,
+                base_mult_override=20,
                 qty_jitter_pct=Decimal("0.15"),
             )
         assert qty == Decimal("0.023")
 
-    def test_compute_fixed_qty_avoids_recent_repeated_sizes(self, engine):
+    def test_compute_qty_avoids_recent_repeated_sizes(self, engine):
         with patch("src.execution.engine.randint", side_effect=[20, 21]):
-            qty = engine.compute_fixed_qty(
+            qty = engine.compute_qty(
                 position_amt=Decimal("0.050"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
                 last_trade_price=Decimal("100"),
-                base_mult=20,
+                base_mult_override=20,
                 qty_jitter_pct=Decimal("0.15"),
                 anti_repeat_lookback=3,
                 recent_qtys=[Decimal("0.020")],
             )
         assert qty == Decimal("0.021")
 
-    def test_compute_fixed_qty_can_use_roi_and_accel_mult_and_caps_by_max_mult(self, engine):
+    def test_compute_qty_can_use_roi_and_accel_mult_and_caps_by_max_mult(self, engine):
         engine.max_mult = 20
 
-        qty = engine.compute_fixed_qty(
+        qty = engine.compute_qty(
             position_amt=Decimal("10"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
             last_trade_price=Decimal("100"),
-            base_mult=5,
+            base_mult_override=5,
             roi_mult=3,
             accel_mult=4,
         )
@@ -382,15 +379,15 @@ class TestOrderbookPressureExecution:
         # final_mult = min(5*3*4, 20) = 20 => qty = 0.001 * 20 = 0.02
         assert qty == Decimal("0.020")
 
-    def test_compute_fixed_qty_caps_fixed_path_by_max_mult(self, engine):
+    def test_compute_qty_caps_base_mult_override_by_max_mult(self, engine):
         engine.max_mult = 20
 
-        qty = engine.compute_fixed_qty(
+        qty = engine.compute_qty(
             position_amt=Decimal("10"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
             last_trade_price=Decimal("100"),
-            base_mult=31,
+            base_mult_override=31,
             roi_mult=2,
             accel_mult=2,
         )
@@ -398,36 +395,36 @@ class TestOrderbookPressureExecution:
         # final_mult = min(31*2*2, 20) = 20 => qty = 0.001 * 20 = 0.02
         assert qty == Decimal("0.020")
 
-    def test_compute_fixed_qty_limited_by_notional(self, engine):
+    def test_compute_qty_with_base_mult_override_limited_by_notional(self, engine):
         engine.max_order_notional = Decimal("100")
 
-        qty = engine.compute_fixed_qty(
+        qty = engine.compute_qty(
             position_amt=Decimal("1"),
             min_qty=Decimal("0.001"),
             step_size=Decimal("0.001"),
             last_trade_price=Decimal("50000"),
-            base_mult=10,
+            base_mult_override=10,
         )
 
         assert qty == Decimal("0.002")
 
-    def test_compute_fixed_qty_jitter_respects_notional_cap(self, engine):
+    def test_compute_qty_jitter_respects_notional_cap(self, engine):
         engine.max_order_notional = Decimal("100")
 
         with patch("src.execution.engine.randint", return_value=2):
-            qty = engine.compute_fixed_qty(
+            qty = engine.compute_qty(
                 position_amt=Decimal("1"),
                 min_qty=Decimal("0.001"),
                 step_size=Decimal("0.001"),
                 last_trade_price=Decimal("50000"),
-                base_mult=10,
+                base_mult_override=10,
                 qty_jitter_pct=Decimal("0.50"),
             )
 
         assert qty == Decimal("0.002")
 
     @pytest.mark.asyncio
-    async def test_fixed_qty_anti_repeat_tracks_successful_pressure_orders_only(self, engine, symbol_rules, market_state):
+    async def test_pressure_qty_anti_repeat_tracks_successful_pressure_orders_only(self, engine, symbol_rules, market_state):
         engine.max_order_notional = Decimal("1000000")
         signal = ExitSignal(
             symbol="BTC/USDT:USDT",
@@ -439,13 +436,12 @@ class TestOrderbookPressureExecution:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
             base_mult_override=20,
-            fixed_qty_jitter_pct=Decimal("0.15"),
-            fixed_qty_anti_repeat_lookback=3,
+            qty_jitter_pct=Decimal("0.15"),
+            qty_anti_repeat_lookback=3,
         )
 
         with patch("src.execution.engine.randint", return_value=20):
@@ -460,7 +456,7 @@ class TestOrderbookPressureExecution:
         assert first_intent.qty == Decimal("0.020")
 
         state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
-        assert list(state.recent_fixed_order_qtys) == []
+        assert list(state.recent_pressure_order_qtys) == []
 
         await engine.on_order_placed(
             intent=first_intent,
@@ -473,7 +469,7 @@ class TestOrderbookPressureExecution:
             ),
             current_ms=1001,
         )
-        assert list(state.recent_fixed_order_qtys) == [Decimal("0.020")]
+        assert list(state.recent_pressure_order_qtys) == [Decimal("0.020")]
 
         state.state = ExecutionState.IDLE
         state.current_order_id = None
@@ -502,13 +498,12 @@ class TestOrderbookPressureExecution:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("49999.5"),
             ttl_override_ms=10000,
             cooldown_override_ms=0,
             base_mult_override=20,
-            fixed_qty_jitter_pct=Decimal("0.15"),
-            fixed_qty_anti_repeat_lookback=3,
+            qty_jitter_pct=Decimal("0.15"),
+            qty_anti_repeat_lookback=3,
         )
 
         with patch("src.execution.engine.randint", return_value=20):
@@ -531,7 +526,7 @@ class TestOrderbookPressureExecution:
         )
 
         state = engine.get_state("BTC/USDT:USDT", PositionSide.SHORT)
-        assert list(state.recent_fixed_order_qtys) == []
+        assert list(state.recent_pressure_order_qtys) == []
 
         state.state = ExecutionState.IDLE
 
@@ -558,7 +553,6 @@ class TestOrderbookPressureExecution:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.AGGRESSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             price_override=Decimal("50001"),
             cooldown_override_ms=1000,
             base_mult_override=1,
@@ -1737,7 +1731,6 @@ class TestCheckTimeout:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRICE,
             execution_preference=SignalExecutionPreference.AGGRESSIVE,
-            qty_policy=QtyPolicy.DYNAMIC,
             roi_mult=1,
             accel_mult=1,
         )
@@ -1784,7 +1777,6 @@ class TestCheckTimeout:
             last_trade_price=Decimal("50000.5"),
             strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
             execution_preference=SignalExecutionPreference.PASSIVE,
-            qty_policy=QtyPolicy.FIXED_MIN_QTY_MULT,
             base_mult_override=1,
             price_override=Decimal("50000"),
             cooldown_override_ms=0,

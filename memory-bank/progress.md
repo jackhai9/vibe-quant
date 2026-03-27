@@ -64,6 +64,20 @@
 - `tests/test_execution.py`：回归覆盖 fixed 路径在 `base_mult > max_mult` 时也会被 `max_mult` 截断
 - `docs/configuration.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：文档统一改成“`max_mult` 是硬上限”，不再保留“不会把 fixed 基准片大小压到低于 base”的旧语义
 
+## Milestone/附加改进：移除 `FIXED_MIN_QTY_MULT`
+
+**状态**：✅ 已完成<br>
+**日期**：2026-03-27
+
+**动机**：动态路径与 pressure fixed 路径在 `base_mult`、公共 roi/accel modifiers、`max_mult`、`max_order_notional` 等主干语义上已经收敛，继续保留单独的 `QtyPolicy.FIXED_MIN_QTY_MULT` 只会增加概念噪音。<br>
+**产出**：
+
+- `src/models.py`：移除 `QtyPolicy` 与 `ExitSignal.qty_policy`
+- `src/execution/engine.py`：删除 `compute_fixed_qty()` 分支，统一由 `compute_qty()` 处理 `base_mult_override + jitter + anti-repeat`
+- `src/signal/engine.py`：`orderbook_pressure` 不再依赖独立的 qty policy；只保留 signal 自带的 `price/ttl/cooldown/base_mult/jitter` 覆盖
+- `tests/test_execution.py` / `tests/test_signal.py` / `tests/test_main_shutdown.py`：测试构造和断言同步切到单套 qty 入口
+- `src/execution/README.md` / `src/signal/README.md` / `memory-bank/architecture.md` / `memory-bank/design-document.md`：文档统一删除 `qty_policy` 表述，改成单套数量流水线的当前语义
+
 ## Milestone/附加改进：原始市场数据录制器
 
 **状态**：✅ 已完成<br>
