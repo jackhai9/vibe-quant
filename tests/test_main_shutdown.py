@@ -8,6 +8,8 @@ main.py 应用关闭行为 & 命令解析 & 保护止损调度竞态测试
 """
 
 import asyncio
+import json
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -35,6 +37,7 @@ from src.models import (
 )
 from src.execution.engine import ExecutionEngine
 from src.notify.pause_manager import PauseManager
+from src.stats.pressure_stats import PressureRecap, PressureStatsCollector, RegimeLogEntry
 from src.utils.logger import setup_logger
 
 
@@ -126,6 +129,354 @@ async def test_evaluate_symbol_side_resets_pressure_dwell_on_flat_position():
         PositionSide.SHORT,
         reason="position_flat",
     )
+
+
+def test_handle_pressure_regime_updates_only_notifies_degrading_or_failed():
+    app = Application.__new__(Application)
+    app._running = True
+    app._pressure_regime_entries = {}
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.telegram.enabled = True
+    app.config_loader.config.global_.telegram.events.on_risk_trigger = True
+    app.telegram_notifier = MagicMock()
+    app.telegram_notifier.enabled = True
+    app.telegram_notifier.notify_pressure_regime = MagicMock(side_effect=lambda **_: asyncio.sleep(0))
+    app._schedule_telegram = MagicMock()
+
+    app._handle_pressure_regime_updates(
+        [
+            RegimeLogEntry(
+                symbol="DASH/USDT:USDT",
+                side="LONG",
+                window_label="5m",
+                regime="effective",
+                prev_regime="recovering",
+                score=5,
+                samples=12,
+            ),
+            RegimeLogEntry(
+                symbol="DASH/USDT:USDT",
+                side="LONG",
+                window_label="5m",
+                regime="degrading",
+                prev_regime="effective",
+                score=1,
+                samples=12,
+            ),
+            RegimeLogEntry(
+                symbol="DASH/USDT:USDT",
+                side="SHORT",
+                window_label="5m",
+                regime="failed",
+                prev_regime="degrading",
+                score=0,
+                samples=12,
+            ),
+        ]
+    )
+
+    assert app._pressure_regime_entries[("DASH/USDT:USDT", "LONG")].regime == "degrading"
+    assert app._pressure_regime_entries[("DASH/USDT:USDT", "SHORT")].regime == "failed"
+    assert app.telegram_notifier.notify_pressure_regime.call_count == 2
+    app.telegram_notifier.notify_pressure_regime.assert_any_call(
+        symbol="DASH/USDT:USDT",
+        position_side="LONG",
+        regime="degrading",
+        window="5m",
+        prev_regime="effective",
+        score=1,
+    )
+    app.telegram_notifier.notify_pressure_regime.assert_any_call(
+        symbol="DASH/USDT:USDT",
+        position_side="SHORT",
+        regime="failed",
+        window="5m",
+        prev_regime="degrading",
+        score=0,
+    )
+    assert app._schedule_telegram.call_count == 2
+    for call in app._schedule_telegram.call_args_list:
+        call.args[0].close()
+
+
+def test_restore_pressure_regime_state_restores_recent_cache():
+    source = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+    for i in range(12):
+        source._record_regime_snapshot(
+            "DASH/USDT:USDT",
+            "LONG",
+            ts_ms=(i + 1) * 300_000,
+            active_triggers=10 + i,
+            passive_triggers=120 - i,
+            active_attempts=6 + i,
+            passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+            price_change_pct=Decimal(f"{i + 1}.00"),
+        )
+    regime = source._evaluate_regime("DASH/USDT:USDT", "LONG")
+    assert regime is not None
+
+    payload = source.export_regime_state(current_ms=3_600_000)
+    payload["regime_entries"] = {
+        "DASH/USDT:USDT|LONG": {
+            "symbol": "DASH/USDT:USDT",
+            "side": "LONG",
+            "window_label": "5m",
+            "regime": regime.state,
+            "prev_regime": regime.prev_state,
+            "score": regime.score,
+            "samples": regime.samples,
+        }
+    }
+
+    with TemporaryDirectory() as tmpdir:
+        state_path = Path(tmpdir) / "pressure_regime_state.json"
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        app = Application.__new__(Application)
+        app._log_dir = Path(tmpdir)
+        app._pressure_stats = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        app._pressure_regime_entries = {}
+        app.config_loader = MagicMock()
+        app.config_loader.config.global_.stats.pressure_regime_resume_enabled = True
+        app.config_loader.config.global_.stats.pressure_regime_resume_max_gap_ms = 900_000
+
+        with patch("src.main.current_time_ms", return_value=3_660_000):
+            app._restore_pressure_regime_state()
+
+        restored_entry = app._pressure_regime_entries[("DASH/USDT:USDT", "LONG")]
+        assert restored_entry.window_label == "5m"
+        assert restored_entry.regime == regime.state
+        restored_regime = app._pressure_stats._evaluate_regime("DASH/USDT:USDT", "LONG")
+        assert restored_regime is not None
+        assert restored_regime.samples == 12
+
+
+@pytest.mark.asyncio
+async def test_handle_cmd_status_includes_latest_pressure_regime():
+    app = Application.__new__(Application)
+    app._running = True
+    app._started_at = datetime.now()
+    app._calibrating = False
+    app.pause_manager = MagicMock()
+    app.pause_manager.get_status.return_value = {
+        "global_paused": False,
+        "global_paused_at": None,
+        "global_resume_at": None,
+        "paused_symbols": {},
+        "symbol_resume_at": {},
+    }
+    app._active_symbols = {"DASH/USDT:USDT"}
+    app._symbol_configs = {
+        "DASH/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRESSURE),
+    }
+    app._positions = {
+        "DASH/USDT:USDT": {
+            PositionSide.LONG: Position(
+                symbol="DASH/USDT:USDT",
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("1.5"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            ),
+        }
+    }
+    state = MagicMock()
+    state.mode.value = "MAKER_ONLY"
+    state.state.value = "WAITING"
+    engine = MagicMock()
+    engine.get_state.return_value = state
+    app.execution_engines = {"DASH/USDT:USDT": engine}
+    app._pressure_regime_entries = {
+        ("DASH/USDT:USDT", "LONG"): RegimeLogEntry(
+            symbol="DASH/USDT:USDT",
+            side="LONG",
+            window_label="5m",
+            regime="failed",
+            prev_regime="degrading",
+            score=0,
+            samples=12,
+        )
+    }
+
+    text = await app._handle_cmd_status("")
+
+    assert "盘口量状态:" in text
+    assert "DASH/USDT LONG: 5m 失效 (score=0, samples=12)" in text
+
+
+def test_restore_pressure_regime_state_filters_stale_regime_entries():
+    source = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+    for i in range(12):
+        source._record_regime_snapshot(
+            "DASH/USDT:USDT",
+            "LONG",
+            ts_ms=10_800_000 + (i + 1) * 300_000,
+            active_triggers=10 + i,
+            passive_triggers=120 - i,
+            active_attempts=6 + i,
+            passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+            price_change_pct=Decimal(f"{i + 1}.00"),
+        )
+        source._record_regime_snapshot(
+            "FORM/USDT:USDT",
+            "LONG",
+            ts_ms=(i + 1) * 300_000,
+            active_triggers=5 + i,
+            passive_triggers=150 - i,
+            active_attempts=3 + i,
+            passive_fill_rate=Decimal(f"0.{30 + i:03d}"),
+            price_change_pct=Decimal(f"{i + 2}.00"),
+        )
+    dash_regime = source._evaluate_regime("DASH/USDT:USDT", "LONG")
+    form_regime = source._evaluate_regime("FORM/USDT:USDT", "LONG")
+    assert dash_regime is not None
+    assert form_regime is not None
+
+    payload = source.export_regime_state(current_ms=14_400_000)
+    payload["regime_entries"] = {
+        "DASH/USDT:USDT|LONG": {
+            "symbol": "DASH/USDT:USDT",
+            "side": "LONG",
+            "window_label": "5m",
+            "regime": dash_regime.state,
+            "prev_regime": dash_regime.prev_state,
+            "score": dash_regime.score,
+            "samples": dash_regime.samples,
+        },
+        "FORM/USDT:USDT|LONG": {
+            "symbol": "FORM/USDT:USDT",
+            "side": "LONG",
+            "window_label": "5m",
+            "regime": form_regime.state,
+            "prev_regime": form_regime.prev_state,
+            "score": form_regime.score,
+            "samples": form_regime.samples,
+        },
+    }
+
+    with TemporaryDirectory() as tmpdir:
+        state_path = Path(tmpdir) / "pressure_regime_state.json"
+        state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        app = Application.__new__(Application)
+        app._log_dir = Path(tmpdir)
+        app._pressure_stats = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        app._pressure_regime_entries = {}
+        app.config_loader = MagicMock()
+        app.config_loader.config.global_.stats.pressure_regime_resume_enabled = True
+        app.config_loader.config.global_.stats.pressure_regime_resume_max_gap_ms = 900_000
+
+        with patch("src.main.current_time_ms", return_value=14_460_000):
+            app._restore_pressure_regime_state()
+
+        assert ("DASH/USDT:USDT", "LONG") in app._pressure_regime_entries
+        assert ("FORM/USDT:USDT", "LONG") not in app._pressure_regime_entries
+
+
+@pytest.mark.asyncio
+async def test_pressure_stats_loop_uses_configured_regime_window_interval():
+    app = Application.__new__(Application)
+    app._running = True
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app._pressure_stats = MagicMock()
+    app.pause_manager = MagicMock()
+    app.pause_manager.is_paused.return_value = False
+    app._handle_pressure_regime_updates = MagicMock()
+    app._save_pressure_regime_state = MagicMock()
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        app._running = False
+
+    with patch("src.main.asyncio.sleep", side_effect=fake_sleep):
+        await app._pressure_stats_loop()
+
+    assert sleep_calls == [60.0]
+    app._pressure_stats.log_all_windows.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
+    app = Application.__new__(Application)
+    app._log_dir = Path("/tmp")
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app._active_symbols = {"DASH/USDT:USDT", "FORM/USDT:USDT"}
+    app._symbol_configs = {
+        "DASH/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRESSURE),
+        "FORM/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRICE),
+    }
+    app._positions = {
+        "DASH/USDT:USDT": {
+            PositionSide.LONG: Position(
+                symbol="DASH/USDT:USDT",
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("1"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            ),
+        },
+        "FORM/USDT:USDT": {
+            PositionSide.LONG: Position(
+                symbol="FORM/USDT:USDT",
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("2"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            ),
+        },
+    }
+
+    recap = PressureRecap(
+        symbol="DASH",
+        side="LONG",
+        window_label="1m",
+        range_start=datetime(2026, 3, 28, 8, 0, 0),
+        range_end=datetime(2026, 3, 28, 9, 0, 0),
+        stats_samples=12,
+        regime_samples=12,
+        overall_active_attempts_corr=0.22,
+        overall_active_triggers_corr=0.20,
+        overall_passive_triggers_corr=-0.28,
+        overall_passive_fill_rate_corr=0.51,
+        latest_regime="degrading",
+        latest_regime_ts=datetime(2026, 3, 28, 9, 0, 0),
+        latest_score=1,
+        latest_regime_samples=12,
+        latest_active_attempts_corr=0.01,
+        latest_active_triggers_corr=0.02,
+        latest_passive_triggers_corr=-0.11,
+        latest_passive_fill_rate_corr=0.33,
+        regime_changes=["03-28 08:19 effective->degrading", "03-28 08:29 degrading->recovering"],
+        interpretation="当前经验规则在衰减，警惕 regime shift",
+    )
+
+    with (
+        patch("src.main.analyze_recent_pressure_logs", return_value=[recap]) as mock_analyze,
+        patch("src.main.get_logger") as mock_get_logger,
+    ):
+        logger = MagicMock()
+        mock_get_logger.return_value = logger
+        await app._startup_pressure_recap_once()
+
+    mock_analyze.assert_called_once()
+    _, kwargs = mock_analyze.call_args
+    assert kwargs["target_keys"] == {("DASH", "LONG")}
+    assert kwargs["window_label"] == "1m"
+    logger.info.assert_called_once()
+    report = logger.info.call_args.args[0]
+    assert "[PRESSURE_RECAP] 盘口量回顾" in report
+    assert "标的: DASH LONG" in report
+    assert "窗口: 1m" in report
+    assert "整体相关性:" in report
+    assert "当前状态:" in report
+    assert "转折时间点:" in report
 
 
 def _make_pressure_eval_app(

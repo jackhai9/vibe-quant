@@ -1,6 +1,6 @@
 # Input: log dir and normalized event fields
 # Output: configured logger and structured logging helpers (including event type CN map)
-# Pos: logging setup and event normalization (including fill roles/pnl/console color for fill)
+# Pos: logging setup and event normalization (including fill/risk/regime/recap details)
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -57,6 +57,7 @@ EVENT_TYPE_CN = {
     "fill_rate": "成交率",
     "pressure_stats": "盘口量统计",
     "pressure_regime": "盘口量状态",
+    "pressure_recap": "盘口量回顾",
     "pressure_burst": "盘口量节流",
     "error": "错误",
 }

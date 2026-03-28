@@ -1,6 +1,6 @@
 # Input: token, chat_id, events, rate limit state
 # Output: serialized Telegram delivery with retry_after handling
-# Pos: Telegram notifier with fill details
+# Pos: Telegram notifier with fill/risk/regime details
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -10,6 +10,7 @@ Telegram 通知模块
 - 发送成交通知
 - 发送 WS 重连通知
 - 发送风险兜底触发通知
+- 发送盘口量 regime 预警通知
 - 发送失败时重试（不阻塞主链路）
 
 输入：
@@ -181,6 +182,51 @@ class TelegramNotifier:
             f"【风险】{action}\n"
             f"  交易对: {short_symbol}\n"
             f"  强平距离: {dist_to_liq}"
+        )
+        await self._send_message(text)
+
+    async def notify_pressure_regime(
+        self,
+        symbol: str,
+        position_side: str,
+        regime: str,
+        window: str,
+        prev_regime: Optional[str] = None,
+        score: Optional[int] = None,
+    ) -> None:
+        """
+        发送盘口量 regime 预警通知。
+
+        Args:
+            symbol: 交易对
+            position_side: 仓位方向
+            regime: 当前 regime
+            window: 统计窗口标签
+            prev_regime: 上一状态
+            score: 当前 regime score
+        """
+        short_symbol = symbol.split(":")[0]
+        action = "平多" if position_side == "LONG" else "平空"
+        regime_cn = {
+            "effective": "有效",
+            "degrading": "衰减",
+            "failed": "失效",
+            "recovering": "恢复中",
+        }.get(regime, regime)
+        prev_cn = {
+            "effective": "有效",
+            "degrading": "衰减",
+            "failed": "失效",
+            "recovering": "恢复中",
+        }.get(prev_regime or "", prev_regime or "-")
+
+        score_line = f"\n  评分: {score}" if score is not None else ""
+        text = (
+            f"【盘口量状态】{action}\n"
+            f"  交易对: {short_symbol}\n"
+            f"  窗口: {window}\n"
+            f"  状态: {regime_cn}\n"
+            f"  上一状态: {prev_cn}{score_line}"
         )
         await self._send_message(text)
 

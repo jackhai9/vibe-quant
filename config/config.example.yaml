@@ -67,6 +67,8 @@ global:
   stats:
     pressure_regime_window_ms: 300000  # PRESSURE_REGIME 使用的统计窗口；当前推荐 5m，1m 太抖、15m 太滞后
     pressure_regime_samples: 12        # 至少积累多少个窗口样本后开始判定；当前推荐 12 个窗口，约等于最近 1 小时
+    pressure_regime_resume_enabled: true      # 启动时恢复最近一次 PRESSURE_REGIME 状态；短暂停机后无需重新等满 12×5m
+    pressure_regime_resume_max_gap_ms: 900000 # 最长允许恢复的停机间隔；当前推荐 15m，超过则从头积累
 
   # 加速倍数
   accel:

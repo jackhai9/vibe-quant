@@ -36,7 +36,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 ## 数据存储（当前无数据库）
 
 - **配置**：`config/config.yaml`（YAML）
-- **日志**：`logs/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`）
+- **日志**：`logs/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`；`pressure_regime_state.json` 用于短暂停机后的 regime 恢复；最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志会在启动后被后台解析成一次 `PRESSURE_RECAP`）
 - **持久化数据库**：无（当前所有状态仅在内存中维护）
 
 ---
@@ -92,8 +92,23 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；产出公共 ROI/accel sizing context；`orderbook_pressure` 生成带 TTL/cooldown jitter、基准片大小 jitter 与 burst pacing 元数据的 ExitSignal，并可显式启用公共倍数 | MarketEvent, Position | ExitSignal |
 | **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 的基准片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
-| **Logger** | 按天滚动日志，结构化字段 | 各模块事件 | 日志文件 |
-| **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
+| **Logger** | 按天滚动日志，结构化字段；维护 `pressure_regime_state.json` 供短暂停机恢复，恢复时按每个 `symbol|side` 的最近 snapshot freshness 过滤 stale cache；支持输出启动后的 `PRESSURE_RECAP` | 各模块事件 | 日志文件 |
+| **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询，`/status` 可查看最近一次 `PRESSURE_REGIME` 缓存） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
+
+---
+
+### 启动后的 `PRESSURE_RECAP`
+
+- 应用启动后会在后台扫描最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志
+- 只分析当前仍有持仓、且 `strategy.mode=orderbook_pressure` 的 `symbol + side`
+- 输出内容包括：
+  - 最近样本范围与样本量
+  - 当前 `pressure_regime_window_ms` 对应窗口的 same-window 整体相关性（默认 `5m`）
+  - 最近一次 `PRESSURE_REGIME` 状态
+  - 最近一段 regime 转折时间点
+  - 一句基于当前经验规则的解释性总结
+- 这份 recap 只做启动时的背景回顾，不阻塞交易主循环，也不直接预测价格方向
+- 日志采用单条多行报告格式，便于直接在 console 和文件里阅读
 
 ---
 
@@ -325,22 +340,22 @@ vibe-quant/
 | 文件 | 行数 | 说明 |
 |------|------|------|
 | `src/models.py` | 460 | 核心数据结构（枚举 + dataclass），定义所有模块间传递的数据结构 |
-| `src/main.py` | 3044 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
+| `src/main.py` | 3452 | Application 类，模块初始化 + 事件循环 + 优雅退出 |
 | `src/config/loader.py` | 270 | ConfigLoader 类，YAML 加载 + 环境变量 + global/symbol 合并 |
 | `src/config/models.py` | 312 | pydantic 配置模型，支持类型验证和默认值 |
-| `src/utils/logger.py` | 483 | loguru 日志配置，按天滚动 + 结构化事件日志 |
+| `src/utils/logger.py` | 467 | loguru 日志配置，按天滚动 + 结构化事件日志 |
 | `src/utils/helpers.py` | 159 | round_to_tick/round_up_to_tick/round_to_step/round_up_to_step/current_time_ms/symbol 转换 |
 | `src/exchange/adapter.py` | 1200 | ExchangeAdapter 类，ccxt 封装（markets/positions/下单/撤单/规整函数） |
 | `src/ws/market.py` | 572 | MarketWSClient 类，bookTicker/aggTrade/markPrice@1s 解析，指数退避重连，陈旧检测，重连回调 |
 | `src/ws/user_data.py` | 744 | UserDataWSClient 类，listenKey 管理 + ORDER_TRADE_UPDATE/ALGO_UPDATE/ACCOUNT_UPDATE 解析，指数退避重连，重连回调 |
 | `src/signal/engine.py` | 471 | SignalEngine 类，MarketState 聚合 + LONG/SHORT 信号判断 + 节流 + accel/ROI 倍数 |
 | `src/stats/market_recorder.py` | 245 | MarketDataRecorder，原始市场数据录制（采样/日切/gzip/保留清理） |
-| `src/stats/pressure_stats.py` | 320 | PressureStatsCollector，orderbook_pressure 旁路统计（trigger/成功下单/首次成交/价格窗口聚合 + 可配置窗口的 `PRESSURE_REGIME` 状态机） |
+| `src/stats/pressure_stats.py` | 1086 | PressureStatsCollector，orderbook_pressure 旁路统计（trigger/成功下单/首次成交/价格窗口聚合 + 可配置窗口的 `PRESSURE_REGIME` 状态机 + 最近快照导出/恢复 + 启动后的 `PRESSURE_RECAP` 分析） |
 | `src/execution/engine.py` | 1705 | ExecutionEngine 类，状态机 + Maker/Aggr 定价 + 超时/冷却管理 + panic_close 支持 |
 | `src/risk/manager.py` | 142 | RiskManager 类，dist_to_liq 风控兜底 + orders/cancels 全局限速 |
 | `src/risk/protective_stop.py` | 848 | ProtectiveStopManager 类，维护交易所端 STOP_MARKET closePosition 保护止损单 |
 | `src/risk/rate_limiter.py` | 51 | SlidingWindowRateLimiter，固定窗口滑动计数限速 |
-| `src/notify/telegram.py` | 241 | Telegram 通知（成交/重连/风险触发/开仓告警；token/chat_id 走 env） |
+| `src/notify/telegram.py` | 354 | Telegram 通知（成交/重连/风险触发/盘口量状态预警/开仓告警；token/chat_id 走 env） |
 | `src/notify/bot.py` | 200 | TelegramBot 类，getUpdates long polling 命令接收器 |
 | `src/notify/pause_manager.py` | 227 | PauseManager 类，全局/per-symbol 暂停状态管理，支持定时暂停自动恢复 |
 

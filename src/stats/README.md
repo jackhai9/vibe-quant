@@ -6,13 +6,13 @@
 # src/stats 目录说明
 
 统计与录制模块。<br>
-`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）。<br>
+`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）；最近一次 regime 快照会周期性落到日志目录，供短暂停机后的启动恢复。应用启动后还会在后台扫描最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前状态和转折时间点。<br>
 `market_recorder.py` 以非阻塞方式录制 `bookTicker + depth10 + aggTrade` 原始事件到 JSONL，供后续离线回放调参。<br>
-两者都不阻塞核心交易路径；前者纯内存，后者通过 queue + writer task 后台落盘。
+两者都不阻塞核心交易路径；前者的事件缓冲保持内存态，但 regime 快照可短期持久化恢复，后者通过 queue + writer task 后台落盘。
 
 ## 文件清单
 
-- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、rolling regime 状态评估与日志输出
+- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、rolling regime 状态评估、短暂停机恢复与 startup recap 分析
 - `market_recorder.py`：`MarketDataRecorder` — 原始市场数据录制、日切压缩、保留清理
 - `__init__.py`：模块导出
 
@@ -97,9 +97,22 @@ aggTrade：
 - 对 `same-window` 统计，不必每次从头重算
 - 对 `lead-lag` 统计，增量续算时保留上一条 `5m` 样本即可，用来和新进入的第一条 `5m` 样本组成 `t -> t+1`
 
+### 启动回顾（`PRESSURE_RECAP`）
+
+- 应用启动后会在后台读取最近 `24h` 的 `vibe-quant_*.log` / `vibe-quant_*.log.gz`
+- 只分析当前仍有持仓、且 `strategy.mode=orderbook_pressure` 的 `symbol + side`
+- 输出内容包括：
+  - 最近样本范围与样本量
+  - 当前 `pressure_regime_window_ms` 对应窗口的 same-window 整体相关性（默认 `5m`）
+  - 最近一次 `PRESSURE_REGIME` 状态
+  - 最近一段 regime 转折时间点
+  - 一句基于当前经验规则的解释性总结
+- `PRESSURE_RECAP` 是启动时的一次性背景回顾，不会阻塞交易主循环，也不是价格方向预测器
+- 日志输出采用单条多行报告格式，便于直接在 console 和文件里阅读，不需要再手动把多条单行日志拼起来
+
 ### 当前经验总结
 
-- 旧的“`5m passive_fill_rate` 是最强正向确认项”只在早期样本中成立，后续已经出现明显漂移
+- 早期样本中形成的“`5m passive_fill_rate` 是最强正向确认项”这条工作假设，后续已经出现明显漂移
 - 截至当前检查点，`DASH LONG 5m` 中相对更稳定的信号是：
   - `active_attempts / active_triggers` 与 `price_chg` 仍保持弱正相关
   - `passive_triggers` 与 `price_chg` 继续偏负相关
@@ -119,7 +132,7 @@ aggTrade：
 
 ### `PRESSURE_REGIME` 状态机
 
-在线状态机使用 `global.stats.pressure_regime_window_ms` 指定统计窗口，使用 `global.stats.pressure_regime_samples` 指定至少积累多少个窗口样本后开始判定；默认是最近 `12` 个 `5m` 样本。
+在线状态机使用 `global.stats.pressure_regime_window_ms` 指定统计窗口；它既决定滚动窗口长度，也决定每隔多久追加一个新样本并输出一次 regime 日志。`global.stats.pressure_regime_samples` 指定至少积累多少个窗口样本后开始判定；默认是最近 `12` 个 `5m` 样本。若启用了 `global.stats.pressure_regime_resume_enabled`，启动时会对每个 `symbol|side` 单独检查最近一条 regime snapshot 是否距今不超过 `pressure_regime_resume_max_gap_ms`，只有 fresh key 才会恢复滚动快照，避免短暂停机后重新等待接近 1 小时，同时避免把 stale key 一起带回缓存。
 
 核心观测量：
 
@@ -133,19 +146,21 @@ aggTrade：
 - `effective`
   - 最近一段窗口里，`active_attempts / active_triggers` 与 `price_chg` 保持正向，`passive_triggers` 保持负向，说明原经验规则仍然成立
 - `degrading`
-  - 原经验关系开始走弱，但还没完全翻转，更像 regime 切换前的衰减段
+  - 当前经验规则开始走弱，但还没完全翻转，更像 regime 切换前的衰减段
 - `failed`
-  - 最近窗口里原经验关系已经不成立，说明当前 microstructure 规则失效，应把它视为 regime shift 警报，而不是继续沿用旧规则
+  - 最近窗口里当前经验规则已经不成立，说明当前 microstructure 规则失效，应把它视为 regime shift 警报，而不是继续沿用原先的判读方式
 - `recovering`
-  - 在 `failed` 之后，经验关系重新转好，但还没稳定回到 `effective`
+  - 在 `failed` 之后，当前经验规则重新转好，但还没稳定回到 `effective`
 
 ### 使用边界
 
 - `PRESSURE_REGIME` 是在线 regime 预警，不是价格方向预测器
 - 它更适合回答“当前这套 `orderbook_pressure` 经验规则还能不能信”
 - `failed` 更像“市场结构在变”，不是“下一根一定下跌”
-- `recovering` 更像“旧关系开始回来”，不是“立即恢复成顺风行情”
+- `recovering` 更像“先前失效的关系开始回来”，不是“立即恢复成顺风行情”
 - 这套状态机不应替代后续基于 `market_data_*.jsonl` 的离线回放分析
+- 当前通知策略：`effective / recovering` 只打日志；仅当状态切到 `degrading / failed` 时，才通过 `telegram.events.on_risk_trigger` 发 Telegram 预警
+- Telegram Bot 的 `/status` 命令会展示最近一次已评估出的 `PRESSURE_REGIME` 缓存，便于不翻日志直接查看当前状态；若尚未积累到足够样本，则显示“待积累样本”
 
 ## 下一步分析计划
 

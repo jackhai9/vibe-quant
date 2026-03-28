@@ -243,6 +243,15 @@ class StatsConfig(BaseModel):
         le=96,
         description="PRESSURE_REGIME 至少积累多少个窗口样本后开始判定",
     )
+    pressure_regime_resume_enabled: bool = Field(
+        default=True,
+        description="是否在启动时恢复最近一次 PRESSURE_REGIME 样本与状态",
+    )
+    pressure_regime_resume_max_gap_ms: int = Field(
+        default=900_000,
+        ge=0,
+        description="允许恢复的最长停机间隔(ms)，超过则从头积累",
+    )
 
 
 class StrategyConfig(BaseModel):

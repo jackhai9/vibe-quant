@@ -200,6 +200,36 @@ async def test_notify_open_alert_formats_chinese_multiline(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_notify_pressure_regime_formats_multiline(monkeypatch):
+    notifier = TelegramNotifier(token="token", chat_id="chat", enabled=True)
+    sent: List[str] = []
+
+    async def capture(text: str) -> bool:  # noqa: ANN001
+        sent.append(text)
+        return True
+
+    notifier._send_message = capture  # type: ignore[method-assign]  # noqa: SLF001
+
+    await notifier.notify_pressure_regime(
+        symbol="DASH/USDT:USDT",
+        position_side="LONG",
+        regime="failed",
+        window="5m",
+        prev_regime="degrading",
+        score=0,
+    )
+
+    assert sent == [
+        "【盘口量状态】平多\n"
+        "  交易对: DASH/USDT\n"
+        "  窗口: 5m\n"
+        "  状态: 失效\n"
+        "  上一状态: 衰减\n"
+        "  评分: 0"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_send_message_respects_retry_after(monkeypatch):
     notifier = TelegramNotifier(token="token", chat_id="chat", enabled=True, max_retries=1)
     fake_session = FakeSession(

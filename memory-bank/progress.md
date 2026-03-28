@@ -35,10 +35,16 @@
 **产出**：
 
 - `src/stats/pressure_stats.py`：为配置指定窗口维护 rolling snapshots，并基于 `global.stats.pressure_regime_window_ms` / `pressure_regime_samples` 计算 `PRESSURE_REGIME`（默认 `5m × 12`）
+- `src/stats/pressure_stats.py`：regime snapshot history 会自动扩到至少 `pressure_regime_samples`，避免 `pressure_regime_samples > 48` 时状态机静默不输出
 - `src/stats/pressure_stats.py`：状态机使用 `active_attempts_corr`、`active_triggers_corr`、`passive_triggers_corr` 与 `passive_fill_rate_corr` 生成 regime score，并输出 `effective / degrading / failed / recovering`
+- `src/main.py`：`PRESSURE_REGIME` 的统计循环节奏跟随 `pressure_regime_window_ms`，避免把 `1m/15m` 窗口仍按固定 `5m` 采样
+- `src/stats/pressure_stats.py` / `src/main.py`：最近一次 `PRESSURE_REGIME` 快照会写入日志目录下的 `pressure_regime_state.json`；若某个 `symbol|side` 最近一条 snapshot 距当前时间不超过 `pressure_regime_resume_max_gap_ms` 且口径一致，启动时只恢复该 fresh key，避免再次等待接近 `12 × 5m`，也避免 stale key 被一起带回缓存
 - `src/utils/logger.py`：新增 `pressure_regime` 事件类型中文名
 - `tests/test_pressure_stats.py`：覆盖有效态、失效/恢复态转换，以及自定义窗口/样本数下的 regime 日志输出
 - `src/stats/README.md` / `memory-bank/architecture.md`：同步“在线 regime 判读”与 `PRESSURE_REGIME` 的当前语义
+- `src/main.py` / `src/notify/telegram.py`：仅在 `PRESSURE_REGIME` 进入 `degrading / failed` 时发 Telegram 预警；`effective / recovering` 继续只打日志，避免刷屏
+- `src/main.py`：Telegram Bot 的 `/status` 命令展示最近一次已评估出的 `PRESSURE_REGIME` 缓存；未形成足够样本时显示“待积累样本”
+- `src/stats/pressure_stats.py` / `src/main.py`：应用启动后会在后台分析最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志，并为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前配置窗口的整体相关性、当前状态和 regime 转折时间点
 - 当前窗口分工约定：
   - `1m`：early warning，主要看短时异动和早期背离
   - `5m`：primary regime judgment，当前所有“规则失效/漂移/恢复”的主结论默认优先基于这一档

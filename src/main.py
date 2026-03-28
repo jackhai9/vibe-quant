@@ -1,5 +1,5 @@
-# Input: config path, env vars, OS signals, account positions, Telegram Bot commands
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, and liq-distance risk log/mode coordination
+# Input: config path, env vars, OS signals, account positions, Telegram Bot commands, and recent pressure logs
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and startup pressure recap
 # Pos: application entrypoint and orchestrator
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -17,6 +17,7 @@ vibe-quant: Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行�
 """
 
 import asyncio
+import json
 import math
 import os
 import signal
@@ -39,6 +40,7 @@ from src.ws.market import MarketWSClient
 from src.ws.user_data import UserDataWSClient
 from src.signal.engine import SignalEngine, PressureSignalConfig
 from src.stats import MarketDataRecorder, PressureStatsCollector
+from src.stats.pressure_stats import RegimeLogEntry, PressureRecap, analyze_recent_pressure_logs, _window_label
 from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
@@ -132,6 +134,7 @@ class Application:
         self._telegram_tasks: set[asyncio.Task[Any]] = set()
         self._side_tasks: set[asyncio.Task[Any]] = set()
         self._market_recorder: Optional[MarketDataRecorder] = None
+        self._log_dir: Optional[Path] = None
 
         # Telegram Bot 命令控制
         self.pause_manager: PauseManager = PauseManager()
@@ -156,6 +159,7 @@ class Application:
         self._timeout_check_task: Optional[asyncio.Task[None]] = None
         self._fill_rate_log_task: Optional[asyncio.Task[None]] = None
         self._pressure_stats_task: Optional[asyncio.Task[None]] = None
+        self._startup_pressure_recap_task: Optional[asyncio.Task[None]] = None
         self._position_refresh_loop_task: Optional[asyncio.Task[None]] = None
         self._market_ws_task: Optional[asyncio.Task[None]] = None
         self._user_data_ws_task: Optional[asyncio.Task[None]] = None
@@ -183,6 +187,7 @@ class Application:
         self._no_position_logged: set[tuple[str, PositionSide]] = set()
         self._fill_rate_last_log_ms: dict[tuple[str, PositionSide], int] = {}
         self._pressure_stats: Optional[PressureStatsCollector] = None
+        self._pressure_regime_entries: Dict[tuple[str, str], RegimeLogEntry] = {}
         self._pressure_fill_recorded_orders: set[tuple[str, str]] = set()
         self._pressure_trigger_signatures: dict[tuple[str, PositionSide], _PressureTriggerSignature] = {}
         self._panic_last_tier: dict[tuple[str, PositionSide], Decimal] = {}
@@ -978,6 +983,7 @@ class Application:
         # 设置日志
         # 支持通过环境变量指定日志目录（便于 systemd/Docker 持久化日志）
         log_dir = Path(os.environ.get("VQ_LOG_DIR", "logs"))
+        self._log_dir = log_dir
         setup_logger(log_dir, level="INFO", file_level="DEBUG", console=True)
         log_startup(configured_symbols)
 
@@ -1085,6 +1091,7 @@ class Application:
             regime_window_ms=global_config.stats.pressure_regime_window_ms,
             regime_samples=global_config.stats.pressure_regime_samples,
         )
+        self._restore_pressure_regime_state()
         self._market_recorder = MarketDataRecorder(log_dir=log_dir)
         await self._market_recorder.start()
 
@@ -1967,6 +1974,95 @@ class Application:
                 else:
                     self._log_no_position(symbol, position_side, cleared=False)
 
+    def _pressure_recap_target_keys(self) -> set[tuple[str, str]]:
+        """返回需要做 startup pressure recap 的当前持仓 key。"""
+        keys: set[tuple[str, str]] = set()
+        for symbol in sorted(self._active_symbols):
+            cfg = self._symbol_configs.get(symbol)
+            if not cfg or cfg.strategy_mode != StrategyMode.ORDERBOOK_PRESSURE:
+                continue
+            positions = self._positions.get(symbol, {})
+            short_symbol = symbol.split("/")[0]
+            for position_side in (PositionSide.LONG, PositionSide.SHORT):
+                position = positions.get(position_side)
+                if not position or abs(position.position_amt) == Decimal("0"):
+                    continue
+                keys.add((short_symbol, position_side.value))
+        return keys
+
+    @staticmethod
+    def _format_recap_corr(value: Optional[float]) -> str:
+        return "-" if value is None else f"{value:.3f}"
+
+    def _build_startup_pressure_recap_report(self, recap: PressureRecap, *, lookback_hours: int) -> str:
+        """构造单个 symbol+side 的 startup pressure recap 多行报告。"""
+        lines = [
+            "[PRESSURE_RECAP] 盘口量回顾",
+            f"  标的: {recap.symbol} {recap.side}",
+            f"  范围: 最近 {lookback_hours}h | {recap.range_start:%m-%d %H:%M} -> {recap.range_end:%m-%d %H:%M}",
+            f"  窗口: {recap.window_label}",
+            f"  样本: stats={recap.stats_samples} | regime={recap.regime_samples}",
+            "  整体相关性:",
+            f"    active_attempts={self._format_recap_corr(recap.overall_active_attempts_corr)} | "
+            f"active_triggers={self._format_recap_corr(recap.overall_active_triggers_corr)} | "
+            f"passive_triggers={self._format_recap_corr(recap.overall_passive_triggers_corr)} | "
+            f"passive_fill_rate={self._format_recap_corr(recap.overall_passive_fill_rate_corr)}",
+            "  当前状态:",
+            f"    regime={recap.latest_regime or '-'} | ts={recap.latest_regime_ts.strftime('%m-%d %H:%M') if recap.latest_regime_ts else '-'} | "
+            f"score={recap.latest_score if recap.latest_score is not None else '-'} | samples={recap.latest_regime_samples if recap.latest_regime_samples is not None else '-'}",
+            f"    active_attempts_corr={self._format_recap_corr(recap.latest_active_attempts_corr)} | "
+            f"active_triggers_corr={self._format_recap_corr(recap.latest_active_triggers_corr)} | "
+            f"passive_triggers_corr={self._format_recap_corr(recap.latest_passive_triggers_corr)} | "
+            f"passive_fill_rate_corr={self._format_recap_corr(recap.latest_passive_fill_rate_corr)}",
+            f"    结论: {recap.interpretation}",
+        ]
+        if recap.regime_changes:
+            lines.append("  转折时间点:")
+            for change in recap.regime_changes[-8:]:
+                lines.append(f"    - {change}")
+        return "\n".join(lines)
+
+    def _log_startup_pressure_recap(self, recap: PressureRecap, *, lookback_hours: int) -> None:
+        """输出单个 symbol+side 的 startup pressure recap。"""
+        get_logger().info(self._build_startup_pressure_recap_report(recap, lookback_hours=lookback_hours))
+
+    async def _startup_pressure_recap_once(self) -> None:
+        """启动后异步回顾最近 24h 的 pressure 日志。"""
+        if not self._log_dir:
+            return
+        target_keys = self._pressure_recap_target_keys()
+        if not target_keys:
+            return
+
+        lookback_hours = 24
+        window_ms = 300_000
+        if self.config_loader:
+            window_ms = int(self.config_loader.config.global_.stats.pressure_regime_window_ms)
+        regime_window_label = _window_label(window_ms)
+        try:
+            recaps = await asyncio.to_thread(
+                analyze_recent_pressure_logs,
+                self._log_dir,
+                current_dt=datetime.now(),
+                lookback_hours=lookback_hours,
+                target_keys=target_keys,
+                window_label=regime_window_label,
+            )
+        except Exception as e:
+            log_error(f"启动 pressure recap 分析失败: {e}")
+            return
+
+        if not recaps:
+            get_logger().info(
+                "[PRESSURE_RECAP] 盘口量回顾\n"
+                f"  范围: 最近 {lookback_hours}h\n"
+                "  结论: 最近 24h 无可用的 pressure 统计样本"
+            )
+            return
+
+        for recap in recaps:
+            self._log_startup_pressure_recap(recap, lookback_hours=lookback_hours)
+
     async def run(self) -> None:
         """运行应用"""
         logger = get_logger()
@@ -2000,6 +2096,11 @@ class Application:
             # 等待数据就绪
             logger.info("等待数据就绪...")
             await asyncio.sleep(2)
+
+            self._startup_pressure_recap_task = asyncio.create_task(self._startup_pressure_recap_once())
+            self._startup_pressure_recap_task.add_done_callback(
+                lambda t, n="startup_pressure_recap": self._on_background_task_done(t, n)
+            )
 
             # 启动主循环任务
             self._main_loop_task = asyncio.create_task(self._main_loop())
@@ -2563,7 +2664,12 @@ class Application:
 
     async def _pressure_stats_loop(self) -> None:
         """周期性输出 orderbook_pressure 统计指标。"""
-        interval_s = 300  # 5 分钟
+        interval_s = 300.0
+        if self.config_loader:
+            interval_s = max(
+                1.0,
+                self.config_loader.config.global_.stats.pressure_regime_window_ms / 1000.0,
+            )
         while self._running:
             try:
                 await asyncio.sleep(interval_s)
@@ -2571,12 +2677,181 @@ class Application:
                     break
                 if self.pause_manager.is_paused():
                     continue
-                self._pressure_stats.log_all_windows(current_time_ms())
+                now_ms = current_time_ms()
+                regime_entries = self._pressure_stats.log_all_windows(now_ms)
+                self._handle_pressure_regime_updates(regime_entries)
+                self._save_pressure_regime_state(current_ms=now_ms)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 log_error(f"盘口量统计循环错误: {e}")
                 await asyncio.sleep(1)
+
+    def _handle_pressure_regime_updates(self, regime_entries: Sequence[RegimeLogEntry]) -> None:
+        """仅在 regime 进入 degrading/failed 时发送 Telegram 预警。"""
+        if not regime_entries:
+            return
+
+        regime_cache = getattr(self, "_pressure_regime_entries", None)
+        if regime_cache is None:
+            regime_cache = {}
+            self._pressure_regime_entries = regime_cache
+        for entry in regime_entries:
+            regime_cache[(entry.symbol, entry.side)] = entry
+
+        if not self.config_loader or not self.telegram_notifier:
+            return
+
+        telegram_cfg = self.config_loader.config.global_.telegram
+        if not telegram_cfg.enabled or not telegram_cfg.events.on_risk_trigger:
+            return
+
+        for entry in regime_entries:
+            if entry.regime not in ("degrading", "failed"):
+                continue
+            if entry.prev_regime == entry.regime:
+                continue
+
+            self._schedule_telegram(
+                self.telegram_notifier.notify_pressure_regime(
+                    symbol=entry.symbol,
+                    position_side=entry.side,
+                    regime=entry.regime,
+                    window=entry.window_label,
+                    prev_regime=entry.prev_regime,
+                    score=entry.score,
+                ),
+                name=f"pressure_regime:{entry.symbol}:{entry.side}:{entry.regime}",
+            )
+
+    def _pressure_regime_state_path(self) -> Optional[Path]:
+        """返回盘口量 regime 状态缓存文件路径。"""
+        if not self._log_dir:
+            return None
+        return self._log_dir / "pressure_regime_state.json"
+
+    @staticmethod
+    def _serialize_pressure_regime_entry(entry: RegimeLogEntry) -> dict[str, Any]:
+        """将 RegimeLogEntry 转为可持久化结构。"""
+        return {
+            "symbol": entry.symbol,
+            "side": entry.side,
+            "window_label": entry.window_label,
+            "regime": entry.regime,
+            "prev_regime": entry.prev_regime,
+            "score": entry.score,
+            "samples": entry.samples,
+        }
+
+    @staticmethod
+    def _deserialize_pressure_regime_entry(payload: Any) -> Optional[RegimeLogEntry]:
+        """从持久化结构恢复 RegimeLogEntry。"""
+        if not isinstance(payload, dict):
+            return None
+        valid_states = {"effective", "degrading", "failed", "recovering"}
+        regime = payload.get("regime")
+        prev_regime = payload.get("prev_regime")
+        if regime not in valid_states:
+            return None
+        if prev_regime is not None and prev_regime not in valid_states:
+            return None
+        try:
+            return RegimeLogEntry(
+                symbol=str(payload["symbol"]),
+                side=str(payload["side"]),
+                window_label=str(payload["window_label"]),
+                regime=regime,
+                prev_regime=prev_regime,
+                score=int(payload["score"]),
+                samples=int(payload["samples"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _save_pressure_regime_state(self, *, current_ms: int) -> None:
+        """持久化最近一次 PRESSURE_REGIME 快照，供短暂停机后恢复。"""
+        if not self._pressure_stats or not self.config_loader:
+            return
+        stats_cfg = self.config_loader.config.global_.stats
+        if not stats_cfg.pressure_regime_resume_enabled:
+            return
+        path = self._pressure_regime_state_path()
+        if path is None:
+            return
+
+        payload = self._pressure_stats.export_regime_state(current_ms)
+        payload["regime_entries"] = {
+            f"{symbol}|{side}": self._serialize_pressure_regime_entry(entry)
+            for (symbol, side), entry in getattr(self, "_pressure_regime_entries", {}).items()
+        }
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+            tmp_path.write_text(
+                json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            tmp_path.replace(path)
+        except Exception as e:
+            log_error(f"保存盘口量 regime 状态失败: {e}", path=str(path))
+
+    def _restore_pressure_regime_state(self) -> None:
+        """启动时恢复短暂停机前的 PRESSURE_REGIME 快照。"""
+        if not self._pressure_stats or not self.config_loader:
+            return
+        stats_cfg = self.config_loader.config.global_.stats
+        if not stats_cfg.pressure_regime_resume_enabled:
+            return
+
+        path = self._pressure_regime_state_path()
+        if path is None or not path.exists():
+            return
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log_error(f"读取盘口量 regime 状态失败: {e}", path=str(path))
+            return
+
+        restored = self._pressure_stats.restore_regime_state(
+            payload,
+            current_ms=current_time_ms(),
+            max_gap_ms=stats_cfg.pressure_regime_resume_max_gap_ms,
+        )
+        if restored <= 0:
+            return
+
+        restored_keys = self._pressure_stats.regime_snapshot_keys()
+        restored_entries: dict[tuple[str, str], RegimeLogEntry] = {}
+        regime_entries = payload.get("regime_entries")
+        if isinstance(regime_entries, dict):
+            for key, item in regime_entries.items():
+                if not isinstance(key, str):
+                    continue
+                entry = self._deserialize_pressure_regime_entry(item)
+                if entry is None:
+                    continue
+                if f"{entry.symbol}|{entry.side}" not in restored_keys:
+                    continue
+                restored_entries[(entry.symbol, entry.side)] = entry
+        self._pressure_regime_entries = restored_entries
+
+        get_logger().info(
+            "恢复盘口量 regime 状态: "
+            f"path={path} snapshots={restored} entries={len(restored_entries)} "
+            f"max_gap_ms={stats_cfg.pressure_regime_resume_max_gap_ms}"
+        )
+
+    @staticmethod
+    def _format_pressure_regime_label(regime: str) -> str:
+        """将 PRESSURE_REGIME 状态映射为中文标签。"""
+        return {
+            "effective": "有效",
+            "degrading": "衰减",
+            "failed": "失效",
+            "recovering": "恢复中",
+        }.get(regime, regime)
 
     async def _position_refresh_loop(self) -> None:
         """低频全量仓位刷新（B：兜底）。"""
@@ -2618,6 +2893,7 @@ class Application:
                 self._timeout_check_task,
                 self._fill_rate_log_task,
                 self._pressure_stats_task,
+                self._startup_pressure_recap_task,
                 self._position_refresh_loop_task,
                 self._calibration_task,
             ]
@@ -2627,6 +2903,9 @@ class Application:
             if not task.done():
                 task.cancel()
         await self._gather_with_timeout(tasks_to_cancel, timeout_s=2.0, name="主循环任务取消")
+
+        if self._pressure_stats:
+            self._save_pressure_regime_state(current_ms=current_time_ms())
 
         # 取消每个 symbol+side 的执行任务
         side_tasks = list(self._side_tasks)
@@ -3060,6 +3339,32 @@ class Application:
                     lines.append(f"  {short}: 无仓位")
         else:
             lines.append("\n活跃交易对: 0")
+
+        regime_lines: list[str] = []
+        regime_cache = getattr(self, "_pressure_regime_entries", {})
+        for sym in sorted(self._active_symbols):
+            cfg = self._symbol_configs.get(sym)
+            if not cfg or cfg.strategy_mode != StrategyMode.ORDERBOOK_PRESSURE:
+                continue
+            short = sym.split(":")[0]
+            positions = self._positions.get(sym, {})
+            for ps in (PositionSide.LONG, PositionSide.SHORT):
+                pos = positions.get(ps)
+                if not pos or abs(pos.position_amt) == Decimal("0"):
+                    continue
+                regime = regime_cache.get((sym, ps.value))
+                if regime is None:
+                    regime_lines.append(f"  {short} {ps.value}: 待积累样本")
+                    continue
+                regime_lines.append(
+                    f"  {short} {ps.value}: {regime.window_label} "
+                    f"{self._format_pressure_regime_label(regime.regime)} "
+                    f"(score={regime.score}, samples={regime.samples})"
+                )
+
+        if regime_lines:
+            lines.append("\n盘口量状态:")
+            lines.extend(regime_lines)
 
         return "\n".join(lines)
 

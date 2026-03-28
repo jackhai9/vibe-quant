@@ -1,11 +1,14 @@
 """PressureStatsCollector 单元测试"""
 
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 import src.stats.pressure_stats as pressure_stats_module
-from src.stats.pressure_stats import PressureStatsCollector, RegimeTracker, _window_label
+from src.stats.pressure_stats import PressureStatsCollector, RegimeTracker, analyze_recent_pressure_logs, _window_label
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +384,235 @@ class TestPressureRegime:
         assert regime_events
         assert regime_events[-1]["window"] == "1m"
         assert regime_events[-1]["samples"] == 4
+
+    def test_regime_history_buffer_expands_to_match_configured_samples(self):
+        c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=60)
+        key = c._key("BTC", "LONG")
+        assert c._get_regime_snapshots(key).maxlen == 60
+
+        for i in range(60):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=200 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + (i % 70):03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+
+        regime = c._evaluate_regime("BTC", "LONG")
+        assert regime is not None
+        assert regime.samples == 60
+
+    def test_export_and_restore_regime_state_with_recent_gap(self):
+        c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+        regime = c._evaluate_regime("BTC", "LONG")
+        assert regime is not None
+
+        payload = c.export_regime_state(current_ms=3_600_000)
+
+        restored = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        count = restored.restore_regime_state(payload, current_ms=3_660_000, max_gap_ms=900_000)
+
+        assert count == 12
+        restored_regime = restored._evaluate_regime("BTC", "LONG")
+        assert restored_regime is not None
+        assert restored_regime.samples == 12
+
+    def test_restore_regime_state_skips_stale_payload(self):
+        c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        payload = c.export_regime_state(current_ms=1_000)
+
+        restored = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        count = restored.restore_regime_state(payload, current_ms=1_000_000, max_gap_ms=60_000)
+
+        assert count == 0
+
+    def test_restore_regime_state_uses_latest_snapshot_time_not_save_time(self):
+        c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+        payload = c.export_regime_state(current_ms=9_000_000)
+        assert payload["latest_snapshot_ts_ms"] == 3_600_000
+
+        restored = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        count = restored.restore_regime_state(payload, current_ms=4_260_001, max_gap_ms=600_000)
+
+        assert count == 0
+
+    def test_restore_regime_state_skips_only_stale_keys(self):
+        c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=10_800_000 + (i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+            c._record_regime_snapshot(
+                "ETH",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=8 + i,
+                passive_triggers=140 - i,
+                active_attempts=4 + i,
+                passive_fill_rate=Decimal(f"0.{30 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 2}.00"),
+            )
+        assert c._evaluate_regime("BTC", "LONG") is not None
+        assert c._evaluate_regime("ETH", "LONG") is not None
+
+        payload = c.export_regime_state(current_ms=14_400_000)
+
+        restored = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=12)
+        count = restored.restore_regime_state(payload, current_ms=14_460_000, max_gap_ms=900_000)
+
+        assert count == 12
+        assert restored.regime_snapshot_keys() == {"BTC|LONG"}
+        assert restored._evaluate_regime("BTC", "LONG") is not None
+        assert restored._evaluate_regime("ETH", "LONG") is None
+
+
+class TestStartupPressureRecap:
+    def test_analyze_recent_pressure_logs_summarizes_current_regime_and_turning_points(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-03-28 08:19:49.938 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=10 | passive_triggers=100 | active_attempts=5 | passive_attempts=10 | "
+                        "active_fills=5 | active_fill_rate=1 | passive_fills=2 | passive_fill_rate=0.2 | price_chg=0.20%",
+                        "2026-03-28 08:24:50.005 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=12 | passive_triggers=90 | active_attempts=6 | passive_attempts=10 | "
+                        "active_fills=6 | active_fill_rate=1 | passive_fills=1 | passive_fill_rate=0.1 | price_chg=0.10%",
+                        "2026-03-28 08:29:50.057 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=recovering | "
+                        "prev_regime=degrading | regime_score=4 | samples=12 | active_attempts_corr=0.072 | "
+                        "active_triggers_corr=0.061 | passive_triggers_corr=-0.301 | passive_fill_rate_corr=0.394",
+                        "2026-03-28 09:14:50.455 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=degrading | "
+                        "prev_regime=recovering | regime_score=-1 | samples=12 | active_attempts_corr=-0.179 | "
+                        "active_triggers_corr=-0.168 | passive_triggers_corr=-0.004 | passive_fill_rate_corr=0.37",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recaps = analyze_recent_pressure_logs(
+                Path(tmpdir),
+                current_dt=datetime(2026, 3, 28, 10, 0, 0),
+                lookback_hours=24,
+                target_keys={("DASH", "LONG")},
+            )
+
+        assert len(recaps) == 1
+        recap = recaps[0]
+        assert recap.symbol == "DASH"
+        assert recap.side == "LONG"
+        assert recap.window_label == "5m"
+        assert recap.stats_samples == 2
+        assert recap.regime_samples == 2
+        assert recap.latest_regime == "degrading"
+        assert recap.latest_score == -1
+        assert recap.regime_changes == [
+            "03-28 08:29 degrading->recovering",
+            "03-28 09:14 recovering->degrading",
+        ]
+        assert "当前经验规则在衰减" in recap.interpretation
+
+    def test_analyze_recent_pressure_logs_accepts_omitted_optional_fields(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-03-28 08:19:49.938 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=10 | passive_triggers=100 | active_attempts=5",
+                        "2026-03-28 08:24:50.005 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=12 | passive_triggers=90 | active_attempts=6 | price_chg=0.10%",
+                        "2026-03-28 08:29:50.057 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=recovering | "
+                        "prev_regime=degrading | regime_score=4 | samples=12",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recaps = analyze_recent_pressure_logs(
+                Path(tmpdir),
+                current_dt=datetime(2026, 3, 28, 10, 0, 0),
+                lookback_hours=24,
+                target_keys={("DASH", "LONG")},
+            )
+
+        assert len(recaps) == 1
+        recap = recaps[0]
+        assert recap.stats_samples == 2
+        assert recap.regime_samples == 1
+        assert recap.latest_regime == "recovering"
+        assert recap.latest_active_attempts_corr is None
+
+    def test_analyze_recent_pressure_logs_respects_configured_window_label(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-03-28 08:19:49.938 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=1m | "
+                        "active_triggers=4 | passive_triggers=30 | active_attempts=2 | price_chg=0.20%",
+                        "2026-03-28 08:20:49.938 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=1m | regime=effective | "
+                        "regime_score=5 | samples=12 | active_attempts_corr=0.2 | active_triggers_corr=0.2 | "
+                        "passive_triggers_corr=-0.2 | passive_fill_rate_corr=0.1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recaps = analyze_recent_pressure_logs(
+                Path(tmpdir),
+                current_dt=datetime(2026, 3, 28, 10, 0, 0),
+                lookback_hours=24,
+                target_keys={("DASH", "LONG")},
+                window_label="1m",
+            )
+
+        assert len(recaps) == 1
+        recap = recaps[0]
+        assert recap.window_label == "1m"
+        assert recap.latest_regime == "effective"
