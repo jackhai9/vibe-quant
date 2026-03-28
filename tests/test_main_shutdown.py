@@ -390,6 +390,7 @@ async def test_pressure_stats_loop_uses_configured_regime_window_interval():
     app.pause_manager = MagicMock()
     app.pause_manager.is_paused.return_value = False
     app._handle_pressure_regime_updates = MagicMock()
+    app._log_periodic_pressure_reports = MagicMock()
     app._save_pressure_regime_state = MagicMock()
 
     sleep_calls: list[float] = []
@@ -485,6 +486,44 @@ async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
     assert "转折时间点:" in report
 
 
+@pytest.mark.asyncio
+async def test_pressure_stats_loop_reuses_same_cycle_regime_entries_for_periodic_reports():
+    app = Application.__new__(Application)
+    app._running = True
+    app.config_loader = MagicMock()
+    app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app._pressure_stats = MagicMock()
+    regime_entries = [
+        RegimeLogEntry(
+            symbol="DASH/USDT:USDT",
+            side="LONG",
+            window_label="1m",
+            regime="recovering",
+            prev_regime="failed",
+            score=4,
+            samples=12,
+        )
+    ]
+    app._pressure_stats.log_all_windows.return_value = regime_entries
+    app.pause_manager = MagicMock()
+    app.pause_manager.is_paused.return_value = False
+    app._handle_pressure_regime_updates = MagicMock()
+    app._log_periodic_pressure_reports = MagicMock(side_effect=lambda *_: setattr(app, "_running", False))
+    app._save_pressure_regime_state = MagicMock()
+
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    with patch("src.main.asyncio.sleep", side_effect=fake_sleep):
+        await app._pressure_stats_loop()
+
+    app._pressure_stats.log_all_windows.assert_called_once()
+    now_ms = app._pressure_stats.log_all_windows.call_args.args[0]
+    app._handle_pressure_regime_updates.assert_called_once_with(regime_entries)
+    app._log_periodic_pressure_reports.assert_called_once_with(now_ms, regime_entries)
+    app._save_pressure_regime_state.assert_called_once_with(current_ms=now_ms)
+
+
 def test_log_periodic_pressure_reports_outputs_multiline_report_for_active_pressure_positions():
     app = Application.__new__(Application)
     app._pressure_stats = MagicMock()
@@ -555,11 +594,35 @@ def test_log_periodic_pressure_reports_outputs_multiline_report_for_active_press
     with patch("src.main.get_logger") as mock_get_logger:
         logger = MagicMock()
         mock_get_logger.return_value = logger
-        app._log_periodic_pressure_reports(1_711_617_223_000)
+        app._log_periodic_pressure_reports(
+            1_711_617_223_000,
+            [
+                RegimeLogEntry(
+                    symbol="DASH/USDT:USDT",
+                    side="LONG",
+                    window_label="5m",
+                    regime="effective",
+                    prev_regime="recovering",
+                    score=6,
+                    samples=15,
+                )
+            ],
+        )
 
     app._pressure_stats.build_periodic_reports.assert_called_once_with(
         1_711_617_223_000,
         target_keys={("DASH", "LONG")},
+        regime_entries=[
+            RegimeLogEntry(
+                symbol="DASH/USDT:USDT",
+                side="LONG",
+                window_label="5m",
+                regime="effective",
+                prev_regime="recovering",
+                score=6,
+                samples=15,
+            )
+        ],
     )
     logger.info.assert_called_once()
     report = logger.info.call_args.args[0]

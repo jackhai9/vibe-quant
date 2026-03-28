@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from math import sqrt
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Deque, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 from src.utils.logger import log_event
 
@@ -1034,9 +1034,16 @@ class PressureStatsCollector:
         current_ms: int,
         *,
         target_keys: Optional[set[tuple[str, str]]] = None,
+        regime_entries: Optional[Sequence[RegimeLogEntry]] = None,
     ) -> List[PressurePeriodicReport]:
         """构造当前周期的多窗口 pressure 报告。"""
         reports: List[PressurePeriodicReport] = []
+        regime_by_key: Dict[tuple[str, str], RegimeLogEntry] = {}
+        if regime_entries:
+            regime_by_key = {
+                (entry.symbol, entry.side): entry
+                for entry in regime_entries
+            }
         seen_keys: set[str] = set()
         seen_keys.update(self._triggers.keys())
         seen_keys.update(self._attempts.keys())
@@ -1077,22 +1084,23 @@ class PressureStatsCollector:
             if not has_any_activity:
                 continue
 
-            regime = self._evaluate_regime(symbol, side)
-            regime_entry = None
-            if regime is not None:
-                regime_entry = RegimeLogEntry(
-                    symbol=symbol,
-                    side=side,
-                    window_label=_window_label(self._regime_window_ms),
-                    regime=regime.state,
-                    prev_regime=regime.prev_state,
-                    score=regime.score,
-                    samples=regime.samples,
-                    active_attempts_corr=regime.active_attempts_corr,
-                    active_triggers_corr=regime.active_triggers_corr,
-                    passive_triggers_corr=regime.passive_triggers_corr,
-                    passive_fill_rate_corr=regime.passive_fill_rate_corr,
-                )
+            regime_entry = regime_by_key.get((symbol, side))
+            if regime_entry is None:
+                regime = self._evaluate_regime(symbol, side)
+                if regime is not None:
+                    regime_entry = RegimeLogEntry(
+                        symbol=symbol,
+                        side=side,
+                        window_label=_window_label(self._regime_window_ms),
+                        regime=regime.state,
+                        prev_regime=regime.prev_state,
+                        score=regime.score,
+                        samples=regime.samples,
+                        active_attempts_corr=regime.active_attempts_corr,
+                        active_triggers_corr=regime.active_triggers_corr,
+                        passive_triggers_corr=regime.passive_triggers_corr,
+                        passive_fill_rate_corr=regime.passive_fill_rate_corr,
+                    )
 
             reports.append(
                 PressurePeriodicReport(

@@ -8,7 +8,13 @@ from tempfile import TemporaryDirectory
 import pytest
 
 import src.stats.pressure_stats as pressure_stats_module
-from src.stats.pressure_stats import PressureStatsCollector, RegimeTracker, analyze_recent_pressure_logs, _window_label
+from src.stats.pressure_stats import (
+    PressureStatsCollector,
+    RegimeLogEntry,
+    RegimeTracker,
+    analyze_recent_pressure_logs,
+    _window_label,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +390,60 @@ class TestPressureRegime:
         assert regime_events
         assert regime_events[-1]["window"] == "1m"
         assert regime_events[-1]["samples"] == 4
+
+    def test_build_periodic_reports_does_not_advance_tracker_when_reusing_regime_entries(self):
+        c = self._make()
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "LONG",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"{i + 1}.00"),
+            )
+        tracker = c._get_regime_tracker(c._key("BTC", "LONG"))
+        tracker.state = "failed"
+        tracker.strong_streak = 0
+        tracker.weak_streak = 0
+
+        regime = c._evaluate_regime("BTC", "LONG")
+        assert regime is not None
+        assert tracker.state == "recovering"
+        assert tracker.strong_streak == 1
+
+        base_ts = 12 * 300_000
+        c.record_trigger("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts)
+        c.record_attempt("BTC", "LONG", is_active=True, mid_price=Decimal("100"), ts_ms=base_ts + 1)
+        c.record_outcome("BTC", "LONG", is_active=True, is_filled=True, ts_ms=base_ts + 2)
+
+        reports = c.build_periodic_reports(
+            base_ts + 2,
+            target_keys={("BTC", "LONG")},
+            regime_entries=[
+                RegimeLogEntry(
+                    symbol="BTC",
+                    side="LONG",
+                    window_label="5m",
+                    regime=regime.state,
+                    prev_regime=regime.prev_state,
+                    score=regime.score,
+                    samples=regime.samples,
+                    active_attempts_corr=regime.active_attempts_corr,
+                    active_triggers_corr=regime.active_triggers_corr,
+                    passive_triggers_corr=regime.passive_triggers_corr,
+                    passive_fill_rate_corr=regime.passive_fill_rate_corr,
+                )
+            ],
+        )
+
+        assert len(reports) == 1
+        assert reports[0].regime_entry is not None
+        assert reports[0].regime_entry.regime == "recovering"
+        assert tracker.state == "recovering"
+        assert tracker.strong_streak == 1
 
     def test_regime_history_buffer_expands_to_match_configured_samples(self):
         c = PressureStatsCollector(price_sample_interval_ms=0, regime_samples=60)

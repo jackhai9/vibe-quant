@@ -2104,14 +2104,18 @@ class Application:
         )
         return "\n".join(lines)
 
-    def _log_periodic_pressure_reports(self, now_ms: int) -> None:
+    def _log_periodic_pressure_reports(self, now_ms: int, regime_entries: Sequence[RegimeLogEntry]) -> None:
         """为当前仍有 pressure 持仓的 key 输出多行周期报告。"""
         if not self._pressure_stats:
             return
         target_keys = self._pressure_recap_target_keys()
         if not target_keys:
             return
-        reports = self._pressure_stats.build_periodic_reports(now_ms, target_keys=target_keys)
+        reports = self._pressure_stats.build_periodic_reports(
+            now_ms,
+            target_keys=target_keys,
+            regime_entries=regime_entries,
+        )
         if not reports:
             return
         logger = get_logger()
@@ -2772,7 +2776,7 @@ class Application:
                 now_ms = current_time_ms()
                 regime_entries = self._pressure_stats.log_all_windows(now_ms)
                 self._handle_pressure_regime_updates(regime_entries)
-                self._log_periodic_pressure_reports(now_ms)
+                self._log_periodic_pressure_reports(now_ms, regime_entries)
                 self._save_pressure_regime_state(current_ms=now_ms)
             except asyncio.CancelledError:
                 break
