@@ -37,7 +37,13 @@ from src.models import (
 )
 from src.execution.engine import ExecutionEngine
 from src.notify.pause_manager import PauseManager
-from src.stats.pressure_stats import PressureRecap, PressureStatsCollector, RegimeLogEntry
+from src.stats.pressure_stats import (
+    PressurePeriodicReport,
+    PressureRecap,
+    PressureStatsCollector,
+    PressureWindowReport,
+    RegimeLogEntry,
+)
 from src.utils.logger import setup_logger
 
 
@@ -477,6 +483,94 @@ async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
     assert "整体相关性:" in report
     assert "当前状态:" in report
     assert "转折时间点:" in report
+
+
+def test_log_periodic_pressure_reports_outputs_multiline_report_for_active_pressure_positions():
+    app = Application.__new__(Application)
+    app._pressure_stats = MagicMock()
+    app._active_symbols = {"DASH/USDT:USDT", "FORM/USDT:USDT"}
+    app._symbol_configs = {
+        "DASH/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRESSURE),
+        "FORM/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRICE),
+    }
+    app._positions = {
+        "DASH/USDT:USDT": {
+            PositionSide.LONG: Position(
+                symbol="DASH/USDT:USDT",
+                position_side=PositionSide.LONG,
+                position_amt=Decimal("1"),
+                entry_price=Decimal("10"),
+                unrealized_pnl=Decimal("0"),
+                leverage=5,
+            ),
+        }
+    }
+    app._pressure_stats.build_periodic_reports.return_value = [
+        PressurePeriodicReport(
+            symbol="DASH/USDT:USDT",
+            side="LONG",
+            as_of_ms=1_711_617_223_000,
+            window_reports=[
+                PressureWindowReport(
+                    window_label="1m",
+                    active_triggers=30,
+                    passive_triggers=150,
+                    active_attempts=10,
+                    passive_attempts=5,
+                    active_fills=9,
+                    active_fill_rate=Decimal("0.900"),
+                    passive_fills=1,
+                    passive_fill_rate=Decimal("0.200"),
+                    price_change_pct=Decimal("0.13"),
+                ),
+                PressureWindowReport(
+                    window_label="5m",
+                    active_triggers=120,
+                    passive_triggers=880,
+                    active_attempts=40,
+                    passive_attempts=20,
+                    active_fills=35,
+                    active_fill_rate=Decimal("0.875"),
+                    passive_fills=2,
+                    passive_fill_rate=Decimal("0.100"),
+                    price_change_pct=Decimal("0.22"),
+                ),
+            ],
+            regime_entry=RegimeLogEntry(
+                symbol="DASH/USDT:USDT",
+                side="LONG",
+                window_label="5m",
+                regime="effective",
+                prev_regime="recovering",
+                score=6,
+                samples=15,
+                active_attempts_corr=0.335,
+                active_triggers_corr=0.221,
+                passive_triggers_corr=-0.191,
+                passive_fill_rate_corr=0.532,
+            ),
+        )
+    ]
+
+    with patch("src.main.get_logger") as mock_get_logger:
+        logger = MagicMock()
+        mock_get_logger.return_value = logger
+        app._log_periodic_pressure_reports(1_711_617_223_000)
+
+    app._pressure_stats.build_periodic_reports.assert_called_once_with(
+        1_711_617_223_000,
+        target_keys={("DASH", "LONG")},
+    )
+    logger.info.assert_called_once()
+    report = logger.info.call_args.args[0]
+    assert "[PRESSURE_REPORT] 盘口量报告" in report
+    assert "标的: DASH/USDT:USDT LONG" in report
+    assert "窗口统计:" in report
+    assert "1m: active_triggers=30" in report
+    assert "5m: active_triggers=120" in report
+    assert "当前状态:" in report
+    assert "regime=effective | prev=recovering | score=6 | samples=15" in report
+    assert "结论: 当前经验规则仍有效" in report
 
 
 def _make_pressure_eval_app(

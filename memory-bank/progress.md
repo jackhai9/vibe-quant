@@ -45,6 +45,7 @@
 - `src/main.py` / `src/notify/telegram.py`：仅在 `PRESSURE_REGIME` 进入 `degrading / failed` 时发 Telegram 预警；`effective / recovering` 继续只打日志，避免刷屏
 - `src/main.py`：Telegram Bot 的 `/status` 命令展示最近一次已评估出的 `PRESSURE_REGIME` 缓存；未形成足够样本时显示“待积累样本”
 - `src/stats/pressure_stats.py` / `src/main.py`：应用启动后会在后台分析最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志，并为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前配置窗口的整体相关性、当前状态和 regime 转折时间点
+- `src/stats/pressure_stats.py` / `src/main.py`：每个 regime 统计周期继续保留 `[PRESSURE_STATS] / [PRESSURE_REGIME]` 单行结构化日志，同时额外输出一条多行 `PRESSURE_REPORT`，把 `1m / 5m / 15m` 当前窗口与最新 regime 状态拼成连续报告，便于直接在 console / 文件中阅读
 - 当前窗口分工约定：
   - `1m`：early warning，主要看短时异动和早期背离
   - `5m`：primary regime judgment，当前所有“规则失效/漂移/恢复”的主结论默认优先基于这一档

@@ -1,6 +1,6 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands, and recent pressure logs
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and startup pressure recap
-# Pos: application entrypoint and orchestrator
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and pressure recap/report summaries
+# Pos: application entrypoint and orchestrator for runtime tasks, alerts, and pressure summaries
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -40,7 +40,13 @@ from src.ws.market import MarketWSClient
 from src.ws.user_data import UserDataWSClient
 from src.signal.engine import SignalEngine, PressureSignalConfig
 from src.stats import MarketDataRecorder, PressureStatsCollector
-from src.stats.pressure_stats import RegimeLogEntry, PressureRecap, analyze_recent_pressure_logs, _window_label
+from src.stats.pressure_stats import (
+    PressurePeriodicReport,
+    PressureRecap,
+    RegimeLogEntry,
+    analyze_recent_pressure_logs,
+    _window_label,
+)
 from src.execution.engine import ExecutionEngine
 from src.risk.manager import RiskManager
 from src.risk.protective_stop import ProtectiveStopManager
@@ -1994,6 +2000,33 @@ class Application:
     def _format_recap_corr(value: Optional[float]) -> str:
         return "-" if value is None else f"{value:.3f}"
 
+    @staticmethod
+    def _format_pressure_ratio(value: Optional[Decimal]) -> str:
+        return "-" if value is None else f"{value:.3f}"
+
+    @staticmethod
+    def _format_pressure_price_change(value: Optional[Decimal]) -> str:
+        return "-" if value is None else f"{value:+.2f}%"
+
+    @staticmethod
+    def _build_periodic_regime_interpretation(entry: RegimeLogEntry) -> str:
+        base = {
+            "effective": "当前经验规则仍有效",
+            "degrading": "当前经验规则在衰减，警惕 regime shift",
+            "failed": "当前经验规则失效，应优先视为 regime shift 警报",
+            "recovering": "当前经验规则在恢复，但尚未重新稳定",
+        }[entry.regime]
+        notes: List[str] = []
+        if entry.active_attempts_corr is not None and entry.active_attempts_corr < 0:
+            notes.append("active_attempts 已转负")
+        if entry.passive_triggers_corr is not None and entry.passive_triggers_corr >= 0:
+            notes.append("passive_triggers 已失去反向参考作用")
+        if entry.passive_fill_rate_corr is not None and entry.passive_fill_rate_corr <= 0:
+            notes.append("passive_fill_rate 已不再提供正向确认")
+        if not notes:
+            return base
+        return f"{base}；" + "；".join(notes)
+
     def _build_startup_pressure_recap_report(self, recap: PressureRecap, *, lookback_hours: int) -> str:
         """构造单个 symbol+side 的 startup pressure recap 多行报告。"""
         lines = [
@@ -2025,6 +2058,65 @@ class Application:
     def _log_startup_pressure_recap(self, recap: PressureRecap, *, lookback_hours: int) -> None:
         """输出单个 symbol+side 的 startup pressure recap。"""
         get_logger().info(self._build_startup_pressure_recap_report(recap, lookback_hours=lookback_hours))
+
+    def _build_periodic_pressure_report(self, report: PressurePeriodicReport) -> str:
+        """构造运行中的多行 pressure 报告。"""
+        report_dt = datetime.fromtimestamp(report.as_of_ms / 1000.0)
+        lines = [
+            "[PRESSURE_REPORT] 盘口量报告",
+            f"  标的: {report.symbol} {report.side}",
+            f"  时间: {report_dt:%m-%d %H:%M:%S}",
+            "  窗口统计:",
+        ]
+        for window_report in report.window_reports:
+            lines.append(
+                f"    {window_report.window_label}: "
+                f"active_triggers={window_report.active_triggers} | "
+                f"active_attempts={window_report.active_attempts} | "
+                f"active_fill_rate={self._format_pressure_ratio(window_report.active_fill_rate)} | "
+                f"passive_triggers={window_report.passive_triggers} | "
+                f"passive_fill_rate={self._format_pressure_ratio(window_report.passive_fill_rate)} | "
+                f"price_chg={self._format_pressure_price_change(window_report.price_change_pct)}"
+            )
+
+        regime_entry = report.regime_entry
+        if regime_entry is None:
+            lines.extend(
+                [
+                    "  当前状态:",
+                    "    regime=- | score=- | samples=待积累样本",
+                    "    结论: 当前样本不足，尚未形成可用的 regime 判断",
+                ]
+            )
+            return "\n".join(lines)
+
+        prev_regime = regime_entry.prev_regime if regime_entry.prev_regime != regime_entry.regime else None
+        lines.extend(
+            [
+                "  当前状态:",
+                f"    regime={regime_entry.regime} | prev={prev_regime or '-'} | score={regime_entry.score} | samples={regime_entry.samples}",
+                f"    active_attempts_corr={self._format_recap_corr(regime_entry.active_attempts_corr)} | "
+                f"active_triggers_corr={self._format_recap_corr(regime_entry.active_triggers_corr)} | "
+                f"passive_triggers_corr={self._format_recap_corr(regime_entry.passive_triggers_corr)} | "
+                f"passive_fill_rate_corr={self._format_recap_corr(regime_entry.passive_fill_rate_corr)}",
+                f"    结论: {self._build_periodic_regime_interpretation(regime_entry)}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _log_periodic_pressure_reports(self, now_ms: int) -> None:
+        """为当前仍有 pressure 持仓的 key 输出多行周期报告。"""
+        if not self._pressure_stats:
+            return
+        target_keys = self._pressure_recap_target_keys()
+        if not target_keys:
+            return
+        reports = self._pressure_stats.build_periodic_reports(now_ms, target_keys=target_keys)
+        if not reports:
+            return
+        logger = get_logger()
+        for report in reports:
+            logger.info(self._build_periodic_pressure_report(report))
 
     async def _startup_pressure_recap_once(self) -> None:
         """启动后异步回顾最近 24h 的 pressure 日志。"""
@@ -2680,6 +2772,7 @@ class Application:
                 now_ms = current_time_ms()
                 regime_entries = self._pressure_stats.log_all_windows(now_ms)
                 self._handle_pressure_regime_updates(regime_entries)
+                self._log_periodic_pressure_reports(now_ms)
                 self._save_pressure_regime_state(current_ms=now_ms)
             except asyncio.CancelledError:
                 break

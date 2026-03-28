@@ -1,6 +1,6 @@
 # Input: pressure trigger/attempt/outcome events, price ticks from bookTicker, optional persisted regime snapshot state, and recent structured pressure logs
-# Output: windowed statistics correlating trigger frequency, fill rate, and price movement, plus rolling pressure regime state and startup recap summaries
-# Pos: side-channel stats collector for orderbook_pressure strategy analysis, regime tracking, short-gap state resume, and startup recap
+# Output: windowed statistics correlating trigger frequency, fill rate, and price movement, plus rolling pressure regime state, startup recap summaries, and periodic pressure reports
+# Pos: side-channel stats collector for orderbook_pressure strategy analysis, regime tracking, short-gap state resume, startup recap, and ongoing report generation
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -12,8 +12,8 @@ orderbook_pressure 策略统计收集器
 
 不侵入核心交易路径；运行期事件缓冲仍为内存 deque，但 `PRESSURE_REGIME`
 会周期性导出最近滚动快照，供短暂停机后的启动恢复。
-同时提供最近日志的 startup recap 分析，用于在启动后快速回顾过去 24 小时的
-regime 变化、转折时间点和当前经验规则状态。
+同时提供最近日志的 startup recap 分析，以及运行中的周期性压力报告，用于在
+启动后快速回顾过去 24 小时的 regime 变化、转折时间点和当前经验规则状态，并在运行期持续输出同格式摘要。
 """
 
 import gzip
@@ -95,6 +95,33 @@ class RegimeLogEntry:
     prev_regime: Optional[PressureRegime]
     score: int
     samples: int
+    active_attempts_corr: Optional[float] = None
+    active_triggers_corr: Optional[float] = None
+    passive_triggers_corr: Optional[float] = None
+    passive_fill_rate_corr: Optional[float] = None
+
+
+@dataclass
+class PressureWindowReport:
+    window_label: str
+    active_triggers: int
+    passive_triggers: int
+    active_attempts: int
+    passive_attempts: int
+    active_fills: int
+    active_fill_rate: Optional[Decimal]
+    passive_fills: int
+    passive_fill_rate: Optional[Decimal]
+    price_change_pct: Optional[Decimal]
+
+
+@dataclass
+class PressurePeriodicReport:
+    symbol: str
+    side: str
+    as_of_ms: int
+    window_reports: List[PressureWindowReport]
+    regime_entry: Optional[RegimeLogEntry]
 
 
 @dataclass
@@ -991,6 +1018,94 @@ class PressureStatsCollector:
             "price_change_pct": price_change_pct,
         }
 
+    @staticmethod
+    def _window_total_events(stats: dict[str, Any]) -> int:
+        return (
+            int(stats["active_triggers"])
+            + int(stats["passive_triggers"])
+            + int(stats["active_attempts"])
+            + int(stats["passive_attempts"])
+            + int(stats["active_fills"])
+            + int(stats["passive_fills"])
+        )
+
+    def build_periodic_reports(
+        self,
+        current_ms: int,
+        *,
+        target_keys: Optional[set[tuple[str, str]]] = None,
+    ) -> List[PressurePeriodicReport]:
+        """构造当前周期的多窗口 pressure 报告。"""
+        reports: List[PressurePeriodicReport] = []
+        seen_keys: set[str] = set()
+        seen_keys.update(self._triggers.keys())
+        seen_keys.update(self._attempts.keys())
+        seen_keys.update(self._outcomes.keys())
+
+        for key in sorted(seen_keys):
+            parts = key.split("|", 1)
+            if len(parts) != 2:
+                continue
+            symbol, side = parts
+            key_tuple = (symbol, side)
+            short_key_tuple = (_short_symbol(symbol), side)
+            if target_keys is not None and key_tuple not in target_keys and short_key_tuple not in target_keys:
+                continue
+
+            window_reports: List[PressureWindowReport] = []
+            has_any_activity = False
+            for window_ms in self._windows_ms:
+                stats = self.compute_window(symbol, side, window_ms, current_ms)
+                total_events = self._window_total_events(stats)
+                if total_events > 0:
+                    has_any_activity = True
+                window_reports.append(
+                    PressureWindowReport(
+                        window_label=cast(str, stats["window_label"]),
+                        active_triggers=cast(int, stats["active_triggers"]),
+                        passive_triggers=cast(int, stats["passive_triggers"]),
+                        active_attempts=cast(int, stats["active_attempts"]),
+                        passive_attempts=cast(int, stats["passive_attempts"]),
+                        active_fills=cast(int, stats["active_fills"]),
+                        active_fill_rate=cast(Optional[Decimal], stats["active_fill_rate"]),
+                        passive_fills=cast(int, stats["passive_fills"]),
+                        passive_fill_rate=cast(Optional[Decimal], stats["passive_fill_rate"]),
+                        price_change_pct=cast(Optional[Decimal], stats["price_change_pct"]),
+                    )
+                )
+
+            if not has_any_activity:
+                continue
+
+            regime = self._evaluate_regime(symbol, side)
+            regime_entry = None
+            if regime is not None:
+                regime_entry = RegimeLogEntry(
+                    symbol=symbol,
+                    side=side,
+                    window_label=_window_label(self._regime_window_ms),
+                    regime=regime.state,
+                    prev_regime=regime.prev_state,
+                    score=regime.score,
+                    samples=regime.samples,
+                    active_attempts_corr=regime.active_attempts_corr,
+                    active_triggers_corr=regime.active_triggers_corr,
+                    passive_triggers_corr=regime.passive_triggers_corr,
+                    passive_fill_rate_corr=regime.passive_fill_rate_corr,
+                )
+
+            reports.append(
+                PressurePeriodicReport(
+                    symbol=_short_symbol(symbol),
+                    side=side,
+                    as_of_ms=current_ms,
+                    window_reports=window_reports,
+                    regime_entry=regime_entry,
+                )
+            )
+
+        return reports
+
     # ------------------------------------------------------------------
     # 日志输出
     # ------------------------------------------------------------------
@@ -1013,14 +1128,7 @@ class PressureStatsCollector:
                 stats = self.compute_window(symbol, side, window_ms, current_ms)
 
                 # 窗口内无任何事件则跳过
-                total_events = (
-                    stats["active_triggers"]
-                    + stats["passive_triggers"]
-                    + stats["active_attempts"]
-                    + stats["passive_attempts"]
-                    + stats["active_fills"]
-                    + stats["passive_fills"]
-                )
+                total_events = self._window_total_events(stats)
                 if total_events == 0:
                     continue
 
@@ -1043,14 +1151,7 @@ class PressureStatsCollector:
                 )
 
             regime_stats = self.compute_window(symbol, side, self._regime_window_ms, current_ms)
-            regime_total_events = (
-                regime_stats["active_triggers"]
-                + regime_stats["passive_triggers"]
-                + regime_stats["active_attempts"]
-                + regime_stats["passive_attempts"]
-                + regime_stats["active_fills"]
-                + regime_stats["passive_fills"]
-            )
+            regime_total_events = self._window_total_events(regime_stats)
             if regime_total_events == 0 or regime_stats["price_change_pct"] is None:
                 continue
 
@@ -1100,6 +1201,10 @@ class PressureStatsCollector:
                     prev_regime=regime.prev_state,
                     score=regime.score,
                     samples=regime.samples,
+                    active_attempts_corr=regime.active_attempts_corr,
+                    active_triggers_corr=regime.active_triggers_corr,
+                    passive_triggers_corr=regime.passive_triggers_corr,
+                    passive_fill_rate_corr=regime.passive_fill_rate_corr,
                 )
             )
 

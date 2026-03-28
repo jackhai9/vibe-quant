@@ -6,13 +6,13 @@
 # src/stats 目录说明
 
 统计与录制模块。<br>
-`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）；最近一次 regime 快照会周期性落到日志目录，供短暂停机后的启动恢复。应用启动后还会在后台扫描最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前状态和转折时间点。<br>
+`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）；最近一次 regime 快照会周期性落到日志目录，供短暂停机后的启动恢复。应用启动后还会在后台扫描最近 `24h` 的 `PRESSURE_STATS / PRESSURE_REGIME` 日志，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前状态和转折时间点；运行期每个 regime 统计周期还会额外输出一条多行 `PRESSURE_REPORT`，把当前 `1m/5m/15m` 窗口和最新状态连起来持续汇报。<br>
 `market_recorder.py` 以非阻塞方式录制 `bookTicker + depth10 + aggTrade` 原始事件到 JSONL，供后续离线回放调参。<br>
 两者都不阻塞核心交易路径；前者的事件缓冲保持内存态，但 regime 快照可短期持久化恢复，后者通过 queue + writer task 后台落盘。
 
 ## 文件清单
 
-- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、rolling regime 状态评估、短暂停机恢复与 startup recap 分析
+- `pressure_stats.py`：`PressureStatsCollector` — trigger/成功下单/首次成交/价格事件记录、窗口聚合、rolling regime 状态评估、短暂停机恢复、startup recap 与运行期 pressure report 分析
 - `market_recorder.py`：`MarketDataRecorder` — 原始市场数据录制、日切压缩、保留清理
 - `__init__.py`：模块导出
 
@@ -109,6 +109,22 @@ aggTrade：
   - 一句基于当前经验规则的解释性总结
 - `PRESSURE_RECAP` 是启动时的一次性背景回顾，不会阻塞交易主循环，也不是价格方向预测器
 - 日志输出采用单条多行报告格式，便于直接在 console 和文件里阅读，不需要再手动把多条单行日志拼起来
+
+### 运行期周期报告（`PRESSURE_REPORT`）
+
+- 每个 `pressure_regime_window_ms` 周期，程序仍然会继续输出原始结构化单行日志：
+  - `[PRESSURE_STATS]`
+  - `[PRESSURE_REGIME]`
+- 同时还会额外输出一条多行 `PRESSURE_REPORT`
+- 只针对当前仍有持仓、且 `strategy.mode=orderbook_pressure` 的 `symbol + side`
+- 报告内容包括：
+  - 当前时间
+  - 当前 `1m / 5m / 15m` 窗口的 trigger / attempts / fill_rate / price_chg
+  - 最新 `PRESSURE_REGIME` 状态、score、samples
+  - 一句延续性的解释性总结
+- 设计目的：
+  - 保留单行结构化日志给机器解析与回放
+  - 给人类阅读时提供和 `PRESSURE_RECAP` 对齐的连续报告视图
 
 ### 当前经验总结
 
