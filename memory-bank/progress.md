@@ -44,7 +44,7 @@
 - `src/stats/README.md` / `memory-bank/architecture.md`：同步“在线 regime 判读”与 `PRESSURE_REGIME` 的当前语义
 - `src/main.py` / `src/notify/telegram.py`：仅在 `PRESSURE_REGIME` 进入 `degrading / failed` 时发 Telegram 预警；`effective / recovering` 继续只打日志，避免刷屏
 - `src/main.py`：Telegram Bot 的 `/status` 命令展示最近一次已评估出的 `PRESSURE_REGIME` 缓存；未形成足够样本时显示“待积累样本”
-- `src/stats/pressure_stats.py` / `src/main.py`：应用启动后会在后台分析最近 `24h` 的 `PRESSURE_STATS` 日志，并按当前 side-adjusted 口径重放最近一段 regime，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`
+- `src/stats/pressure_stats.py` / `src/main.py`：应用启动后会在后台分析最近 `24h` 的 `PRESSURE_STATS` 日志，并额外带上一小段 pre-lookback warmup stats，再按当前 side-adjusted 口径重放最近一段 regime，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`
 - `src/stats/pressure_stats.py` / `src/main.py`：每个 regime 统计周期继续保留 `[PRESSURE_STATS] / [PRESSURE_REGIME]` 单行结构化日志，同时额外输出一条多行 `PRESSURE_REPORT`，把 `1m / 5m / 15m` 当前窗口、原始 `price_chg` 与最新 side-adjusted regime 状态拼成连续报告，便于直接在 console / 文件中阅读
 - 当前窗口分工约定：
   - `1m`：early warning，主要看短时异动和早期背离

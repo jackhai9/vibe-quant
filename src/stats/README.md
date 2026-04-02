@@ -6,7 +6,7 @@
 # src/stats 目录说明
 
 统计与录制模块。<br>
-`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）；最近一次 regime 快照会周期性落到日志目录，供短暂停机后的启动恢复。应用启动后还会在后台扫描最近 `24h` 的 `PRESSURE_STATS` 日志，并按当前 side-adjusted same-window 口径重放最近一段 regime，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前状态和转折时间点；运行期每个 regime 统计周期还会额外输出一条多行 `PRESSURE_REPORT`，把当前 `1m/5m/15m` 窗口和最新状态连起来持续汇报。<br>
+`pressure_stats.py` 收集 orderbook_pressure 的 trigger/attempt/fill 与 mid-price 采样，按窗口输出结构化日志，并基于配置指定的 rolling 样本输出经验性 `PRESSURE_REGIME` 状态（默认 `5m × 12`）；最近一次 regime 快照会周期性落到日志目录，供短暂停机后的启动恢复。应用启动后还会在后台扫描最近 `24h` 的 `PRESSURE_STATS` 日志，并额外带上一小段 pre-lookback warmup stats，再按当前 side-adjusted same-window 口径重放最近一段 regime，为当前仍有 pressure 持仓的 `symbol + side` 输出一次 `PRESSURE_RECAP`，总结最近时间范围、当前状态和转折时间点；运行期每个 regime 统计周期还会额外输出一条多行 `PRESSURE_REPORT`，把当前 `1m/5m/15m` 窗口和最新状态连起来持续汇报。<br>
 `market_recorder.py` 以非阻塞方式录制 `bookTicker + depth10 + aggTrade` 原始事件到 JSONL，供后续离线回放调参。<br>
 两者都不阻塞核心交易路径；前者的事件缓冲保持内存态，但 regime 快照可短期持久化恢复，后者通过 queue + writer task 后台落盘。
 
@@ -104,7 +104,7 @@ aggTrade：
 - 输出内容包括：
   - 最近样本范围与样本量
   - 当前 `pressure_regime_window_ms` 对应窗口的 same-window side-adjusted 整体相关性（默认 `5m`）
-  - 基于最近 `24h` `[PRESSURE_STATS]` 重放出的最近一次 `PRESSURE_REGIME` 状态
+  - 基于“pre-lookback warmup + 最近 `24h` `[PRESSURE_STATS]`”重放出的最近一次 `PRESSURE_REGIME` 状态
   - 最近一段 regime 转折时间点
   - 一句基于当前经验规则的解释性总结
 - `PRESSURE_RECAP` 是启动时的一次性背景回顾，不会阻塞交易主循环，也不是价格方向预测器

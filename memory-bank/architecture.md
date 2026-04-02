@@ -36,7 +36,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 ## 数据存储（当前无数据库）
 
 - **配置**：`config/config.yaml`（YAML）
-- **日志**：`logs/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`；`pressure_regime_state.json` 用于短暂停机后的 regime 恢复；最近 `24h` 的 `PRESSURE_STATS` 日志会在启动后被后台回放成一次 `PRESSURE_RECAP`）
+- **日志**：`logs/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`；`pressure_regime_state.json` 用于短暂停机后的 regime 恢复；最近 `24h` 的 `PRESSURE_STATS` 日志会在启动后连同 pre-lookback warmup stats 一起被后台回放成一次 `PRESSURE_RECAP`）
 - **持久化数据库**：无（当前所有状态仅在内存中维护）
 
 ---
@@ -99,12 +99,12 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 
 ### 启动后的 `PRESSURE_RECAP`
 
-- 应用启动后会在后台扫描最近 `24h` 的 `PRESSURE_STATS` 日志，并按当前 side-adjusted same-window 口径重放最近一段 regime
+- 应用启动后会在后台扫描最近 `24h` 的 `PRESSURE_STATS` 日志，并额外带上一小段 pre-lookback warmup stats，再按当前 side-adjusted same-window 口径重放最近一段 regime
 - 只分析当前仍有持仓、且 `strategy.mode=orderbook_pressure` 的 `symbol + side`
 - 输出内容包括：
   - 最近样本范围与样本量
   - 当前 `pressure_regime_window_ms` 对应窗口的 same-window side-adjusted 整体相关性（默认 `5m`）
-  - 最近一次 `PRESSURE_REGIME` 状态
+  - 基于“pre-lookback warmup + 最近 `24h` `[PRESSURE_STATS]`”重放出的最近一次 `PRESSURE_REGIME` 状态
   - 最近一段 regime 转折时间点
   - 一句基于当前经验规则的解释性总结
 - 这份 recap 只做启动时的背景回顾，不阻塞交易主循环，也不直接预测价格方向

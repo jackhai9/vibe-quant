@@ -58,6 +58,7 @@ _DEFAULT_WINDOWS_MS: List[int] = [
     900_000,    # 15 min
 ]
 _REGIME_HISTORY_MAX = 48
+_RECAP_WARMUP_MAX_DAYS = 7
 
 
 @dataclass
@@ -371,20 +372,26 @@ def analyze_recent_pressure_logs(
     """分析最近日志中的 pressure 统计与 regime 变化，生成启动摘要。"""
     until = current_dt or datetime.now()
     since = until - timedelta(hours=lookback_hours)
+    scan_since = since - timedelta(days=_RECAP_WARMUP_MAX_DAYS)
+    warmup_target = max(_REGIME_HISTORY_MAX, regime_samples * 4)
     stats_by_key: Dict[tuple[str, str], List[PressureStatsLogEntry]] = {}
+    warmup_stats_by_key: Dict[tuple[str, str], Deque[PressureStatsLogEntry]] = {}
 
-    for path in _iter_recent_log_paths(log_dir, since, until):
+    for path in _iter_recent_log_paths(log_dir, scan_since, until):
         opener = gzip.open if path.suffix == ".gz" else open
         with opener(path, "rt", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
                 if "[PRESSURE_STATS]" in line:
                     entry = _parse_pressure_stats_line(line)
-                    if entry is None or entry.window_label != window_label or not (since <= entry.ts <= until):
+                    if entry is None or entry.window_label != window_label or not (scan_since <= entry.ts <= until):
                         continue
                     key = (entry.symbol, entry.side)
                     if target_keys is not None and key not in target_keys:
                         continue
-                    stats_by_key.setdefault(key, []).append(entry)
+                    if entry.ts < since:
+                        warmup_stats_by_key.setdefault(key, deque(maxlen=warmup_target)).append(entry)
+                    else:
+                        stats_by_key.setdefault(key, []).append(entry)
 
     summaries: List[PressureRecap] = []
     for key in sorted(stats_by_key):
@@ -393,13 +400,15 @@ def analyze_recent_pressure_logs(
             continue
 
         stats_entries = sorted(stats_entries, key=lambda entry: entry.ts)
-        regime_entries = PressureStatsCollector.build_regime_history_from_stats_entries(
+        replay_stats_entries = list(warmup_stats_by_key.get(key, ())) + stats_entries
+        replayed_regime_entries = PressureStatsCollector.build_regime_history_from_stats_entries(
             symbol=key[0],
             side=key[1],
             window_label=window_label,
-            stats_entries=stats_entries,
+            stats_entries=replay_stats_entries,
             regime_samples=regime_samples,
         )
+        regime_entries = [entry for entry in replayed_regime_entries if entry.ts >= since]
 
         overall_active_attempts_corr: Optional[float] = None
         overall_active_triggers_corr: Optional[float] = None
@@ -437,11 +446,14 @@ def analyze_recent_pressure_logs(
                     [pair[1] for pair in passive_fill_pairs],
                 )
 
-        latest_regime_entry = regime_entries[-1] if regime_entries else None
+        latest_regime_entry = replayed_regime_entries[-1] if replayed_regime_entries else None
         regime_changes: List[str] = []
         prev_state: Optional[PressureRegime] = None
-        for entry in regime_entries:
+        for entry in replayed_regime_entries:
             if prev_state == entry.regime:
+                continue
+            if entry.ts < since:
+                prev_state = entry.regime
                 continue
             transition = (
                 f"{entry.ts:%m-%d %H:%M} "
@@ -450,11 +462,6 @@ def analyze_recent_pressure_logs(
             regime_changes.append(transition)
             prev_state = entry.regime
 
-        all_ts = [entry.ts for entry in stats_entries] + [entry.ts for entry in regime_entries]
-        if not all_ts:
-            continue
-        range_start = min(all_ts)
-        range_end = max(all_ts)
         interpretation = _build_recap_interpretation(
             latest_regime_entry.regime if latest_regime_entry else None,
             overall_active_attempts_corr=overall_active_attempts_corr,
@@ -470,8 +477,8 @@ def analyze_recent_pressure_logs(
                 symbol=key[0],
                 side=key[1],
                 window_label=window_label,
-                range_start=range_start,
-                range_end=range_end,
+                range_start=stats_entries[0].ts,
+                range_end=stats_entries[-1].ts,
                 stats_samples=len(stats_entries),
                 regime_samples=len(regime_entries),
                 overall_active_attempts_corr=overall_active_attempts_corr,

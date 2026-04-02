@@ -582,6 +582,45 @@ class TestPressureRegime:
 
 
 class TestStartupPressureRecap:
+    def test_analyze_recent_pressure_logs_replays_warmup_context_before_lookback(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-03-28 09:50:00.000 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=10 | passive_triggers=50 | active_attempts=5 | price_chg=0.10%",
+                        "2026-03-28 09:55:00.000 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=12 | passive_triggers=45 | active_attempts=6 | price_chg=0.20%",
+                        "2026-03-28 10:05:00.000 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=14 | passive_triggers=40 | active_attempts=7 | price_chg=0.30%",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recaps = analyze_recent_pressure_logs(
+                Path(tmpdir),
+                current_dt=datetime(2026, 3, 29, 10, 0, 0),
+                lookback_hours=24,
+                target_keys={("DASH", "LONG")},
+                regime_samples=2,
+            )
+
+        assert len(recaps) == 1
+        recap = recaps[0]
+        assert recap.stats_samples == 1
+        assert recap.regime_samples == 1
+        assert recap.range_start == datetime(2026, 3, 28, 10, 5, 0)
+        assert recap.range_end == datetime(2026, 3, 28, 10, 5, 0)
+        assert recap.latest_regime == "effective"
+        assert recap.latest_regime_ts == datetime(2026, 3, 28, 10, 5, 0)
+        assert recap.regime_changes == []
+
     def test_analyze_recent_pressure_logs_summarizes_current_regime_and_turning_points(self):
         with TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
