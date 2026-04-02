@@ -286,6 +286,27 @@ class TestPressureRegime:
         assert regime.active_attempts_corr is not None and regime.active_attempts_corr > 0
         assert regime.passive_triggers_corr is not None and regime.passive_triggers_corr < 0
 
+    def test_short_regime_effective_uses_side_adjusted_returns(self):
+        c = self._make()
+        for i in range(12):
+            c._record_regime_snapshot(
+                "BTC",
+                "SHORT",
+                ts_ms=(i + 1) * 300_000,
+                active_triggers=10 + i,
+                passive_triggers=120 - i,
+                active_attempts=5 + i,
+                passive_fill_rate=Decimal(f"0.{20 + i:03d}"),
+                price_change_pct=Decimal(f"-{i + 1}.00"),
+            )
+
+        regime = c._evaluate_regime("BTC", "SHORT")
+        assert regime is not None
+        assert regime.state == "effective"
+        assert regime.score >= 4
+        assert regime.active_attempts_corr is not None and regime.active_attempts_corr > 0
+        assert regime.passive_triggers_corr is not None and regime.passive_triggers_corr < 0
+
     def test_regime_state_transitions_failed_and_recovering(self):
         tracker = RegimeTracker(state="effective")
 
@@ -344,6 +365,7 @@ class TestPressureRegime:
         regime_events = [fields for event_type, fields in events if event_type == "pressure_regime"]
         assert regime_events
         assert regime_events[-1]["window"] == "5m"
+        assert regime_events[-1]["corr_basis"] == "side_adjusted_same_window"
         assert regime_events[-1]["regime"] in {"effective", "degrading", "failed", "recovering"}
 
     def test_log_all_windows_respects_configured_regime_window_and_samples(self, monkeypatch):
@@ -568,20 +590,22 @@ class TestStartupPressureRecap:
                     [
                         "2026-03-28 08:19:49.938 | INFO    | src.utils.logger:log_event:262 | "
                         "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
-                        "active_triggers=10 | passive_triggers=100 | active_attempts=5 | passive_attempts=10 | "
-                        "active_fills=5 | active_fill_rate=1 | passive_fills=2 | passive_fill_rate=0.2 | price_chg=0.20%",
+                        "active_triggers=1 | passive_triggers=9 | active_attempts=1 | price_chg=0.10%",
                         "2026-03-28 08:24:50.005 | INFO    | src.utils.logger:log_event:262 | "
                         "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
-                        "active_triggers=12 | passive_triggers=90 | active_attempts=6 | passive_attempts=10 | "
-                        "active_fills=6 | active_fill_rate=1 | passive_fills=1 | passive_fill_rate=0.1 | price_chg=0.10%",
+                        "active_triggers=2 | passive_triggers=8 | active_attempts=2 | price_chg=0.20%",
                         "2026-03-28 08:29:50.057 | INFO    | src.utils.logger:log_event:262 | "
-                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=recovering | "
-                        "prev_regime=degrading | regime_score=4 | samples=12 | active_attempts_corr=0.072 | "
-                        "active_triggers_corr=0.061 | passive_triggers_corr=-0.301 | passive_fill_rate_corr=0.394",
-                        "2026-03-28 09:14:50.455 | INFO    | src.utils.logger:log_event:262 | "
-                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=degrading | "
-                        "prev_regime=recovering | regime_score=-1 | samples=12 | active_attempts_corr=-0.179 | "
-                        "active_triggers_corr=-0.168 | passive_triggers_corr=-0.004 | passive_fill_rate_corr=0.37",
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=3 | passive_triggers=7 | active_attempts=3 | price_chg=0.30%",
+                        "2026-03-28 08:34:50.057 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=4 | passive_triggers=6 | active_attempts=4 | price_chg=0.40%",
+                        "2026-03-28 08:39:50.057 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=1 | passive_triggers=9 | active_attempts=1 | price_chg=0.50%",
+                        "2026-03-28 08:44:50.057 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=0 | passive_triggers=10 | active_attempts=0 | price_chg=0.60%",
                     ]
                 )
                 + "\n",
@@ -593,6 +617,7 @@ class TestStartupPressureRecap:
                 current_dt=datetime(2026, 3, 28, 10, 0, 0),
                 lookback_hours=24,
                 target_keys={("DASH", "LONG")},
+                regime_samples=2,
             )
 
         assert len(recaps) == 1
@@ -600,15 +625,12 @@ class TestStartupPressureRecap:
         assert recap.symbol == "DASH"
         assert recap.side == "LONG"
         assert recap.window_label == "5m"
-        assert recap.stats_samples == 2
-        assert recap.regime_samples == 2
+        assert recap.stats_samples == 6
+        assert recap.regime_samples == 5
         assert recap.latest_regime == "degrading"
-        assert recap.latest_score == -1
-        assert recap.regime_changes == [
-            "03-28 08:29 degrading->recovering",
-            "03-28 09:14 recovering->degrading",
-        ]
-        assert "当前经验规则在衰减" in recap.interpretation
+        assert recap.latest_score == -3
+        assert recap.regime_changes[-1] == "03-28 08:44 effective->degrading"
+        assert "当前 side 的经验规则在衰减" in recap.interpretation
 
     def test_analyze_recent_pressure_logs_accepts_omitted_optional_fields(self):
         with TemporaryDirectory() as tmpdir:
@@ -623,8 +645,8 @@ class TestStartupPressureRecap:
                         "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
                         "active_triggers=12 | passive_triggers=90 | active_attempts=6 | price_chg=0.10%",
                         "2026-03-28 08:29:50.057 | INFO    | src.utils.logger:log_event:262 | "
-                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=5m | regime=recovering | "
-                        "prev_regime=degrading | regime_score=4 | samples=12",
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=5m | "
+                        "active_triggers=14 | passive_triggers=80 | active_attempts=7 | price_chg=0.20%",
                     ]
                 )
                 + "\n",
@@ -636,14 +658,15 @@ class TestStartupPressureRecap:
                 current_dt=datetime(2026, 3, 28, 10, 0, 0),
                 lookback_hours=24,
                 target_keys={("DASH", "LONG")},
+                regime_samples=2,
             )
 
         assert len(recaps) == 1
         recap = recaps[0]
-        assert recap.stats_samples == 2
+        assert recap.stats_samples == 3
         assert recap.regime_samples == 1
-        assert recap.latest_regime == "recovering"
-        assert recap.latest_active_attempts_corr is None
+        assert recap.latest_regime == "effective"
+        assert recap.latest_active_attempts_corr is not None
 
     def test_analyze_recent_pressure_logs_respects_configured_window_label(self):
         with TemporaryDirectory() as tmpdir:
@@ -655,9 +678,8 @@ class TestStartupPressureRecap:
                         "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=1m | "
                         "active_triggers=4 | passive_triggers=30 | active_attempts=2 | price_chg=0.20%",
                         "2026-03-28 08:20:49.938 | INFO    | src.utils.logger:log_event:262 | "
-                        "[PRESSURE_REGIME] 盘口量状态 | symbol=DASH | side=LONG | window=1m | regime=effective | "
-                        "regime_score=5 | samples=12 | active_attempts_corr=0.2 | active_triggers_corr=0.2 | "
-                        "passive_triggers_corr=-0.2 | passive_fill_rate_corr=0.1",
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=LONG | window=1m | "
+                        "active_triggers=6 | passive_triggers=20 | active_attempts=3 | price_chg=0.30%",
                     ]
                 )
                 + "\n",
@@ -670,9 +692,43 @@ class TestStartupPressureRecap:
                 lookback_hours=24,
                 target_keys={("DASH", "LONG")},
                 window_label="1m",
+                regime_samples=2,
             )
 
         assert len(recaps) == 1
         recap = recaps[0]
         assert recap.window_label == "1m"
         assert recap.latest_regime == "effective"
+
+    def test_analyze_recent_pressure_logs_uses_side_adjusted_return_for_short(self):
+        with TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-03-28 08:19:49.938 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=SHORT | window=5m | "
+                        "active_triggers=10 | passive_triggers=100 | active_attempts=5 | price_chg=-0.10%",
+                        "2026-03-28 08:24:50.005 | INFO    | src.utils.logger:log_event:262 | "
+                        "[PRESSURE_STATS] 盘口量统计 | symbol=DASH | side=SHORT | window=5m | "
+                        "active_triggers=12 | passive_triggers=90 | active_attempts=6 | price_chg=-0.20%",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            recaps = analyze_recent_pressure_logs(
+                Path(tmpdir),
+                current_dt=datetime(2026, 3, 28, 10, 0, 0),
+                lookback_hours=24,
+                target_keys={("DASH", "SHORT")},
+                regime_samples=2,
+            )
+
+        assert len(recaps) == 1
+        recap = recaps[0]
+        assert recap.side == "SHORT"
+        assert recap.latest_regime == "effective"
+        assert recap.overall_active_attempts_corr is not None and recap.overall_active_attempts_corr > 0
+        assert recap.overall_passive_triggers_corr is not None and recap.overall_passive_triggers_corr < 0

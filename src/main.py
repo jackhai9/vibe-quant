@@ -1,6 +1,6 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands, and recent pressure logs
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and pressure recap/report summaries
-# Pos: application entrypoint and orchestrator for runtime tasks, alerts, and pressure summaries
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and side-adjusted pressure recap/report summaries
+# Pos: application entrypoint and orchestrator for runtime tasks, alerts, and side-adjusted pressure summaries
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -2011,10 +2011,10 @@ class Application:
     @staticmethod
     def _build_periodic_regime_interpretation(entry: RegimeLogEntry) -> str:
         base = {
-            "effective": "当前经验规则仍有效",
-            "degrading": "当前经验规则在衰减，警惕 regime shift",
-            "failed": "当前经验规则失效，应优先视为 regime shift 警报",
-            "recovering": "当前经验规则在恢复，但尚未重新稳定",
+            "effective": "当前 side 的经验规则仍有效",
+            "degrading": "当前 side 的经验规则在衰减，警惕 regime shift",
+            "failed": "当前 side 的经验规则失效，应优先视为 regime shift 警报",
+            "recovering": "当前 side 的经验规则在恢复，但尚未重新稳定",
         }[entry.regime]
         notes: List[str] = []
         if entry.active_attempts_corr is not None and entry.active_attempts_corr < 0:
@@ -2034,6 +2034,7 @@ class Application:
             f"  标的: {recap.symbol} {recap.side}",
             f"  范围: 最近 {lookback_hours}h | {recap.range_start:%m-%d %H:%M} -> {recap.range_end:%m-%d %H:%M}",
             f"  窗口: {recap.window_label}",
+            "  口径: same-window side-adjusted return",
             f"  样本: stats={recap.stats_samples} | regime={recap.regime_samples}",
             "  整体相关性:",
             f"    active_attempts={self._format_recap_corr(recap.overall_active_attempts_corr)} | "
@@ -2066,6 +2067,7 @@ class Application:
             "[PRESSURE_REPORT] 盘口量报告",
             f"  标的: {report.symbol} {report.side}",
             f"  时间: {report_dt:%m-%d %H:%M:%S}",
+            "  口径: same-window side-adjusted return",
             "  窗口统计:",
         ]
         for window_report in report.window_reports:
@@ -2132,8 +2134,10 @@ class Application:
 
         lookback_hours = 24
         window_ms = 300_000
+        regime_samples = 12
         if self.config_loader:
             window_ms = int(self.config_loader.config.global_.stats.pressure_regime_window_ms)
+            regime_samples = int(self.config_loader.config.global_.stats.pressure_regime_samples)
         regime_window_label = _window_label(window_ms)
         try:
             recaps = await asyncio.to_thread(
@@ -2143,6 +2147,7 @@ class Application:
                 lookback_hours=lookback_hours,
                 target_keys=target_keys,
                 window_label=regime_window_label,
+                regime_samples=regime_samples,
             )
         except Exception as e:
             log_error(f"启动 pressure recap 分析失败: {e}")

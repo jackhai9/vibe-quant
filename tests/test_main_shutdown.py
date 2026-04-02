@@ -386,6 +386,7 @@ async def test_pressure_stats_loop_uses_configured_regime_window_interval():
     app._running = True
     app.config_loader = MagicMock()
     app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app.config_loader.config.global_.stats.pressure_regime_samples = 12
     app._pressure_stats = MagicMock()
     app.pause_manager = MagicMock()
     app.pause_manager.is_paused.return_value = False
@@ -412,6 +413,7 @@ async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
     app._log_dir = Path("/tmp")
     app.config_loader = MagicMock()
     app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app.config_loader.config.global_.stats.pressure_regime_samples = 12
     app._active_symbols = {"DASH/USDT:USDT", "FORM/USDT:USDT"}
     app._symbol_configs = {
         "DASH/USDT:USDT": MagicMock(strategy_mode=StrategyMode.ORDERBOOK_PRESSURE),
@@ -461,7 +463,7 @@ async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
         latest_passive_triggers_corr=-0.11,
         latest_passive_fill_rate_corr=0.33,
         regime_changes=["03-28 08:19 effective->degrading", "03-28 08:29 degrading->recovering"],
-        interpretation="当前经验规则在衰减，警惕 regime shift",
+        interpretation="当前 side 的经验规则在衰减，警惕 regime shift",
     )
 
     with (
@@ -476,11 +478,13 @@ async def test_startup_pressure_recap_once_logs_for_active_pressure_positions():
     _, kwargs = mock_analyze.call_args
     assert kwargs["target_keys"] == {("DASH", "LONG")}
     assert kwargs["window_label"] == "1m"
+    assert kwargs["regime_samples"] == 12
     logger.info.assert_called_once()
     report = logger.info.call_args.args[0]
     assert "[PRESSURE_RECAP] 盘口量回顾" in report
     assert "标的: DASH LONG" in report
     assert "窗口: 1m" in report
+    assert "口径: same-window side-adjusted return" in report
     assert "整体相关性:" in report
     assert "当前状态:" in report
     assert "转折时间点:" in report
@@ -492,6 +496,7 @@ async def test_pressure_stats_loop_reuses_same_cycle_regime_entries_for_periodic
     app._running = True
     app.config_loader = MagicMock()
     app.config_loader.config.global_.stats.pressure_regime_window_ms = 60_000
+    app.config_loader.config.global_.stats.pressure_regime_samples = 12
     app._pressure_stats = MagicMock()
     regime_entries = [
         RegimeLogEntry(
@@ -628,12 +633,13 @@ def test_log_periodic_pressure_reports_outputs_multiline_report_for_active_press
     report = logger.info.call_args.args[0]
     assert "[PRESSURE_REPORT] 盘口量报告" in report
     assert "标的: DASH/USDT:USDT LONG" in report
+    assert "口径: same-window side-adjusted return" in report
     assert "窗口统计:" in report
     assert "1m: active_triggers=30" in report
     assert "5m: active_triggers=120" in report
     assert "当前状态:" in report
     assert "regime=effective | prev=recovering | score=6 | samples=15" in report
-    assert "结论: 当前经验规则仍有效" in report
+    assert "结论: 当前 side 的经验规则仍有效" in report
 
 
 def _make_pressure_eval_app(

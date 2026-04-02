@@ -346,7 +346,10 @@ MAKER_ONLY → 超时2次 → AGGRESSIVE_LIMIT → 超时2次 → MAKER_ONLY
 - **单位**: 毫秒
 - **说明**: `PRESSURE_REGIME` 使用的统计窗口长度
 - **当前默认语义**: `300000ms = 5m`
-- **当前运行语义**: 状态机按这个窗口长度作为滚动窗口，也按这个节奏追加一个新样本并输出一次 regime 日志
+- **当前运行语义**:
+  - 状态机按这个窗口长度作为滚动窗口，也按这个节奏追加一个新样本并输出一次 regime 日志
+  - `PRESSURE_STATS` 继续记录原始 `price_chg`
+  - `PRESSURE_REGIME` / `PRESSURE_RECAP` / `PRESSURE_REPORT` 的相关性判定改为当前 side 的 same-window side-adjusted return（LONG=`+price_chg`，SHORT=`-price_chg`）
 - **当前推荐值**: `300000`（`5m`）
 - **推荐原因**:
   - `1m` 更适合 early warning，但对盘口微抖和成交噪音更敏感
