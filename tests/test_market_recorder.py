@@ -115,7 +115,7 @@ class TestMarketDataRecorder:
             log_dir=tmp_path,
             book_sample_interval_ms=0,
             depth_sample_interval_ms=0,
-            retention_days=14,
+            retention_days=1000,
         )
         ts_day1 = self._ts(2026, 3, 24)
         ts_day2 = self._ts(2026, 3, 25)
