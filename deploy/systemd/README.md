@@ -20,9 +20,8 @@
 ### 1) 安装代码与依赖
 
 - 将仓库放在 `/opt/vibe-quant`
-- 创建虚拟环境并安装依赖：
-  - `python3.11 -m venv /opt/vibe-quant/venv`
-  - `/opt/vibe-quant/venv/bin/pip install -r /opt/vibe-quant/requirements.txt`
+- 使用 uv 同步项目级 `.venv`：
+  - `cd /opt/vibe-quant && uv sync --frozen --no-dev`
 
 ### 2) 配置文件与环境变量
 
@@ -55,4 +54,3 @@
 
 - `sudo systemctl kill -s SIGKILL vibe-quant`
 - `sudo systemctl status vibe-quant` 应显示已自动拉起，并重新连接 WS（会触发一次重连后校准日志）
-

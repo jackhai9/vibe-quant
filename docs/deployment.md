@@ -33,12 +33,12 @@
 ### 软件要求
 
 - **操作系统**: Linux（Ubuntu 20.04+、Debian 11+、CentOS 8+）或 macOS
-- **Python**: 3.11 或更高版本
+- **Python**: 3.11 或更高版本，通过 uv 管理项目级 `.venv`
 - **网络**: 可访问币安 API（`fapi.binance.com`、`fstream.binance.com`）
 
 ### 依赖项
 
-参考 `requirements.txt`：
+依赖由 `pyproject.toml` 声明，并由 `uv.lock` 锁定：
 - ccxt >= 4.0.0
 - aiohttp >= 3.9.0
 - PyYAML >= 6.0
@@ -59,26 +59,13 @@ git clone https://github.com/your-username/vibe-quant.git
 cd vibe-quant
 ```
 
-### 2. 创建虚拟环境
+### 2. 同步 uv 环境
 
 ```bash
-# 使用 venv
-python3.11 -m venv venv
-source venv/bin/activate  # Linux/macOS
-# venv\Scripts\activate  # Windows
-
-# 或使用 conda
-conda create -n vibe-quant python=3.11
-conda activate vibe-quant
+uv sync
 ```
 
-### 3. 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. 配置环境变量
+### 3. 配置环境变量
 
 ```bash
 # 复制示例文件
@@ -183,17 +170,10 @@ git clone https://github.com/your-username/vibe-quant.git
 cd vibe-quant
 ```
 
-#### 1.3 创建虚拟环境
+#### 1.3 同步 uv 环境
 
 ```bash
-python3.11 -m venv /opt/vibe-quant/venv
-```
-
-#### 1.4 安装依赖
-
-```bash
-/opt/vibe-quant/venv/bin/pip install --upgrade pip
-/opt/vibe-quant/venv/bin/pip install -r /opt/vibe-quant/requirements.txt
+uv sync --frozen --no-dev
 ```
 
 ---
@@ -281,7 +261,7 @@ LogsDirectory=vibe-quant
 Environment=VQ_LOG_DIR=/var/log/vibe-quant
 
 # 启动命令
-ExecStart=/opt/vibe-quant/venv/bin/python -m src.main /etc/vibe-quant/config.yaml
+ExecStart=/opt/vibe-quant/.venv/bin/python -m src.main /etc/vibe-quant/config.yaml
 
 # 自动重启策略
 Restart=on-failure
@@ -411,13 +391,15 @@ journalctl -u vibe-quant --since "2025-12-19 10:00" --until "2025-12-19 12:00"
 
 ```dockerfile
 FROM python:3.11-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # 设置工作目录
 WORKDIR /app
 
 # 安装依赖
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
 
 # 复制代码
 COPY src/ ./src/
@@ -638,7 +620,7 @@ cd /opt/vibe-quant
 git pull origin main
 
 # 更新依赖
-/opt/vibe-quant/venv/bin/pip install -r requirements.txt
+uv sync --frozen --no-dev
 
 # 启动服务
 sudo systemctl start vibe-quant
@@ -755,7 +737,7 @@ sudo crontab -e
 4. 手动运行测试：
    ```bash
    cd /opt/vibe-quant
-   /opt/vibe-quant/venv/bin/python -m src.main /etc/vibe-quant/config.yaml
+   ./.venv/bin/python -m src.main /etc/vibe-quant/config.yaml
    ```
 
 ### 数据不一致
@@ -790,7 +772,7 @@ Description=vibe-quant-btc (BTC only)
 [Service]
 EnvironmentFile=/etc/vibe-quant/vibe-quant-btc.env
 Environment=VQ_LOG_DIR=/var/log/vibe-quant-btc
-ExecStart=/opt/vibe-quant/venv/bin/python -m src.main /etc/vibe-quant/config-btc.yaml
+ExecStart=/opt/vibe-quant/.venv/bin/python -m src.main /etc/vibe-quant/config-btc.yaml
 
 [Install]
 WantedBy=multi-user.target

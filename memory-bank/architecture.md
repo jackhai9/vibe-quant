@@ -262,7 +262,9 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 vibe-quant/
 ├── .gitignore                # Git 忽略文件
 ├── CLAUDE.md                 # Claude Code 指引
-├── requirements.txt          # Python 依赖
+├── pyproject.toml            # Python 项目与依赖声明
+├── uv.lock                   # uv 锁定依赖版本
+├── .python-version           # 项目 Python 版本
 ├── config/
 │   ├── README.md             # config 目录说明
 │   └── config.yaml           # 配置文件（敏感信息走环境变量）

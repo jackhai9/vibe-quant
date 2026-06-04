@@ -64,12 +64,13 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 ### 环境要求
 
 - Python 3.11+
+- uv
 - Binance 合约账户（Hedge 模式）
 
 ### 安装依赖
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 配置环境变量
@@ -259,7 +260,7 @@ pyright src/
 
 | 组件 | 技术 |
 |------|------|
-| 语言 | Python 3.11+ |
+| 语言 | Python 3.11+ + uv |
 | 异步 | asyncio |
 | 交易所 REST | ccxt |
 | WebSocket | aiohttp |

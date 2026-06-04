@@ -93,7 +93,7 @@
 ## 依赖安装
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ---
@@ -110,11 +110,10 @@ pip install -r requirements.txt
 
 ---
 
-## 版本兼容性
+## 运行环境
 
 - Python 3.11+ 必需（使用了 `asyncio.TaskGroup`、`typing` 新特性）
-- ccxt 4.x 与 3.x API 有差异，锁定 4.x
-- pydantic 2.x 与 1.x 不兼容，锁定 2.x
-- aiohttp 3.9+ 提供稳定的 ws_connect/heartbeat/timeout 支持
+- 项目环境统一由 uv 管理，依赖版本以 `uv.lock` 为准
+- 当前唯一运行入口是 `uv sync` 和项目级 `.venv`
 
 ---

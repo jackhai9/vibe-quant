@@ -24,7 +24,7 @@ LogsDirectory=vibe-quant
 Environment=VQ_LOG_DIR=/var/log/vibe-quant
 
 # 启动命令：建议将 config.yaml 放在 /etc/vibe-quant/config.yaml
-ExecStart=/opt/vibe-quant/venv/bin/python -m src.main /etc/vibe-quant/config.yaml
+ExecStart=/opt/vibe-quant/.venv/bin/python -m src.main /etc/vibe-quant/config.yaml
 
 # 异常退出自动重启
 Restart=on-failure
@@ -40,4 +40,3 @@ SyslogIdentifier=vibe-quant
 
 [Install]
 WantedBy=multi-user.target
-
