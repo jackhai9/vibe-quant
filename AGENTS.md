@@ -1,4 +1,4 @@
-# vibe-quant
+# binance-exit-executor
 
 ## Scope
 

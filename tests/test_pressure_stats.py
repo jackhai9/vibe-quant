@@ -584,7 +584,7 @@ class TestPressureRegime:
 class TestStartupPressureRecap:
     def test_analyze_recent_pressure_logs_replays_warmup_context_before_lookback(self):
         with TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path = Path(tmpdir) / "binance-exit-executor_2026-03-28.log"
             log_path.write_text(
                 "\n".join(
                     [
@@ -623,7 +623,7 @@ class TestStartupPressureRecap:
 
     def test_analyze_recent_pressure_logs_summarizes_current_regime_and_turning_points(self):
         with TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path = Path(tmpdir) / "binance-exit-executor_2026-03-28.log"
             log_path.write_text(
                 "\n".join(
                     [
@@ -673,7 +673,7 @@ class TestStartupPressureRecap:
 
     def test_analyze_recent_pressure_logs_accepts_omitted_optional_fields(self):
         with TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path = Path(tmpdir) / "binance-exit-executor_2026-03-28.log"
             log_path.write_text(
                 "\n".join(
                     [
@@ -709,7 +709,7 @@ class TestStartupPressureRecap:
 
     def test_analyze_recent_pressure_logs_respects_configured_window_label(self):
         with TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path = Path(tmpdir) / "binance-exit-executor_2026-03-28.log"
             log_path.write_text(
                 "\n".join(
                     [
@@ -741,7 +741,7 @@ class TestStartupPressureRecap:
 
     def test_analyze_recent_pressure_logs_uses_side_adjusted_return_for_short(self):
         with TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "vibe-quant_2026-03-28.log"
+            log_path = Path(tmpdir) / "binance-exit-executor_2026-03-28.log"
             log_path.write_text(
                 "\n".join(
                     [

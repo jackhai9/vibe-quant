@@ -184,7 +184,7 @@ class PressureRecap:
 
 _PRESSURE_STATS_MARKER = "[PRESSURE_STATS]"
 _PRESSURE_REGIME_MARKER = "[PRESSURE_REGIME]"
-_LOG_FILE_RE = re.compile(r"vibe-quant_(?P<date>\d{4}-\d{2}-\d{2})\.log(?:\.gz)?$")
+_LOG_FILE_RE = re.compile(r"binance-exit-executor_(?P<date>\d{4}-\d{2}-\d{2})\.log(?:\.gz)?$")
 
 
 def _parse_percent_or_none(value: str) -> Optional[float]:
@@ -212,7 +212,7 @@ def _iter_recent_log_paths(log_dir: Path, since: datetime, until: datetime) -> L
     paths: List[Path] = []
     start_date = since.date()
     end_date = until.date()
-    for path in sorted(log_dir.glob("vibe-quant_*.log*")):
+    for path in sorted(log_dir.glob("binance-exit-executor_*.log*")):
         match = _LOG_FILE_RE.fullmatch(path.name)
         if not match:
             continue

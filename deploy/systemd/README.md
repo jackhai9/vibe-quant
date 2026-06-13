@@ -11,46 +11,46 @@
 
 ## 文件清单
 
-- `vibe-quant.service`：systemd 服务单元（启动命令/日志目录/环境变量）
-- `vibe-quant.env.example`：环境变量模板（API Key/Telegram/日志目录）
+- `binance-exit-executor.service`：systemd 服务单元（启动命令/日志目录/环境变量）
+- `binance-exit-executor.env.example`：环境变量模板（API Key/Telegram/日志目录）
 - `README.md`：本目录说明与部署步骤
 
 ## 部署步骤
 
 ### 1) 安装代码与依赖
 
-- 将仓库放在 `/opt/vibe-quant`
+- 将仓库放在 `/opt/binance-exit-executor`
 - 使用 uv 同步项目级 `.venv`：
-  - `cd /opt/vibe-quant && uv sync --frozen --no-dev`
+  - `cd /opt/binance-exit-executor && uv sync --frozen --no-dev`
 
 ### 2) 配置文件与环境变量
 
-- 配置文件：建议放在 `/etc/vibe-quant/config.yaml`
+- 配置文件：建议放在 `/etc/binance-exit-executor/config.yaml`
   - 参考仓库中的 `config/config.example.yaml`
-- 环境变量：建议放在 `/etc/vibe-quant/vibe-quant.env`
-  - 参考 `deploy/systemd/vibe-quant.env.example`
+- 环境变量：建议放在 `/etc/binance-exit-executor/binance-exit-executor.env`
+  - 参考 `deploy/systemd/binance-exit-executor.env.example`
   - 必需：`BINANCE_API_KEY` / `BINANCE_API_SECRET`
   - Telegram 可选：`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
 
 ### 3) 安装 service
 
 - 复制 service 文件：
-  - `sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.service /etc/systemd/system/vibe-quant.service`
+  - `sudo cp /opt/binance-exit-executor/deploy/systemd/binance-exit-executor.service /etc/systemd/system/binance-exit-executor.service`
 - 创建目录与环境文件：
-  - `sudo mkdir -p /etc/vibe-quant`
-  - `sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.env.example /etc/vibe-quant/vibe-quant.env`
-  - `sudo cp /opt/vibe-quant/config/config.example.yaml /etc/vibe-quant/config.yaml`
-  - 编辑 `/etc/vibe-quant/vibe-quant.env` 和 `/etc/vibe-quant/config.yaml`
+  - `sudo mkdir -p /etc/binance-exit-executor`
+  - `sudo cp /opt/binance-exit-executor/deploy/systemd/binance-exit-executor.env.example /etc/binance-exit-executor/binance-exit-executor.env`
+  - `sudo cp /opt/binance-exit-executor/config/config.example.yaml /etc/binance-exit-executor/config.yaml`
+  - 编辑 `/etc/binance-exit-executor/binance-exit-executor.env` 和 `/etc/binance-exit-executor/config.yaml`
 
 ### 4) 启动与自启
 
 - `sudo systemctl daemon-reload`
-- `sudo systemctl enable --now vibe-quant`
+- `sudo systemctl enable --now binance-exit-executor`
 - 查看日志：
-  - `journalctl -u vibe-quant -f`
-  - 文件日志：默认写入 `/var/log/vibe-quant/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`）
+  - `journalctl -u binance-exit-executor -f`
+  - 文件日志：默认写入 `/var/log/binance-exit-executor/`（`binance-exit-executor_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`）
 
 ### 5) 验证“自动重启”
 
-- `sudo systemctl kill -s SIGKILL vibe-quant`
-- `sudo systemctl status vibe-quant` 应显示已自动拉起，并重新连接 WS（会触发一次重连后校准日志）
+- `sudo systemctl kill -s SIGKILL binance-exit-executor`
+- `sudo systemctl status binance-exit-executor` 应显示已自动拉起，并重新连接 WS（会触发一次重连后校准日志）

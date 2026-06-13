@@ -56,7 +56,7 @@ class TestLoggerSetup:
             logger.info("test message")
 
             # 检查日志文件是否存在
-            log_files = list(log_dir.glob("vibe-quant_*.log"))
+            log_files = list(log_dir.glob("binance-exit-executor_*.log"))
             assert len(log_files) >= 1
 
     def test_get_logger_returns_logger(self):

@@ -91,7 +91,7 @@ aggTrade：
 
 ### 最近分析检查点
 
-- 来源文件：`logs/vibe-quant_2026-03-27.log`
+- 来源文件：`logs/binance-exit-executor_2026-03-27.log`
 - 已纳入统计的最后一条新口径日志时间：`2026-03-27 21:27:22`
 - 下次增量统计默认从 `2026-03-27 21:27:22` 之后继续
 - 对 `same-window` 统计，不必每次从头重算
@@ -99,7 +99,7 @@ aggTrade：
 
 ### 启动回顾（`PRESSURE_RECAP`）
 
-- 应用启动后会在后台读取最近 `24h` 的 `vibe-quant_*.log` / `vibe-quant_*.log.gz`
+- 应用启动后会在后台读取最近 `24h` 的 `binance-exit-executor_*.log` / `binance-exit-executor_*.log.gz`
 - 只分析当前仍有持仓、且 `strategy.mode=orderbook_pressure` 的 `symbol + side`
 - 输出内容包括：
   - 最近样本范围与样本量

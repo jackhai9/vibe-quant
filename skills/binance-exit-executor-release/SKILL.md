@@ -1,10 +1,10 @@
 ---
-name: vibe-quant-release
+name: binance-exit-executor-release
 version: "1.0"
-description: Ship vibe-quant changes with validation and doc sync.
+description: Ship binance-exit-executor changes with validation and doc sync.
 ---
 
-# vibe-quant-release
+# binance-exit-executor-release
 
 Use this skill when shipping changes in this repository.
 
