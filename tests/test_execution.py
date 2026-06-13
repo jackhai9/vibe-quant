@@ -1,5 +1,5 @@
 # Input: 执行引擎与 pytest 夹具
-# Output: 状态机行为断言与执行反馈校验（含成交率、撤单/成交竞态、orphan 恢复与 reduce-only 挂单占仓回归）
+# Output: 状态机行为断言与执行反馈校验（含成交率、撤单/成交竞态、orphan 恢复、reduce-only 挂单占仓与名义金额硬上限回归）
 # Pos: ExecutionEngine 测试用例与撤单竞态、panic close、自恢复安全回归
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
@@ -297,6 +297,61 @@ class TestOrderbookPressureExecution:
         assert state.current_order_execution_preference == SignalExecutionPreference.AGGRESSIVE
         assert state.current_order_strategy_mode == StrategyMode.ORDERBOOK_PRESSURE
         assert state.current_order_cooldown_ms_override == 1000
+
+    @pytest.mark.asyncio
+    async def test_on_signal_caps_pressure_qty_by_order_price_when_last_trade_missing(
+        self,
+        mock_place_order,
+        mock_cancel_order,
+    ):
+        engine = ExecutionEngine(
+            place_order=mock_place_order,
+            cancel_order=mock_cancel_order,
+            base_mult=100,
+            max_mult=100,
+            max_order_notional=Decimal("10"),
+        )
+        rules = SymbolRules(
+            symbol="BTC/USDT:USDT",
+            tick_size=Decimal("0.1"),
+            step_size=Decimal("1"),
+            min_qty=Decimal("1"),
+            min_notional=Decimal("5"),
+        )
+        market_state = MarketState(
+            symbol="BTC/USDT:USDT",
+            best_bid=Decimal("5"),
+            best_ask=Decimal("5.1"),
+            last_trade_price=Decimal("0"),
+            previous_trade_price=None,
+            last_update_ms=1000,
+            is_ready=True,
+        )
+        signal = ExitSignal(
+            symbol="BTC/USDT:USDT",
+            position_side=PositionSide.LONG,
+            reason=SignalReason.LONG_BID_PRESSURE_ACTIVE,
+            timestamp_ms=1000,
+            best_bid=Decimal("5"),
+            best_ask=Decimal("5.1"),
+            last_trade_price=Decimal("5"),
+            strategy_mode=StrategyMode.ORDERBOOK_PRESSURE,
+            execution_preference=SignalExecutionPreference.AGGRESSIVE,
+            price_override=Decimal("5"),
+            base_mult_override=100,
+        )
+
+        intent = await engine.on_signal(
+            signal=signal,
+            position_amt=Decimal("100"),
+            rules=rules,
+            market_state=market_state,
+            current_ms=1000,
+        )
+
+        assert intent is not None
+        assert intent.qty == Decimal("2")
+        assert intent.price == Decimal("5")
 
     @pytest.mark.asyncio
     async def test_on_signal_uses_post_only_tif_for_passive_price_override(self, engine, symbol_rules, market_state):

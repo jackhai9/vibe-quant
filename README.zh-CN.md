@@ -210,7 +210,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 | `MAKER_ONLY` | Post-only 限价（GTX），享受 Maker 费率 | 默认模式，流动性充足时 |
 | `AGGRESSIVE_LIMIT` | 普通限价（GTC），价格更贴近成交方向 | Maker 连续超时后自动升级 |
 
-补充：`long_bid_improve` / `short_ask_improve` 信号触发时，系统会直接切换到 `AGGRESSIVE_LIMIT` 并在同一轮信号内提交限价单（仍可能因盘口变化未立即成交）。
+补充：`long_bid_improve` / `short_ask_improve` 信号触发时，系统会先用当前盘口重新确认机会仍成立；若仍成立，会直接切换到 `AGGRESSIVE_LIMIT` 并在同一轮信号内提交限价单（仍可能因盘口变化未立即成交）。
 
 `orderbook_pressure` 复用同一套执行状态机，但信号会自带 `price_override` / `ttl_override_ms` / `cooldown_override_ms` / `base_mult_override` / `qty_jitter_pct`：
 - 主动条件成立：LONG 下 `SELL @ best_bid`，SHORT 下 `BUY @ best_ask`
@@ -219,7 +219,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 
 ## 倍数系统
 
-最终下单数量 = `base_mult × roi_mult × accel_mult`（受 `max_mult` 和 `max_order_notional` 约束）
+最终下单数量 = `base_mult × roi_mult × accel_mult`（受 `max_mult` 和基于订单限价的 `max_order_notional` 约束）
 
 ### ROI 倍数（`roi_mult`）
 

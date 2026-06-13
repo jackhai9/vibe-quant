@@ -1,5 +1,5 @@
 <!-- Input: 系统模块、运行方式与关键约束 -->
-<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式、执行竞态/自恢复安全约束、一级风控日志降噪与 -4118 挂单占仓锁存） -->
+<!-- Output: 架构与文件结构说明（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、按 symbol 策略模式、执行竞态/自恢复安全约束、orderbook_price 当前盘口重校验、一级风控日志降噪与 -4118 挂单占仓锁存） -->
 <!-- Pos: memory-bank/architecture 总览与执行状态机约束 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 系统架构
@@ -90,7 +90,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 | **WSClient** | 订阅 bookTicker + aggTrade + markPrice@1s；对 `orderbook_pressure` symbol 额外订阅 `depth10@100ms`；断线重连，重连后回调触发校准 | 配置 | MarketEvent, OrderUpdate, AlgoOrderUpdate, PositionUpdate, LeverageUpdate |
 | **ExchangeAdapter** | ccxt 封装：markets/positions/balance 查询，下单/撤单（普通/条件单分离，混合场景用 cancel_any_order）；启动期 `load_markets()` 对网络类失败做有限重试，并输出 proxy/direct 诊断；在 `-4118` 后复核同侧普通平仓挂单是否已覆盖剩余可交易仓位 | 配置, OrderIntent | OrderResult, Position |
 | **SignalEngine** | 按 symbol 在 `orderbook_price` / `orderbook_pressure` 两条互斥路径间评估平仓条件；维护 prev/last trade price、盘口量 dwell、active burst pacing 与来源 freshness；产出公共 ROI/accel sizing context；`orderbook_pressure` 生成带 TTL/cooldown jitter、基准片大小 jitter 与 burst pacing 元数据的 ExitSignal，并可显式启用公共倍数 | MarketEvent, Position | ExitSignal |
-| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 的基准片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
+| **ExecutionEngine** | 复用单套状态机；支持 signal 自带 `price/ttl/cooldown/base_mult/jitter` 覆盖，并维持 reduce-only 边界；对 `orderbook_pressure` 的基准片大小在最终可下单量上应用公共 roi/accel modifiers、双边 jitter 与 recent-size anti-repeat；`max_order_notional` 使用本次订单限价作为硬约束价格；`-4118` 后锁存“同侧挂单占仓”状态并暂停无效重试；一级风控持续时保持 `AGGRESSIVE_LIMIT`，避免 maker/aggressive 抖动 | ExitSignal, 配置 | OrderIntent |
 | **RiskManager** | 强平距离兜底（dist_to_liq）+ 全局限速（orders/cancels） | Position, MarketEvent | RiskFlag |
 | **Logger** | 按天滚动日志，结构化字段；维护 `pressure_regime_state.json` 供短暂停机恢复，恢复时按每个 `symbol|side` 的最近 snapshot freshness 过滤 stale cache；支持输出启动后的 `PRESSURE_RECAP` 与运行期连续 `PRESSURE_REPORT` | 各模块事件 | 日志文件 |
 | **Notifier** | Telegram 通知（串行发送 + retry_after 限流等待）+ Bot 命令接收（暂停/恢复/状态查询，`/status` 可查看最近一次 `PRESSURE_REGIME` 缓存） | 关键事件、Bot 命令 | 消息推送、暂停控制 |
@@ -162,11 +162,12 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 ### 策略模式（已实现）
 
 - `orderbook_price`：沿用原有 trade + bookTicker 信号、ROI/accel 数量体系与模式轮转
+  - 下单前会用当前 `MarketState` 重新确认 LONG/SHORT 的有利盘口条件仍成立；若盘口已经回落或成交价上下文缺失，本轮跳过，不把过期机会信号传给执行层
 - `orderbook_pressure`：按 symbol 显式启用；同一 symbol 上与 `orderbook_price` 互斥
   - LONG 观察 `best_bid_qty`，SHORT 观察 `best_ask_qty`
   - 顶档量连续超过阈值 `sustain_ms` 后，主动吃一档（LONG=`SELL @ best_bid`，SHORT=`BUY @ best_ask`）
   - 主动条件未成立时，仅保留 1 笔固定档位的被动单（LONG=`ask[passive_level]`，SHORT=`bid[passive_level]`）
-  - 数量基准为 `min_qty × execution.base_mult`；默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`，也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并继续受 `execution.max_mult`、`execution.max_order_notional` 与剩余仓位约束
+  - 数量基准为 `min_qty × execution.base_mult`；默认继承 `execution.use_roi_mult` / `execution.use_accel_mult`，也可通过 `pressure_exit.use_roi_mult` / `pressure_exit.use_accel_mult` 显式覆盖，并继续受 `execution.max_mult`、基于本次订单限价的 `execution.max_order_notional` 与剩余仓位约束
   - `bookTicker` 与 `depth10` 任一来源超过 `stale_data_ms` 未刷新时，本轮跳过并重置 dwell
 
 ---

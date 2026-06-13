@@ -1,6 +1,6 @@
 # Input: ExitSignal, OrderUpdate, OrderResult, config, rules
-# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, liq-distance-aware mode holding, and pressure qty jitter/anti-repeat with optional shared sizing modifiers)
-# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, liq-distance-aware mode holding, and pressure anti-repeat sizing
+# Output: OrderIntent and per-side execution state transitions (including fill-rate feedback/TTL override, reconcile-safe timeout/preempt/orphan recovery, reduce-only block latching, liq-distance-aware mode holding, order-price notional caps, and pressure qty jitter/anti-repeat with optional shared sizing modifiers)
+# Pos: per-side execution state machine with WS/REST fill meta handling, terminal-state recovery, panic-close-safe orphan repair, same-side close-order block handling, liq-distance-aware mode holding, and order-price-bounded pressure anti-repeat sizing
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -488,12 +488,20 @@ class ExecutionEngine:
             logger.debug(f"{signal.symbol} {signal.position_side.value} 仓位已完成")
             return None
 
+        price, time_in_force = self._resolve_signal_price_and_tif(
+            signal=signal,
+            rules=rules,
+            market_state=market_state,
+            state=state,
+        )
+
         # 计算下单数量
         qty = self.compute_qty(
             position_amt=position_amt,
             min_qty=rules.min_qty,
             step_size=rules.step_size,
             last_trade_price=market_state.last_trade_price,
+            notional_price=price,
             roi_mult=signal.roi_mult,
             accel_mult=signal.accel_mult,
             base_mult_override=signal.base_mult_override,
@@ -505,13 +513,6 @@ class ExecutionEngine:
         if qty <= Decimal("0"):
             logger.debug(f"{signal.symbol} {signal.position_side.value} 计算数量为 0")
             return None
-
-        price, time_in_force = self._resolve_signal_price_and_tif(
-            signal=signal,
-            rules=rules,
-            market_state=market_state,
-            state=state,
-        )
 
         # 确定下单方向
         # LONG 平仓 -> SELL, SHORT 平仓 -> BUY
@@ -1598,6 +1599,7 @@ class ExecutionEngine:
         roi_mult: int = 1,
         accel_mult: int = 1,
         *,
+        notional_price: Optional[Decimal] = None,
         base_mult_override: Optional[int] = None,
         qty_jitter_pct: Decimal = Decimal("0"),
         anti_repeat_lookback: int = 0,
@@ -1617,6 +1619,7 @@ class ExecutionEngine:
             min_qty: 最小下单量
             step_size: 数量步进
             last_trade_price: 最近成交价
+            notional_price: 用于订单名义金额上限的价格；默认沿用最近成交价
 
         Returns:
             下单数量
@@ -1637,10 +1640,15 @@ class ExecutionEngine:
 
         base_qty = min_qty * final_mult
         qty = min(base_qty, abs_position)
+        effective_notional_price = (
+            notional_price
+            if notional_price is not None and notional_price > Decimal("0")
+            else last_trade_price
+        )
 
         # 不超过 max_order_notional
-        if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0"):
-            max_qty_by_notional = self.max_order_notional / last_trade_price
+        if effective_notional_price > Decimal("0") and self.max_order_notional > Decimal("0"):
+            max_qty_by_notional = self.max_order_notional / effective_notional_price
             qty = min(qty, max_qty_by_notional)
 
         # 按 step_size 规整
@@ -1661,8 +1669,8 @@ class ExecutionEngine:
             min(
                 abs_position,
                 (
-                    self.max_order_notional / last_trade_price
-                    if last_trade_price > Decimal("0") and self.max_order_notional > Decimal("0")
+                    self.max_order_notional / effective_notional_price
+                    if effective_notional_price > Decimal("0") and self.max_order_notional > Decimal("0")
                     else abs_position
                 ),
                 qty * (Decimal("1") + qty_jitter_pct),

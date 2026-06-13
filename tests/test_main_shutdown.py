@@ -1,6 +1,6 @@
 # Input: 被测模块与 pytest 夹具
 # Output: pytest 断言结果
-# Pos: 测试用例（main.py 关闭行为 + 命令解析 + 保护止损调度竞态）
+# Pos: 测试用例（main.py 关闭行为 + 命令解析 + 保护止损调度竞态 + orderbook_price 机会重校验）
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -857,6 +857,49 @@ async def test_evaluate_side_risk_does_not_promote_pressure_passive_signal():
     assert signal.price_override == Decimal("9.8")
     assert signal.ttl_override_ms == 10000
     assert signal.cooldown_override_ms == 0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_side_skips_orderbook_price_signal_when_current_book_no_longer_valid():
+    symbol = "DASH/USDT:USDT"
+    signal = ExitSignal(
+        symbol=symbol,
+        position_side=PositionSide.LONG,
+        reason=SignalReason.LONG_BID_IMPROVE,
+        timestamp_ms=1000,
+        best_bid=Decimal("10.2"),
+        best_ask=Decimal("10.3"),
+        last_trade_price=Decimal("10"),
+        strategy_mode=StrategyMode.ORDERBOOK_PRICE,
+    )
+    app, engine = _make_pressure_eval_app(
+        position_side=PositionSide.LONG,
+        position_amt=Decimal("5"),
+        signal=signal,
+        risk_triggered=False,
+    )
+    engine.on_signal = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    current_market_state = MarketState(
+        symbol=symbol,
+        best_bid=Decimal("9.8"),
+        best_ask=Decimal("10.3"),
+        last_trade_price=Decimal("10"),
+        previous_trade_price=Decimal("9.9"),
+        last_update_ms=1000,
+        is_ready=True,
+    )
+
+    await app._evaluate_side(
+        symbol=symbol,
+        position_side=PositionSide.LONG,
+        engine=engine,
+        rules=app._rules[symbol],
+        market_state=current_market_state,
+        current_ms=1000,
+    )
+
+    engine.on_signal.assert_not_awaited()
+    assert engine.get_state(symbol, PositionSide.LONG).mode == ExecutionMode.MAKER_ONLY
 
 
 @pytest.mark.asyncio

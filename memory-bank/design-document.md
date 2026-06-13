@@ -1,5 +1,5 @@
 <!-- Input: 需求与设计目标 -->
-<!-- Output: 设计方案与约束（含执行反馈/成交率策略与自动发现持仓） -->
+<!-- Output: 设计方案与约束（含执行反馈/成交率策略、自动发现持仓、orderbook_price 当前盘口重校验与订单限价名义金额约束） -->
 <!-- Pos: memory-bank/design-document -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -121,11 +121,12 @@ short_exit_condition_met = short_primary or short_ask_improve
 **improve 信号触发路径（简化）**：
 ```text
 MarketEvent -> SignalEngine 判定 improve
+           -> Application 用当前 MarketState 重校验机会仍成立
            -> ExecutionEngine 切到 AGGRESSIVE_LIMIT
            -> on_signal 生成 AGGRESSIVE_LIMIT 限价单
            -> 立即下单（同一轮信号内）
 ```
-说明：仍为 LIMIT 单（SELL=best_bid / BUY=best_ask），成交取决于盘口与状态机是否处于 IDLE。  
+说明：仍为 LIMIT 单（SELL=best_bid / BUY=best_ask），成交取决于盘口与状态机是否处于 IDLE；若下单前当前盘口已不再满足 `orderbook_price` 的 LONG/SHORT 有利条件，本轮信号跳过。  
 
 ### 4.3 状态机（每侧）
 - `IDLE` → `PLACE` → `WAIT` → (`FILLED` | `TIMEOUT`) → `CANCEL` → `COOLDOWN` → `IDLE`
@@ -195,7 +196,7 @@ maker 订单要求：
 - `final_mult = base_mult * roi_mult * accel_mult`
 - 保险 1：`final_mult = min(final_mult, max_mult)`（每 symbol 可覆盖；用户可设很高，但建议更保守）
 - 保险 2：`max_order_notional`（强烈建议启用）
-  - `order_notional = qty * last_trade_price`
+  - `order_notional = qty * order_limit_price`
   - `orderbook_price` 与 `orderbook_pressure` 的正常下单路径都受此约束
   - 若超限：缩小 `qty` 直至满足
 - 最终目标数量：
@@ -421,12 +422,12 @@ def choose_mode(side_state, cfg, risk_flag):
         return "MAKER_ONLY"
     return side_state.mode
 
-def compute_qty(pos_amt_abs, minQty, stepSize, last_trade, mult, cfg):
+def compute_qty(pos_amt_abs, minQty, stepSize, order_price, mult, cfg):
     mult = min(mult, cfg.max_mult)
     qty = min(pos_amt_abs, minQty * mult)
     qty = clamp_to_step(qty, stepSize)
     if cfg.max_order_notional is not None:
-        while qty > 0 and qty * last_trade > cfg.max_order_notional:
+        while qty > 0 and qty * order_price > cfg.max_order_notional:
             qty = clamp_to_step(qty - stepSize, stepSize)
     return qty
 
@@ -437,17 +438,21 @@ def tick_side(side):
     risk_flag = risk_liq_close(side)
     mode = choose_mode(side_state, cfg, risk_flag)
 
+    if mode == "MAKER_ONLY":
+        price = build_maker_price(side, best_bid, best_ask, tickSize, cfg.maker_price_mode, cfg.maker_n_ticks)
+    elif mode == "AGGRESSIVE_LIMIT":
+        price = build_aggressive_price(side, best_bid, best_ask)
+    price = clamp_to_tick(price)
+
     base_mult = strategy_base_mult(side)  # 例如两种策略都来自 base_mult
     mult = base_mult * roi_mult(side) * accel_mult(side)
-    qty = compute_qty(abs(pos.amt), minQty, stepSize, last_trade_price, mult, cfg)
+    qty = compute_qty(abs(pos.amt), minQty, stepSize, price, mult, cfg)
     if qty <= 0: return
 
     if mode == "MAKER_ONLY":
-        price = build_maker_price(side, best_bid, best_ask, tickSize, cfg.maker_price_mode, cfg.maker_n_ticks)
-        place_post_only_limit_reduce_only(side, qty, clamp_to_tick(price))
+        place_post_only_limit_reduce_only(side, qty, price)
     elif mode == "AGGRESSIVE_LIMIT":
-        price = build_aggressive_price(side, best_bid, best_ask)
-        place_limit_reduce_only(side, qty, clamp_to_tick(price))
+        place_limit_reduce_only(side, qty, price)
 
     wait_until_ttl_then_cancel_if_needed()
 ```

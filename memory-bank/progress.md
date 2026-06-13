@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、一级风控日志降噪、-4118 挂单占仓收口与 PRESSURE_STATS 判读规则）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口与 PRESSURE_STATS 判读规则）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -25,6 +25,20 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：退出机会与订单名义金额硬约束
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-13
+
+**动机**：平仓机会信号生成后，盘口可能在下单前发生变化；同时 `orderbook_pressure` 在没有最近成交价时仍应受 `max_order_notional` 硬约束。需要保证过期的 `orderbook_price` 机会不会继续传入执行层，并让单笔名义金额上限以本次订单限价为准。<br>
+**产出**：
+
+- `src/main.py`：`orderbook_price` 信号进入执行层前，使用当前 `MarketState` 重新确认 LONG/SHORT 有利盘口条件；若当前盘口不再满足条件，本轮信号跳过。风险触发的 `AGGRESSIVE_LIMIT` 模式提升仍保留，不依赖过期机会信号下单。
+- `src/execution/engine.py`：先解析本次订单限价，再用该限价约束 `compute_qty()` 的 `max_order_notional`；jitter 候选上限也使用同一价格，避免 `last_trade_price=0` 时绕过单笔名义金额上限。
+- `tests/test_main_shutdown.py`：覆盖 `orderbook_price` 机会消失后不调用执行层。
+- `tests/test_execution.py`：覆盖 `orderbook_pressure` 在 `last_trade_price=0` 时仍按订单限价裁剪数量。
+- `memory-bank/architecture.md` / `memory-bank/design-document.md`：同步当前下单前重校验与订单限价名义金额约束语义。
 
 ## Milestone/附加改进：`PRESSURE_REGIME` 在线状态机
 

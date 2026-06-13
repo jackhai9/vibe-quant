@@ -1,6 +1,6 @@
 # Input: config path, env vars, OS signals, account positions, Telegram Bot commands, and recent pressure logs
-# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, liq-distance risk log/mode coordination, and side-adjusted pressure recap/report summaries
-# Pos: application entrypoint and orchestrator for runtime tasks, alerts, and side-adjusted pressure summaries
+# Output: application lifecycle, async tasks, runtime symbol orchestration, account-event position refresh, pause/resume control, reduce-only block verification wiring, orderbook_price revalidation, liq-distance risk log/mode coordination, and side-adjusted pressure recap/report summaries
+# Pos: application entrypoint and orchestrator for runtime tasks, alerts, orderbook_price current-book guards, and side-adjusted pressure summaries
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
@@ -2453,13 +2453,39 @@ class Application:
             current_ms=current_time_ms(),
         )
 
+    @staticmethod
+    def _is_orderbook_price_signal_still_valid(signal: ExitSignal, market_state: MarketState) -> bool:
+        if signal.strategy_mode != StrategyMode.ORDERBOOK_PRICE:
+            return True
+        if market_state.previous_trade_price is None:
+            return False
+        if (
+            market_state.best_bid <= Decimal("0")
+            or market_state.best_ask <= Decimal("0")
+            or market_state.last_trade_price <= Decimal("0")
+        ):
+            return False
+
+        last = market_state.last_trade_price
+        prev = market_state.previous_trade_price
+        if signal.reason in (SignalReason.LONG_PRIMARY, SignalReason.LONG_BID_IMPROVE):
+            return (last > prev and market_state.best_bid >= last) or (
+                market_state.best_bid >= last and market_state.best_bid > prev
+            )
+        if signal.reason in (SignalReason.SHORT_PRIMARY, SignalReason.SHORT_ASK_IMPROVE):
+            return (last < prev and market_state.best_ask <= last) or (
+                market_state.best_ask <= last and market_state.best_ask < prev
+            )
+
+        return False
+
     async def _evaluate_side(
         self,
         symbol: str,
         position_side: PositionSide,
         engine: ExecutionEngine,
         rules: SymbolRules,
-        market_state,
+        market_state: MarketState,
         current_ms: int,
     ) -> None:
         """评估单侧仓位"""
@@ -2553,6 +2579,14 @@ class Application:
                 target_mode = ExecutionMode.AGGRESSIVE_LIMIT
                 if state.mode != target_mode:
                     engine.set_mode(symbol, position_side, target_mode, reason="risk_trigger")
+
+            if not self._is_orderbook_price_signal_still_valid(signal, market_state):
+                get_logger().debug(
+                    f"{symbol} {position_side.value} orderbook_price 信号已失效，跳过下单 | "
+                    f"reason={signal.reason.value} | bid={market_state.best_bid} | ask={market_state.best_ask} "
+                    f"| last={market_state.last_trade_price} | prev={market_state.previous_trade_price}"
+                )
+                return
 
             # 主动信号抢占被动单
             state = engine.get_state(symbol, position_side)
