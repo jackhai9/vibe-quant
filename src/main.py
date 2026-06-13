@@ -4,7 +4,7 @@
 # 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
 
 """
-vibe-quant: Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器
+binance-exit-executor: Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器
 
 入口模块
 

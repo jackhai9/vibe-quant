@@ -616,7 +616,7 @@ wheels = [
 ]
 
 [[package]]
-name = "vibe-quant"
+name = "binance-exit-executor"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

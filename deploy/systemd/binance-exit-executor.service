@@ -1,0 +1,42 @@
+# Input: systemd 运行参数与环境文件
+# Output: service 单元定义
+# Pos: systemd 服务文件
+# 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。
+
+[Unit]
+Description=binance-exit-executor (Binance Futures reduce-only executor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 建议将代码部署到 /opt/binance-exit-executor，并使用虚拟环境 venv/
+WorkingDirectory=/opt/binance-exit-executor
+
+# 环境变量（包含 BINANCE_API_KEY/BINANCE_API_SECRET/TELEGRAM_* 等）
+# 建议放在 /etc/binance-exit-executor/binance-exit-executor.env
+EnvironmentFile=/etc/binance-exit-executor/binance-exit-executor.env
+
+# 日志目录（持久化）：binance-exit-executor 支持通过 VQ_LOG_DIR 指定日志目录
+# systemd 会自动创建 /var/log/binance-exit-executor 并设置权限（需要 systemd 235+）
+LogsDirectory=binance-exit-executor
+Environment=VQ_LOG_DIR=/var/log/binance-exit-executor
+
+# 启动命令：建议将 config.yaml 放在 /etc/binance-exit-executor/config.yaml
+ExecStart=/opt/binance-exit-executor/.venv/bin/python -m src.main /etc/binance-exit-executor/config.yaml
+
+# 异常退出自动重启
+Restart=on-failure
+RestartSec=2
+
+# 优雅退出：给 shutdown 足够时间完成撤单/断开
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=binance-exit-executor
+
+[Install]
+WantedBy=multi-user.target

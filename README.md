@@ -3,7 +3,7 @@
 <!-- Pos: 项目根 README -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
-# vibe-quant
+# binance-exit-executor
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![Exchange](https://img.shields.io/badge/Exchange-Binance%20USDT--M%20Futures-f0b90b)
@@ -145,7 +145,7 @@ caffeinate -is python -m src.main
 ## 项目结构
 
 ```
-vibe-quant/
+binance-exit-executor/
 ├── config/
 │   └── config.yaml          # 配置文件
 ├── src/

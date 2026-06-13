@@ -118,7 +118,7 @@ def setup_logger(
         )
 
     # 文件输出 - 按天滚动
-    log_file = log_dir / "vibe-quant_{time:YYYY-MM-DD}.log"
+    log_file = log_dir / "binance-exit-executor_{time:YYYY-MM-DD}.log"
     _logger.add(
         str(log_file),
         format=file_format,

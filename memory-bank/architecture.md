@@ -36,7 +36,7 @@ Binance U 本位永续 Hedge 模式 Reduce-Only 小单平仓执行器。
 ## 数据存储（当前无数据库）
 
 - **配置**：`config/config.yaml`（YAML）
-- **日志**：`logs/`（`vibe-quant_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`；`pressure_regime_state.json` 用于短暂停机后的 regime 恢复；最近 `24h` 的 `PRESSURE_STATS` 日志会在启动后连同 pre-lookback warmup stats 一起被后台回放成一次 `PRESSURE_RECAP`）
+- **日志**：`logs/`（`binance-exit-executor_YYYY-MM-DD.log`/`error_YYYY-MM-DD.log`，旧日志 `.gz`；`pressure_regime_state.json` 用于短暂停机后的 regime 恢复；最近 `24h` 的 `PRESSURE_STATS` 日志会在启动后连同 pre-lookback warmup stats 一起被后台回放成一次 `PRESSURE_RECAP`）
 - **持久化数据库**：无（当前所有状态仅在内存中维护）
 
 ---
@@ -259,7 +259,7 @@ IDLE ──(信号触发)──▶ PLACING ──(下单成功)──▶ WAITING
 说明：各目录包含 README.md 作为目录级说明。
 
 ```
-vibe-quant/
+binance-exit-executor/
 ├── .gitignore                # Git 忽略文件
 ├── CLAUDE.md                 # Claude Code 指引
 ├── pyproject.toml            # Python 项目与依赖声明

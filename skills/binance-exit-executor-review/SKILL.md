@@ -1,10 +1,10 @@
 ---
-name: vibe-quant-review
+name: binance-exit-executor-review
 version: "1.0"
-description: Review vibe-quant changes for trading safety and doc drift.
+description: Review binance-exit-executor changes for trading safety and doc drift.
 ---
 
-# vibe-quant-review
+# binance-exit-executor-review
 
 Use this skill when reviewing code changes in this repository.
 

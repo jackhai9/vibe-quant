@@ -4,7 +4,7 @@
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 故障排查指南
 
-> vibe-quant 常见问题与解决方案
+> binance-exit-executor 常见问题与解决方案
 
 ---
 
@@ -40,7 +40,7 @@
    source .env  # 或使用 python-dotenv
 
    # systemd
-   sudo systemctl restart vibe-quant
+   sudo systemctl restart binance-exit-executor
    ```
 
 **参考**：[配置参数手册 - 环境变量](configuration.md#环境变量)
@@ -58,7 +58,7 @@
    python -m src.main config/config.yaml
 
    # systemd
-   ls -l /etc/vibe-quant/config.yaml
+   ls -l /etc/binance-exit-executor/config.yaml
    ```
 
 2. 验证 YAML 格式：
@@ -214,7 +214,7 @@ global:
 4. **查看重连日志**：
    ```bash
    # 查找重连事件
-   grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log
+   grep "WS重连" logs/binance-exit-executor_$(date +%Y-%m-%d).log
    ```
 
 ---
@@ -234,7 +234,7 @@ global:
 2. 账户管理 → API 管理 → 编辑 API Key
 3. 启用"期货交易"权限（**启用现货交易权限无效**）
 4. 保存后等待 1-2 分钟生效
-5. 重启 vibe-quant
+5. 重启 binance-exit-executor
 
 **安全提示**：不要启用"提现"权限，降低资金风险
 
@@ -284,7 +284,7 @@ global:
 **监控限速**：
 ```bash
 # 查看限速事件
-grep "限速" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "限速" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 ```
 
 ---
@@ -309,10 +309,10 @@ grep "限速" logs/vibe-quant_$(date +%Y-%m-%d).log
 **排查方法**：
 ```bash
 # 查看外部接管状态变化（set/release/verify）
-grep "\\[RISK\\]" logs/vibe-quant_$(date +%Y-%m-%d).log | grep "external_takeover" | tail -50
+grep "\\[RISK\\]" logs/binance-exit-executor_$(date +%Y-%m-%d).log | grep "external_takeover" | tail -50
 
 # 如果同侧出现多张外部 stop/tp，会打印摘要告警
-grep "\\[RISK\\]" logs/vibe-quant_$(date +%Y-%m-%d).log | grep "external_stop_multiple" | tail -20
+grep "\\[RISK\\]" logs/binance-exit-executor_$(date +%Y-%m-%d).log | grep "external_stop_multiple" | tail -20
 ```
 
 **解决方案**：
@@ -344,7 +344,7 @@ grep "\\[RISK\\]" logs/vibe-quant_$(date +%Y-%m-%d).log | grep "external_stop_mu
 **排查方法**：<br>
 ```bash
 # 查看撤单失败日志
-grep "撤单请求失败\\|撤 .*订单失败" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -50
+grep "撤单请求失败\\|撤 .*订单失败" logs/binance-exit-executor_$(date +%Y-%m-%d).log | tail -50
 ```
 
 **解决方案**：<br>
@@ -408,7 +408,7 @@ symbols:
 
 2. 查看日志中的止损订单参数：
    ```bash
-   grep "保护止损" logs/vibe-quant_$(date +%Y-%m-%d).log
+   grep "保护止损" logs/binance-exit-executor_$(date +%Y-%m-%d).log
    ```
 
 3. 确认仓位数据准确（标记价格、强平价格）
@@ -437,7 +437,7 @@ symbols:
 
 3. 查看日志中的仓位信息：
    ```bash
-   grep "仓位更新" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -10
+   grep "仓位更新" logs/binance-exit-executor_$(date +%Y-%m-%d).log | tail -10
    ```
 
 ---
@@ -478,10 +478,10 @@ symbols:
 #### 4. 监控重连状态
 ```bash
 # 查看最近重连记录
-grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -20
+grep "WS重连" logs/binance-exit-executor_$(date +%Y-%m-%d).log | tail -20
 
 # 统计今天重连次数
-grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log | wc -l
+grep "WS重连" logs/binance-exit-executor_$(date +%Y-%m-%d).log | wc -l
 ```
 
 **预期重连次数**：1-3次/天属于正常
@@ -499,7 +499,7 @@ grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log | wc -l
 **解决方案**：
 1. **检查 WebSocket 连接状态**：
    ```bash
-   grep "WS连接\|WS断开" logs/vibe-quant_$(date +%Y-%m-%d).log | tail -10
+   grep "WS连接\|WS断开" logs/binance-exit-executor_$(date +%Y-%m-%d).log | tail -10
    ```
 
 2. **如果 WebSocket 已连接但仍显示陈旧**：
@@ -597,7 +597,7 @@ maker_safety_ticks: 1
 
 3. **查看日志确认加载**：
    ```bash
-   grep "配置加载" logs/vibe-quant_$(date +%Y-%m-%d).log | head -5
+   grep "配置加载" logs/binance-exit-executor_$(date +%Y-%m-%d).log | head -5
    ```
 
 ---
@@ -608,12 +608,12 @@ maker_safety_ticks: 1
 
 **本地开发**：
 - 默认位置：`logs/`（相对于工作目录）
-- 文件命名：`vibe-quant_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`（每天一个文件，旧日志压缩为 `.gz`）
+- 文件命名：`binance-exit-executor_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`（每天一个文件，旧日志压缩为 `.gz`）
 - 可通过环境变量 `VQ_LOG_DIR` 修改日志目录
 
 **systemd 部署**：
-- 文件日志：`/var/log/vibe-quant/vibe-quant_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`
-- systemd 日志：`journalctl -u vibe-quant`
+- 文件日志：`/var/log/binance-exit-executor/binance-exit-executor_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`
+- systemd 日志：`journalctl -u binance-exit-executor`
 
 ---
 
@@ -622,44 +622,44 @@ maker_safety_ticks: 1
 #### 实时查看日志
 ```bash
 # 文件日志
-tail -f logs/vibe-quant_$(date +%Y-%m-%d).log
+tail -f logs/binance-exit-executor_$(date +%Y-%m-%d).log
 tail -f logs/error_$(date +%Y-%m-%d).log
 
 # systemd 日志
-journalctl -u vibe-quant -f
+journalctl -u binance-exit-executor -f
 ```
 
 #### 查找特定事件
 ```bash
 # 查找错误
-grep "错误" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "错误" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 tail -f logs/error_$(date +%Y-%m-%d).log
 
 # 查找订单成交
-grep "已成交" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "已成交" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 
 # 查找风险触发
-grep "风险触发" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "风险触发" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 
 # 查找 WebSocket 重连
-grep "WS重连" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "WS重连" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 ```
 
 #### 按时间筛选（systemd）
 ```bash
 # 查看最近1小时
-journalctl -u vibe-quant --since "1 hour ago"
+journalctl -u binance-exit-executor --since "1 hour ago"
 
 # 查看今天的日志
-journalctl -u vibe-quant --since today
+journalctl -u binance-exit-executor --since today
 
 # 查看指定时间范围
-journalctl -u vibe-quant --since "2025-12-19 10:00" --until "2025-12-19 12:00"
+journalctl -u binance-exit-executor --since "2025-12-19 10:00" --until "2025-12-19 12:00"
 ```
 
 #### 查看启动和关闭记录
 ```bash
-grep "启动\|关闭" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "启动\|关闭" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 ```
 
 ---
@@ -676,15 +676,15 @@ grep "启动\|关闭" logs/vibe-quant_$(date +%Y-%m-%d).log
 
 **查看特定级别**：
 ```bash
-grep "ERROR" logs/vibe-quant_$(date +%Y-%m-%d).log
-grep "WARNING" logs/vibe-quant_$(date +%Y-%m-%d).log
+grep "ERROR" logs/binance-exit-executor_$(date +%Y-%m-%d).log
+grep "WARNING" logs/binance-exit-executor_$(date +%Y-%m-%d).log
 tail -f logs/error_$(date +%Y-%m-%d).log
 ```
 
 **压缩日志查询**：
 ```bash
-zgrep -h "WS重连" logs/vibe-quant_*.log*
-zgrep -h "ERROR" logs/vibe-quant_*.log*
+zgrep -h "WS重连" logs/binance-exit-executor_*.log*
+zgrep -h "ERROR" logs/binance-exit-executor_*.log*
 ```
 
 ---
@@ -749,9 +749,9 @@ ps aux | grep "src.main"
 #### 1. 定期重启（临时方案）
 使用 systemd 定时重启：
 ```ini
-# /etc/systemd/system/vibe-quant-restart.timer
+# /etc/systemd/system/binance-exit-executor-restart.timer
 [Unit]
-Description=Daily restart of vibe-quant
+Description=Daily restart of binance-exit-executor
 
 [Timer]
 OnCalendar=daily
@@ -764,10 +764,10 @@ WantedBy=timers.target
 #### 2. 监控内存
 ```bash
 # 查看当前内存
-ps aux | grep vibe-quant
+ps aux | grep binance-exit-executor
 
 # 持续监控
-watch -n 5 'ps aux | grep vibe-quant'
+watch -n 5 'ps aux | grep binance-exit-executor'
 ```
 
 #### 3. 报告问题
@@ -786,19 +786,19 @@ watch -n 5 'ps aux | grep vibe-quant'
 1. **查看完整日志**：
    ```bash
    # 收集最近的日志
-   tail -1000 logs/vibe-quant_$(date +%Y-%m-%d).log > debug.log
+   tail -1000 logs/binance-exit-executor_$(date +%Y-%m-%d).log > debug.log
    tail -1000 logs/error_$(date +%Y-%m-%d).log >> debug.log
    ```
 
 2. **提供以下信息**：
    - 系统版本：`python --version`
-   - vibe-quant 版本：`git rev-parse HEAD`
+   - binance-exit-executor 版本：`git rev-parse HEAD`
    - 配置文件（脱敏后）
    - 错误日志
    - 复现步骤
 
 3. **提交 Issue**：
-   - GitHub: `https://github.com/your-repo/vibe-quant/issues`
+   - GitHub: `https://github.com/jackhai9/binance-exit-executor/issues`
    - 邮件: `your-email@example.com`
 
 ---

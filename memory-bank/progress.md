@@ -123,7 +123,7 @@
 **状态**：📝 已记录<br>
 **日期**：2026-03-27
 
-**背景**：基于 `logs/vibe-quant_2026-03-27.log` 中 `2026-03-27 11:26:03` 到 `2026-03-27 15:34:45` 的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。当前主统计窗口为 `5m`；样本量为 `DASH LONG 5m = 48`、`DASH SHORT 5m = 22`。样本当前集中在 `DASH LONG`，并已拆分为 `same-window` 与 `lead-lag` 两套口径。<br>
+**背景**：基于 `logs/binance-exit-executor_2026-03-27.log` 中 `2026-03-27 11:26:03` 到 `2026-03-27 15:34:45` 的新口径 `[PRESSURE_STATS]` 日志，对 `orderbook_pressure` 的 trigger / attempt / fill / `price_chg` 做了阶段性相关性观察。当前主统计窗口为 `5m`；样本量为 `DASH LONG 5m = 48`、`DASH SHORT 5m = 22`。样本当前集中在 `DASH LONG`，并已拆分为 `same-window` 与 `lead-lag` 两套口径。<br>
 **当前结论定位**：工作假设，仅用于辅助执行判断；后续应随样本扩大持续复核，不作为已固化策略逻辑。
 
 **分析检查点**：
@@ -1443,12 +1443,12 @@ pytest -q: 204 passed
 **状态**：✅ 已完成<br>
 **日期**：2025-12-17<br>
 **提交**：`3bc8b0e`<br>
-**产出**：`deploy/systemd/vibe-quant.service`、`deploy/systemd/README.md`、`deploy/systemd/vibe-quant.env.example`、`README.md`、`src/main.py`
+**产出**：`deploy/systemd/binance-exit-executor.service`、`deploy/systemd/README.md`、`deploy/systemd/binance-exit-executor.env.example`、`README.md`、`src/main.py`
 
 ### 完成内容
 - 提供 systemd service 模板：异常退出自动重启（`Restart=on-failure`），并设置 `TimeoutStopSec` 以便优雅退出
-- 日志目录支持持久化：通过 `VQ_LOG_DIR` 指定（systemd 模板默认 `/var/log/vibe-quant`）
-- 提供 `/etc/vibe-quant/` 的 config/env 推荐布局与部署说明
+- 日志目录支持持久化：通过 `VQ_LOG_DIR` 指定（systemd 模板默认 `/var/log/binance-exit-executor`）
+- 提供 `/etc/binance-exit-executor/` 的 config/env 推荐布局与部署说明
 
 ---
 

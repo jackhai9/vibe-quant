@@ -4,7 +4,7 @@
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 部署指南
 
-> vibe-quant 生产环境部署完整指南
+> binance-exit-executor 生产环境部署完整指南
 
 ---
 
@@ -55,8 +55,8 @@
 ### 1. 克隆代码
 
 ```bash
-git clone https://github.com/your-username/vibe-quant.git
-cd vibe-quant
+git clone https://github.com/jackhai9/binance-exit-executor.git
+cd binance-exit-executor
 ```
 
 ### 2. 同步 uv 环境
@@ -119,7 +119,7 @@ python -m src.main config/config-local.yaml
 ### 7. 验证运行
 
 检查日志输出：
-- 查看 `logs/` 目录下的 `vibe-quant_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`（旧日志会压缩为 `.gz`）
+- 查看 `logs/` 目录下的 `binance-exit-executor_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`（旧日志会压缩为 `.gz`）
 - 确认 WebSocket 连接成功
 - 查看仓位和市场数据是否正常获取
 
@@ -134,21 +134,21 @@ python -m src.main config/config-local.yaml
 ### 架构概览
 
 ```
-/opt/vibe-quant/          # 代码目录
+/opt/binance-exit-executor/          # 代码目录
 ├── venv/                 # Python 虚拟环境
 ├── src/                  # 源代码
 └── ...
 
-/etc/vibe-quant/          # 配置目录
+/etc/binance-exit-executor/          # 配置目录
 ├── config.yaml           # 主配置文件
-└── vibe-quant.env        # 环境变量（包含 API 密钥）
+└── binance-exit-executor.env        # 环境变量（包含 API 密钥）
 
-/var/log/vibe-quant/      # 日志目录
-├── vibe-quant_YYYY-MM-DD.log  # 按天滚动的业务日志（旧日志压缩为 .gz）
+/var/log/binance-exit-executor/      # 日志目录
+├── binance-exit-executor_YYYY-MM-DD.log  # 按天滚动的业务日志（旧日志压缩为 .gz）
 └── error_YYYY-MM-DD.log       # 按天滚动的错误日志（旧日志压缩为 .gz）
 
 /etc/systemd/system/      # systemd 服务
-└── vibe-quant.service    # 服务单元文件
+└── binance-exit-executor.service    # 服务单元文件
 ```
 
 ---
@@ -158,16 +158,16 @@ python -m src.main config/config-local.yaml
 #### 1.1 创建部署目录
 
 ```bash
-sudo mkdir -p /opt/vibe-quant
-sudo chown $USER:$USER /opt/vibe-quant
+sudo mkdir -p /opt/binance-exit-executor
+sudo chown $USER:$USER /opt/binance-exit-executor
 ```
 
 #### 1.2 克隆代码
 
 ```bash
 cd /opt
-git clone https://github.com/your-username/vibe-quant.git
-cd vibe-quant
+git clone https://github.com/jackhai9/binance-exit-executor.git
+cd binance-exit-executor
 ```
 
 #### 1.3 同步 uv 环境
@@ -183,23 +183,23 @@ uv sync --frozen --no-dev
 #### 2.1 创建配置目录
 
 ```bash
-sudo mkdir -p /etc/vibe-quant
+sudo mkdir -p /etc/binance-exit-executor
 ```
 
 #### 2.2 复制配置文件
 
 ```bash
 # 复制主配置文件
-sudo cp /opt/vibe-quant/config/config.example.yaml /etc/vibe-quant/config.yaml
+sudo cp /opt/binance-exit-executor/config/config.example.yaml /etc/binance-exit-executor/config.yaml
 
 # 复制环境变量模板
-sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.env.example /etc/vibe-quant/vibe-quant.env
+sudo cp /opt/binance-exit-executor/deploy/systemd/binance-exit-executor.env.example /etc/binance-exit-executor/binance-exit-executor.env
 ```
 
 #### 2.3 编辑环境变量
 
 ```bash
-sudo nano /etc/vibe-quant/vibe-quant.env
+sudo nano /etc/binance-exit-executor/binance-exit-executor.env
 ```
 
 填入真实凭证：
@@ -214,14 +214,14 @@ TELEGRAM_CHAT_ID=123456789
 
 **设置文件权限**（重要！防止密钥泄露）：
 ```bash
-sudo chmod 600 /etc/vibe-quant/vibe-quant.env
-sudo chown root:root /etc/vibe-quant/vibe-quant.env
+sudo chmod 600 /etc/binance-exit-executor/binance-exit-executor.env
+sudo chown root:root /etc/binance-exit-executor/binance-exit-executor.env
 ```
 
 #### 2.4 编辑配置文件
 
 ```bash
-sudo nano /etc/vibe-quant/config.yaml
+sudo nano /etc/binance-exit-executor/config.yaml
 ```
 
 根据实际需求调整参数，参考 [配置参数手册](configuration.md)。
@@ -233,35 +233,35 @@ sudo nano /etc/vibe-quant/config.yaml
 #### 3.1 复制服务文件
 
 ```bash
-sudo cp /opt/vibe-quant/deploy/systemd/vibe-quant.service /etc/systemd/system/vibe-quant.service
+sudo cp /opt/binance-exit-executor/deploy/systemd/binance-exit-executor.service /etc/systemd/system/binance-exit-executor.service
 ```
 
 #### 3.2 查看服务文件内容
 
 ```bash
-cat /etc/systemd/system/vibe-quant.service
+cat /etc/systemd/system/binance-exit-executor.service
 ```
 
 **服务文件说明**：
 ```ini
 [Unit]
-Description=vibe-quant (Binance Futures reduce-only executor)
+Description=binance-exit-executor (Binance Futures reduce-only executor)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/vibe-quant
+WorkingDirectory=/opt/binance-exit-executor
 
 # 环境变量文件（包含 API 密钥）
-EnvironmentFile=/etc/vibe-quant/vibe-quant.env
+EnvironmentFile=/etc/binance-exit-executor/binance-exit-executor.env
 
 # 日志目录
-LogsDirectory=vibe-quant
-Environment=VQ_LOG_DIR=/var/log/vibe-quant
+LogsDirectory=binance-exit-executor
+Environment=VQ_LOG_DIR=/var/log/binance-exit-executor
 
 # 启动命令
-ExecStart=/opt/vibe-quant/.venv/bin/python -m src.main /etc/vibe-quant/config.yaml
+ExecStart=/opt/binance-exit-executor/.venv/bin/python -m src.main /etc/binance-exit-executor/config.yaml
 
 # 自动重启策略
 Restart=on-failure
@@ -274,7 +274,7 @@ KillSignal=SIGTERM
 # 日志输出
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=vibe-quant
+SyslogIdentifier=binance-exit-executor
 
 [Install]
 WantedBy=multi-user.target
@@ -293,19 +293,19 @@ sudo systemctl daemon-reload
 #### 4.1 启动服务
 
 ```bash
-sudo systemctl start vibe-quant
+sudo systemctl start binance-exit-executor
 ```
 
 #### 4.2 查看状态
 
 ```bash
-sudo systemctl status vibe-quant
+sudo systemctl status binance-exit-executor
 ```
 
 **预期输出**（运行中）：
 ```
-● vibe-quant.service - vibe-quant (Binance Futures reduce-only executor)
-   Loaded: loaded (/etc/systemd/system/vibe-quant.service; enabled; vendor preset: enabled)
+● binance-exit-executor.service - binance-exit-executor (Binance Futures reduce-only executor)
+   Loaded: loaded (/etc/systemd/system/binance-exit-executor.service; enabled; vendor preset: enabled)
    Active: active (running) since Thu 2025-12-19 10:00:00 UTC; 5s ago
  Main PID: 12345 (python)
    ...
@@ -314,20 +314,20 @@ sudo systemctl status vibe-quant
 #### 4.3 启用开机自启
 
 ```bash
-sudo systemctl enable vibe-quant
+sudo systemctl enable binance-exit-executor
 ```
 
 #### 4.4 查看日志
 
 **实时查看 systemd 日志**：
 ```bash
-journalctl -u vibe-quant -f
+journalctl -u binance-exit-executor -f
 ```
 
 **查看文件日志**：
 ```bash
-tail -f /var/log/vibe-quant/vibe-quant_$(date +%Y-%m-%d).log
-tail -f /var/log/vibe-quant/error_$(date +%Y-%m-%d).log
+tail -f /var/log/binance-exit-executor/binance-exit-executor_$(date +%Y-%m-%d).log
+tail -f /var/log/binance-exit-executor/error_$(date +%Y-%m-%d).log
 ```
 
 ---
@@ -338,10 +338,10 @@ tail -f /var/log/vibe-quant/error_$(date +%Y-%m-%d).log
 
 ```bash
 # 强制杀死进程
-sudo systemctl kill -s SIGKILL vibe-quant
+sudo systemctl kill -s SIGKILL binance-exit-executor
 
 # 等待 2-3 秒后查看状态
-sudo systemctl status vibe-quant
+sudo systemctl status binance-exit-executor
 ```
 
 **预期结果**：服务应该已自动重启，状态为 `active (running)`
@@ -352,31 +352,31 @@ sudo systemctl status vibe-quant
 
 ```bash
 # 启动服务
-sudo systemctl start vibe-quant
+sudo systemctl start binance-exit-executor
 
 # 停止服务
-sudo systemctl stop vibe-quant
+sudo systemctl stop binance-exit-executor
 
 # 重启服务
-sudo systemctl restart vibe-quant
+sudo systemctl restart binance-exit-executor
 
 # 查看状态
-sudo systemctl status vibe-quant
+sudo systemctl status binance-exit-executor
 
 # 启用开机自启
-sudo systemctl enable vibe-quant
+sudo systemctl enable binance-exit-executor
 
 # 禁用开机自启
-sudo systemctl disable vibe-quant
+sudo systemctl disable binance-exit-executor
 
 # 查看日志（最近100行）
-journalctl -u vibe-quant -n 100
+journalctl -u binance-exit-executor -n 100
 
 # 查看日志（实时）
-journalctl -u vibe-quant -f
+journalctl -u binance-exit-executor -f
 
 # 查看日志（指定时间范围）
-journalctl -u vibe-quant --since "2025-12-19 10:00" --until "2025-12-19 12:00"
+journalctl -u binance-exit-executor --since "2025-12-19 10:00" --until "2025-12-19 12:00"
 ```
 
 ---
@@ -405,35 +405,35 @@ ENV PATH="/app/.venv/bin:$PATH"
 COPY src/ ./src/
 
 # 创建日志目录
-RUN mkdir -p /var/log/vibe-quant
+RUN mkdir -p /var/log/binance-exit-executor
 
 # 设置环境变量（仅默认值，实际使用时通过 -e 传递）
-ENV VQ_LOG_DIR=/var/log/vibe-quant
+ENV VQ_LOG_DIR=/var/log/binance-exit-executor
 
 # 启动命令（配置文件通过 volume 挂载）
 ENTRYPOINT ["python", "-m", "src.main"]
-CMD ["/etc/vibe-quant/config.yaml"]
+CMD ["/etc/binance-exit-executor/config.yaml"]
 ```
 
 ### 构建镜像
 
 ```bash
-docker build -t vibe-quant:latest .
+docker build -t binance-exit-executor:latest .
 ```
 
 ### 运行容器
 
 ```bash
 docker run -d \
-  --name vibe-quant \
+  --name binance-exit-executor \
   --restart unless-stopped \
   -e BINANCE_API_KEY=your_key \
   -e BINANCE_API_SECRET=your_secret \
   -e TELEGRAM_BOT_TOKEN=your_token \
   -e TELEGRAM_CHAT_ID=your_chat_id \
-  -v /path/to/config.yaml:/etc/vibe-quant/config.yaml:ro \
-  -v /path/to/logs:/var/log/vibe-quant \
-  vibe-quant:latest
+  -v /path/to/config.yaml:/etc/binance-exit-executor/config.yaml:ro \
+  -v /path/to/logs:/var/log/binance-exit-executor \
+  binance-exit-executor:latest
 ```
 
 ### 使用 Docker Compose
@@ -444,9 +444,9 @@ docker run -d \
 version: '3.8'
 
 services:
-  vibe-quant:
-    image: vibe-quant:latest
-    container_name: vibe-quant
+  binance-exit-executor:
+    image: binance-exit-executor:latest
+    container_name: binance-exit-executor
     restart: unless-stopped
     environment:
       - BINANCE_API_KEY=${BINANCE_API_KEY}
@@ -454,8 +454,8 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
-      - ./config/config.example.yaml:/etc/vibe-quant/config.yaml:ro
-      - ./logs:/var/log/vibe-quant
+      - ./config/config.example.yaml:/etc/binance-exit-executor/config.yaml:ro
+      - ./logs:/var/log/binance-exit-executor
     logging:
       driver: "json-file"
       options:
@@ -469,7 +469,7 @@ services:
 docker-compose up -d
 
 # 查看日志
-docker-compose logs -f vibe-quant
+docker-compose logs -f binance-exit-executor
 ```
 
 ---
@@ -480,19 +480,19 @@ docker-compose logs -f vibe-quant
 
 #### 日志轮转
 
-系统默认由 loguru 按天滚动日志，文件名为 `vibe-quant_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`，旧日志会压缩为 `.gz`，默认保留 30 天。通常无需额外 logrotate。若通过 `VQ_LOG_DIR` 修改日志目录，请将下述路径替换为实际目录。
+系统默认由 loguru 按天滚动日志，文件名为 `binance-exit-executor_YYYY-MM-DD.log` 与 `error_YYYY-MM-DD.log`，旧日志会压缩为 `.gz`，默认保留 30 天。通常无需额外 logrotate。若通过 `VQ_LOG_DIR` 修改日志目录，请将下述路径替换为实际目录。
 
 **方法1：手动清理**
 ```bash
 # 删除 30 天前的日志（包含 .log/.log.gz）
-find /var/log/vibe-quant -type f \( -name "vibe-quant_*.log*" -o -name "error_*.log*" \) -mtime +30 -delete
+find /var/log/binance-exit-executor -type f \( -name "binance-exit-executor_*.log*" -o -name "error_*.log*" \) -mtime +30 -delete
 ```
 
 **方法2（可选）：使用 logrotate（如需统一系统日志策略）**
 
-创建 `/etc/logrotate.d/vibe-quant`：
+创建 `/etc/logrotate.d/binance-exit-executor`：
 ```
-/var/log/vibe-quant/vibe-quant_*.log /var/log/vibe-quant/error_*.log {
+/var/log/binance-exit-executor/binance-exit-executor_*.log /var/log/binance-exit-executor/error_*.log {
     daily
     rotate 30
     copytruncate
@@ -506,7 +506,7 @@ find /var/log/vibe-quant -type f \( -name "vibe-quant_*.log*" -o -name "error_*.
 
 测试配置：
 ```bash
-sudo logrotate -d /etc/logrotate.d/vibe-quant
+sudo logrotate -d /etc/logrotate.d/binance-exit-executor
 ```
 
 #### 日志监控
@@ -514,16 +514,16 @@ sudo logrotate -d /etc/logrotate.d/vibe-quant
 **监控错误日志**：
 ```bash
 # 实时监控错误日志
-tail -f /var/log/vibe-quant/error_$(date +%Y-%m-%d).log
+tail -f /var/log/binance-exit-executor/error_$(date +%Y-%m-%d).log
 
 # 统计今日错误数
-wc -l /var/log/vibe-quant/error_$(date +%Y-%m-%d).log
+wc -l /var/log/binance-exit-executor/error_$(date +%Y-%m-%d).log
 ```
 
 **监控重连事件**：
 ```bash
-grep "WS重连" /var/log/vibe-quant/vibe-quant_$(date +%Y-%m-%d).log | wc -l
-zgrep -h "WS重连" /var/log/vibe-quant/vibe-quant_*.log* | wc -l
+grep "WS重连" /var/log/binance-exit-executor/binance-exit-executor_$(date +%Y-%m-%d).log | wc -l
+zgrep -h "WS重连" /var/log/binance-exit-executor/binance-exit-executor_*.log* | wc -l
 ```
 
 ---
@@ -555,20 +555,20 @@ ping fapi.binance.com
 
 ### 健康检查
 
-创建健康检查脚本 `/opt/vibe-quant/healthcheck.sh`：
+创建健康检查脚本 `/opt/binance-exit-executor/healthcheck.sh`：
 
 ```bash
 #!/bin/bash
 
 # 检查进程是否运行
-if ! systemctl is-active --quiet vibe-quant; then
-    echo "CRITICAL: vibe-quant is not running"
+if ! systemctl is-active --quiet binance-exit-executor; then
+    echo "CRITICAL: binance-exit-executor is not running"
     exit 2
 fi
 
 # 检查日志中是否有最近的心跳（例如最近5分钟内有日志更新）
-# 如日志目录非 /var/log/vibe-quant，请同步调整 LOG_FILE
-LOG_FILE="/var/log/vibe-quant/vibe-quant_$(date +%Y-%m-%d).log"
+# 如日志目录非 /var/log/binance-exit-executor，请同步调整 LOG_FILE
+LOG_FILE="/var/log/binance-exit-executor/binance-exit-executor_$(date +%Y-%m-%d).log"
 if [ ! -f "$LOG_FILE" ]; then
     echo "WARNING: Log file not found"
     exit 1
@@ -583,13 +583,13 @@ if [ $DIFF -gt 300 ]; then
     exit 1
 fi
 
-echo "OK: vibe-quant is healthy"
+echo "OK: binance-exit-executor is healthy"
 exit 0
 ```
 
 设置权限：
 ```bash
-chmod +x /opt/vibe-quant/healthcheck.sh
+chmod +x /opt/binance-exit-executor/healthcheck.sh
 ```
 
 配置 cron 定期检查：
@@ -598,7 +598,7 @@ chmod +x /opt/vibe-quant/healthcheck.sh
 crontab -e
 
 # 每5分钟检查一次
-*/5 * * * * /opt/vibe-quant/healthcheck.sh >> /var/log/vibe-quant-health.log 2>&1
+*/5 * * * * /opt/binance-exit-executor/healthcheck.sh >> /var/log/binance-exit-executor-health.log 2>&1
 ```
 
 ---
@@ -609,24 +609,24 @@ crontab -e
 
 ```bash
 # 停止服务
-sudo systemctl stop vibe-quant
+sudo systemctl stop binance-exit-executor
 
 # 备份当前版本
 cd /opt
-sudo cp -r vibe-quant vibe-quant.backup.$(date +%Y%m%d)
+sudo cp -r binance-exit-executor binance-exit-executor.backup.$(date +%Y%m%d)
 
 # 拉取最新代码
-cd /opt/vibe-quant
+cd /opt/binance-exit-executor
 git pull origin main
 
 # 更新依赖
 uv sync --frozen --no-dev
 
 # 启动服务
-sudo systemctl start vibe-quant
+sudo systemctl start binance-exit-executor
 
 # 查看日志确认正常
-journalctl -u vibe-quant -f
+journalctl -u binance-exit-executor -f
 ```
 
 #### 回滚
@@ -635,15 +635,15 @@ journalctl -u vibe-quant -f
 
 ```bash
 # 停止服务
-sudo systemctl stop vibe-quant
+sudo systemctl stop binance-exit-executor
 
 # 恢复备份
 cd /opt
-sudo rm -rf vibe-quant
-sudo mv vibe-quant.backup.YYYYMMDD vibe-quant
+sudo rm -rf binance-exit-executor
+sudo mv binance-exit-executor.backup.YYYYMMDD binance-exit-executor
 
 # 启动服务
-sudo systemctl start vibe-quant
+sudo systemctl start binance-exit-executor
 ```
 
 ---
@@ -654,15 +654,15 @@ sudo systemctl start vibe-quant
 
 ```bash
 # 配置文件权限（防止普通用户读取 API 密钥）
-sudo chmod 600 /etc/vibe-quant/vibe-quant.env
-sudo chown root:root /etc/vibe-quant/vibe-quant.env
+sudo chmod 600 /etc/binance-exit-executor/binance-exit-executor.env
+sudo chown root:root /etc/binance-exit-executor/binance-exit-executor.env
 
 # 配置文件
-sudo chmod 644 /etc/vibe-quant/config.yaml
-sudo chown root:root /etc/vibe-quant/config.yaml
+sudo chmod 644 /etc/binance-exit-executor/config.yaml
+sudo chown root:root /etc/binance-exit-executor/config.yaml
 
 # 日志目录
-sudo chmod 755 /var/log/vibe-quant
+sudo chmod 755 /var/log/binance-exit-executor
 ```
 
 ### API Key 安全
@@ -704,13 +704,13 @@ sudo nano /etc/ssh/sshd_config
 sudo crontab -e
 
 # 添加定时任务
-0 2 * * * cp /etc/vibe-quant/config.yaml /backup/config.yaml.$(date +\%Y\%m\%d)
+0 2 * * * cp /etc/binance-exit-executor/config.yaml /backup/config.yaml.$(date +\%Y\%m\%d)
 ```
 
 **日志备份**：
 ```bash
 # 每周归档日志
-0 3 * * 0 tar -czf /backup/logs-$(date +\%Y\%W).tar.gz /var/log/vibe-quant/vibe-quant_*.log* /var/log/vibe-quant/error_*.log* && find /backup -name "logs-*.tar.gz" -mtime +60 -delete
+0 3 * * 0 tar -czf /backup/logs-$(date +\%Y\%W).tar.gz /var/log/binance-exit-executor/binance-exit-executor_*.log* /var/log/binance-exit-executor/error_*.log* && find /backup -name "logs-*.tar.gz" -mtime +60 -delete
 ```
 
 ---
@@ -721,23 +721,23 @@ sudo crontab -e
 
 1. 查看 systemd 日志：
    ```bash
-   sudo journalctl -u vibe-quant -n 50
+   sudo journalctl -u binance-exit-executor -n 50
    ```
 
 2. 检查配置文件：
    ```bash
-   python -c "import yaml; yaml.safe_load(open('/etc/vibe-quant/config.yaml'))"
+   python -c "import yaml; yaml.safe_load(open('/etc/binance-exit-executor/config.yaml'))"
    ```
 
 3. 检查环境变量：
    ```bash
-   sudo cat /etc/vibe-quant/vibe-quant.env
+   sudo cat /etc/binance-exit-executor/binance-exit-executor.env
    ```
 
 4. 手动运行测试：
    ```bash
-   cd /opt/vibe-quant
-   ./.venv/bin/python -m src.main /etc/vibe-quant/config.yaml
+   cd /opt/binance-exit-executor
+   ./.venv/bin/python -m src.main /etc/binance-exit-executor/config.yaml
    ```
 
 ### 数据不一致
@@ -758,21 +758,21 @@ sudo crontab -e
 
 ```bash
 # 复制服务文件
-sudo cp /etc/systemd/system/vibe-quant.service /etc/systemd/system/vibe-quant-btc.service
+sudo cp /etc/systemd/system/binance-exit-executor.service /etc/systemd/system/binance-exit-executor-btc.service
 
 # 编辑服务文件
-sudo nano /etc/systemd/system/vibe-quant-btc.service
+sudo nano /etc/systemd/system/binance-exit-executor-btc.service
 ```
 
 修改以下部分：
 ```ini
 [Unit]
-Description=vibe-quant-btc (BTC only)
+Description=binance-exit-executor-btc (BTC only)
 
 [Service]
-EnvironmentFile=/etc/vibe-quant/vibe-quant-btc.env
-Environment=VQ_LOG_DIR=/var/log/vibe-quant-btc
-ExecStart=/opt/vibe-quant/.venv/bin/python -m src.main /etc/vibe-quant/config-btc.yaml
+EnvironmentFile=/etc/binance-exit-executor/binance-exit-executor-btc.env
+Environment=VQ_LOG_DIR=/var/log/binance-exit-executor-btc
+ExecStart=/opt/binance-exit-executor/.venv/bin/python -m src.main /etc/binance-exit-executor/config-btc.yaml
 
 [Install]
 WantedBy=multi-user.target
@@ -781,8 +781,8 @@ WantedBy=multi-user.target
 启动多个实例：
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl start vibe-quant-btc
-sudo systemctl enable vibe-quant-btc
+sudo systemctl start binance-exit-executor-btc
+sudo systemctl enable binance-exit-executor-btc
 ```
 
 ---
