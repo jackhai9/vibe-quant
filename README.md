@@ -5,13 +5,31 @@
 
 # vibe-quant
 
-Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![Exchange](https://img.shields.io/badge/Exchange-Binance%20USDT--M%20Futures-f0b90b)
+![Mode](https://img.shields.io/badge/Mode-Hedge%20Reduce--Only-47a042)
+![Tests](https://img.shields.io/badge/Tests-pytest-111133)
 
-通过小单分批 + 按 symbol 的策略模式选择（`orderbook_price` / `orderbook_pressure`）+ 执行模式轮转（Maker → Aggressive Limit）+ 多级风控，实现低滑点、低市场冲击的仓位退出。
+Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。它不是开仓机器人，而是一个专注于“怎么把已有仓位更稳地退出”的执行工具。
 
-术语约定：本文档中“reduce-only”指 **reduce-only 语义约束**（`positionSide + side + qty<=position`），不指必须下发的交易所参数 `reduceOnly`。
+核心思路是：用小单分批、盘口信号、Maker 优先、超时升级和多级风控，把大仓位拆成更可控的退出过程，减少滑点和市场冲击。
 
-## 核心特性
+> 风险提示：本项目不会提供盈利保证，也不是投资建议。真实账户使用前，请先在小仓位、testnet 或只读环境里验证配置、交易权限、风控阈值和通知链路。
+
+## 适合谁
+
+- 使用 Binance U 本位永续合约 Hedge 模式。
+- 已有仓位，需要更细粒度地控制平仓过程。
+- 关心 Maker/Taker 切换、盘口量、强平距离、保护止损和通知。
+- 希望把执行逻辑写成可测试、可部署、可复盘的 Python 服务。
+
+不适合：
+
+- 自动寻找开仓信号的策略机器人。
+- 现货、期权或非 Binance 合约账户。
+- 未理解交易所 API 权限、杠杆、强平、止损语义的直接实盘使用。
+
+## 功能亮点
 
 - **Hedge 模式专用**：不强制下发 `reduceOnly`（交易所限制），reduce-only 语义由 `positionSide + side + qty<=position` 约束保证；支持 `positionSide=LONG/SHORT`
 - **双策略模式**：每个 symbol 可独立选择 `orderbook_price` 或 `orderbook_pressure`；同一 symbol 上两种模式互斥
@@ -23,6 +41,61 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 - **Telegram 通知**：成交、重连、风险触发、开仓告警
 - **撤单分层**：普通/条件单分离，混合场景提供 cancel_any_order
 - **自动发现持仓**：运行时按账户持仓自动接管，`symbols` 仅用于参数覆盖
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.12
+- uv
+- Binance U 本位合约账户，并开启 Hedge 模式
+
+### 1. 安装依赖
+
+```bash
+uv sync
+```
+
+### 2. 准备配置
+
+```bash
+cp .env.example .env
+cp config/config.example.yaml config/config.yaml
+```
+
+把 Binance API 凭证写入 `.env`，把执行参数写入 `config/config.yaml`。
+
+建议 API key 权限最小化：只开放合约交易需要的权限，不开放提现权限。
+
+### 3. 启动
+
+```bash
+python -m src.main
+```
+
+也可以指定配置文件：
+
+```bash
+python -m src.main path/to/config.yaml
+```
+
+macOS 长时间运行可使用：
+
+```bash
+caffeinate -is python -m src.main
+```
+
+生产环境建议使用 systemd 部署，见 [部署指南](docs/deployment.md)。
+
+## 安全边界
+
+- 不依赖交易所 `reduceOnly` 参数来保证 reduce-only 语义。
+- 通过 `positionSide + side + qty <= position` 限制，避免扩大仓位或反向开仓。
+- 保护止损使用交易所端条件单，作为程序崩溃、断网、休眠时的最后防线。
+- 检测到外部止损/止盈接管时，会暂停维护自己的保护止损，避免互相覆盖。
+- Telegram 只用于通知和暂停控制；交易凭证不通过 Telegram 传输。
+
+术语约定：本文档中“reduce-only”指 **reduce-only 语义约束**（`positionSide + side + qty<=position`），不指必须下发的交易所参数 `reduceOnly`。
 
 ## 架构概览
 
@@ -58,65 +131,6 @@ Binance U 本位永续合约 **Hedge 模式 Reduce-Only 平仓执行器**。
 │ (风控兜底)    │     │   (日志滚动)   │     │  (Telegram)  │
 └──────────────┘     └──────────────┘     └──────────────┘
 ```
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.11+
-- uv
-- Binance 合约账户（Hedge 模式）
-
-### 安装依赖
-
-```bash
-uv sync
-```
-
-### 配置环境变量
-
-```bash
-# 必需
-export BINANCE_API_KEY="your_api_key"
-export BINANCE_API_SECRET="your_api_secret"
-
-# 可选（Telegram 通知）
-export TELEGRAM_BOT_TOKEN="your_bot_token"
-export TELEGRAM_CHAT_ID="your_chat_id"
-```
-
-### 编辑配置文件
-
-```bash
-# 复制示例配置
-cp config/config.example.yaml config/config.yaml
-
-# 编辑配置，按需设置参数；symbols 可选，仅用于覆盖
-vim config/config.yaml
-```
-
-### 启动
-
-```bash
-python -m src.main
-```
-
-默认读取 `config/config.yaml`，也可指定其他配置文件：
-
-```bash
-python -m src.main path/to/config.yaml
-```
-
-**macOS 防睡眠**：使用 `caffeinate` 防止系统睡眠导致程序中断：
-
-```bash
-caffeinate -is python -m src.main
-```
-
-- `-i` 防止系统空闲睡眠
-- `-s` 防止系统睡眠（接通电源时）
-
-> 生产环境建议使用 systemd 部署（见 [部署指南](docs/deployment.md)），服务器不存在睡眠问题。
 
 ## 文档
 
