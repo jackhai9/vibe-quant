@@ -12,7 +12,7 @@ Use this skill when reviewing code changes in this repository.
 
 1. Read `AGENTS.md` first.
 2. Inspect changed files and classify them by module: execution, exchange, risk, ws, signal, config, notify, docs.
-3. Run the narrowest meaningful verification command, and expand to `pytest` / `pyright src/` when the change crosses module boundaries.
+3. Run the narrowest meaningful verification command, and expand to `uv run pytest -q` / `uv run pyright src/` when the change crosses module boundaries.
 4. Review for trading safety and behavioral regressions before style concerns.
 5. Output findings ordered by severity with file references.
 

@@ -1,5 +1,5 @@
 <!-- Input: 项目概述与使用方式 -->
-<!-- Output: 使用说明与快速上手（含执行反馈与自动发现持仓说明） -->
+<!-- Output: 使用说明与快速上手（含执行反馈、自动发现持仓与发布状态说明） -->
 <!-- Pos: 项目根 README -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 
@@ -147,8 +147,13 @@ caffeinate -is python -m src.main
 | [配置参数手册](docs/configuration.md) | 完整配置参数说明与调优建议 |
 | [部署指南](docs/deployment.md) | 本地开发、systemd、Docker 部署 |
 | [故障排查](docs/troubleshooting.md) | 常见问题与解决方案 |
+| [发布指南](docs/release.md) | 发布门禁与 GitHub Release 说明清单 |
 | [系统架构](memory-bank/architecture.md) | 详细架构设计与模块说明 |
 | [开发进度](memory-bank/progress.md) | 开发里程碑与变更记录 |
+
+## 发布状态
+
+`v0.1.0` 计划作为早期、由操作者控制的公开版本发布。正式创建公开 tag 前，必须通过 [发布指南](docs/release.md) 中的门禁，包括类型检查、全量测试，以及明确说明验证范围和未覆盖集成场景的 release notes。
 
 ## 项目结构
 
@@ -263,19 +268,19 @@ ret_window = (price_now / price_window_ago) - 1
 
 ```bash
 # 全部测试
-pytest
+uv run pytest -q
 
 # 指定模块
-pytest tests/test_execution.py -v
+uv run pytest tests/test_execution.py -q
 
 # 带覆盖率
-pytest --cov=src --cov-report=term-missing
+uv run pytest --cov=src --cov-report=term-missing
 ```
 
 ### 类型检查
 
 ```bash
-pyright src/
+uv run pyright src/
 ```
 
 ## 技术栈
