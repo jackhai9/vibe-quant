@@ -89,6 +89,17 @@
 - `docs/release.md` / `docs/releases/v0.1.0.md`：将 reconnect/risk regression evidence 接入 release gate 和 release notes 草案
 - `docs/README.md`：新增 regression evidence 文档入口
 
+## Milestone/附加改进：v0.1.0 release-readiness issue 收口
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-15
+
+**动机**：`#18`、`#19`、`#20`、`#21` 已全部关闭后，release 文档不能继续把已关闭 issue 描述为 open release-readiness work。<br>
+**产出**：
+
+- `docs/release.md`：将 `v0.1.0` tracked release-readiness issues 标注为 closed
+- `docs/releases/v0.1.0.md`：将 open release-readiness work 收口为 none，保留 tagged commit 上 fresh 小额主网验证仍需按 release decision 单独执行的边界
+
 ## Milestone/附加改进：退出机会与订单名义金额硬约束
 
 **状态**：✅ 已完成<br>

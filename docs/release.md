@@ -69,9 +69,9 @@ Roadmap issues should describe concrete release-readiness work. Good issue topic
 
 Do not create placeholder issues only to increase repository activity.
 
-Current release-readiness tracking issues:
+Tracked release-readiness issues for `v0.1.0`:
 
-- [#18 Prepare v0.1.0 release checklist](https://github.com/jackhai9/binance-exit-executor/issues/18)
-- [#19 Add small-size production validation walkthrough](https://github.com/jackhai9/binance-exit-executor/issues/19)
-- [#20 Document operator dry-run and minimal-permission setup](https://github.com/jackhai9/binance-exit-executor/issues/20)
-- [#21 Expand reconnect and risk regression evidence before v0.1.0](https://github.com/jackhai9/binance-exit-executor/issues/21)
+- [#18 Prepare v0.1.0 release checklist](https://github.com/jackhai9/binance-exit-executor/issues/18) - closed
+- [#19 Add small-size production validation walkthrough](https://github.com/jackhai9/binance-exit-executor/issues/19) - closed
+- [#20 Document operator dry-run and minimal-permission setup](https://github.com/jackhai9/binance-exit-executor/issues/20) - closed
+- [#21 Expand reconnect and risk regression evidence before v0.1.0](https://github.com/jackhai9/binance-exit-executor/issues/21) - closed
