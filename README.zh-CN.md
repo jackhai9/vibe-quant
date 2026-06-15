@@ -145,6 +145,7 @@ caffeinate -is python -m src.main
 | 文档 | 说明 |
 |------|------|
 | [配置参数手册](docs/configuration.md) | 完整配置参数说明与调优建议 |
+| [操作者安全指南](docs/operator-safety.md) | 最小权限与真实账户运行前验证路径 |
 | [部署指南](docs/deployment.md) | 本地开发、systemd、Docker 部署 |
 | [故障排查](docs/troubleshooting.md) | 常见问题与解决方案 |
 | [发布指南](docs/release.md) | 发布门禁与 GitHub Release 说明清单 |
