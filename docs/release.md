@@ -11,6 +11,8 @@ This document defines the release gate for public tags and GitHub Releases.
 
 `v0.1.0` should be treated as an early operator-controlled release of a Binance USDT-M Futures Hedge Mode reduce-only exit executor. It must not be described as a general-purpose trading bot, a strategy signal product, or a profit system.
 
+The auditable release-candidate checklist and draft release notes are maintained in [v0.1.0 Release Checklist](releases/v0.1.0.md).
+
 Before creating the tag and GitHub Release:
 
 - Confirm the repository has no unrelated local changes.
