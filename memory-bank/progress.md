@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则、v0.1.0 发布准备与操作者安全边界）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则、v0.1.0 发布准备/清单与操作者安全边界）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -51,6 +51,17 @@
 - `docs/operator-safety.md`：新增操作者安全指南，明确 dedicated API key、禁止提现权限、静态 review path、testnet validation path 与真实账户 readiness checklist
 - `README.md` / `README.zh-CN.md`：文档表新增 operator safety 入口
 - `docs/README.md`：同步新增 operator safety 文档索引
+
+## Milestone/附加改进：v0.1.0 release checklist
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-15
+
+**动机**：正式创建 `v0.1.0` tag / GitHub Release 前，需要把版本状态、验证证据、未完成 release-readiness 工作和 release notes 草案落成可审计文档；本步骤只准备清单，不创建 tag 或 release。<br>
+**产出**：
+
+- `docs/releases/v0.1.0.md`：新增 `v0.1.0` release candidate checklist，记录 `pyproject.toml` 版本、无 tag/release 现状、验证命令、开放 issue #19/#21 和 GitHub Release notes 草案
+- `docs/release.md` / `docs/README.md`：新增候选发布清单入口
 
 ## Milestone/附加改进：退出机会与订单名义金额硬约束
 
