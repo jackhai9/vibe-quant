@@ -20,6 +20,7 @@ Before creating the tag and GitHub Release:
 - Run `uv run pyright src/`.
 - Run `uv run pytest -q`.
 - Confirm README links and documentation links render correctly.
+- Confirm reconnect and risk regression evidence is current in [Regression Evidence](regression-evidence.md).
 - Confirm the release notes describe validation scope and unverified integration areas.
 - Confirm the release notes do not include credentials, account identifiers, order IDs, private logs, or environment values.
 

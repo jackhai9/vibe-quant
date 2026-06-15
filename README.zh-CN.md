@@ -149,6 +149,7 @@ caffeinate -is python -m src.main
 | [小额主网验证指南](docs/production-validation.md) | 小额真实环境验证流程与证据边界 |
 | [部署指南](docs/deployment.md) | 本地开发、systemd、Docker 部署 |
 | [故障排查](docs/troubleshooting.md) | 常见问题与解决方案 |
+| [回归证据](docs/regression-evidence.md) | 重连、stale、执行自恢复与风控回归覆盖 |
 | [发布指南](docs/release.md) | 发布门禁与 GitHub Release 说明清单 |
 | [系统架构](memory-bank/architecture.md) | 详细架构设计与模块说明 |
 | [开发进度](memory-bank/progress.md) | 开发里程碑与变更记录 |

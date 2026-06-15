@@ -132,6 +132,7 @@ main.py
 | [Production Validation](docs/production-validation.md) | Small-size mainnet validation workflow and evidence boundaries |
 | [Deployment](docs/deployment.md) | Local, systemd, and Docker deployment notes |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and diagnostics |
+| [Regression Evidence](docs/regression-evidence.md) | Reconnect, stale-data, execution recovery, and risk regression coverage |
 | [Release Guide](docs/release.md) | Release gate and GitHub Release note checklist |
 | [Architecture](memory-bank/architecture.md) | Detailed architecture and module responsibilities |
 | [Progress](memory-bank/progress.md) | Development milestones and change notes |

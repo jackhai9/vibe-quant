@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则、v0.1.0 发布准备/清单、操作者安全边界与小额主网验证）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则、v0.1.0 发布准备/清单、操作者安全边界、小额主网验证与回归证据）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -76,6 +76,18 @@
 - `docs/operator-safety.md`：将 testnet 降级为 optional precheck，并指向小额主网验证路径；明确真实账户执行需要操作者显式确认
 - `docs/release.md` / `docs/releases/v0.1.0.md`：发布准备项从 testnet walkthrough 调整为小额主网验证决策与证据
 - `README.md` / `README.zh-CN.md` / `docs/README.md`：新增 production validation 文档入口
+
+## Milestone/附加改进：reconnect and risk regression evidence
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-15
+
+**动机**：`v0.1.0` 前需要把 WebSocket 重连、stale 数据、user data、执行自恢复、panic close、保护止损和 reduce-only block 等高风险路径映射到可重复的自动化测试证据，避免 release notes 只笼统写“pytest 通过”。<br>
+**产出**：
+
+- `docs/regression-evidence.md`：新增高风险运行路径到具体测试文件/用例的证据表，记录 focused validation 与 full validation 结果，并明确自动化测试不能证明主网流动性、网络故障时序、交易所条件单跨环境行为等 live-system 边界
+- `docs/release.md` / `docs/releases/v0.1.0.md`：将 reconnect/risk regression evidence 接入 release gate 和 release notes 草案
+- `docs/README.md`：新增 regression evidence 文档入口
 
 ## Milestone/附加改进：退出机会与订单名义金额硬约束
 
