@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则与 v0.1.0 发布准备）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则、v0.1.0 发布准备与操作者安全边界）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -39,6 +39,18 @@
 - `README.md` / `README.zh-CN.md`：新增 release status 入口，明确 `v0.1.0` 是 early operator-controlled release，正式 tag 前必须通过 release gate
 - `docs/README.md`：同步新增 release 文档索引
 - `AGENTS.md` / `CONTRIBUTING.md` / `skills/*/SKILL.md`：验证命令统一为当前 uv 环境实际可用的 `uv run pyright src/` 与 `uv run pytest -q`
+
+## Milestone/附加改进：operator safety and dry-run boundary
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-15
+
+**动机**：公开版本准备阶段需要让新操作者在真实账户运行前明确最小 API 权限、静态审查路径、testnet 验证路径，以及本项目没有“主网只模拟不下单”的 dry-run 开关。<br>
+**产出**：
+
+- `docs/operator-safety.md`：新增操作者安全指南，明确 dedicated API key、禁止提现权限、静态 review path、testnet validation path 与真实账户 readiness checklist
+- `README.md` / `README.zh-CN.md`：文档表新增 operator safety 入口
+- `docs/README.md`：同步新增 operator safety 文档索引
 
 ## Milestone/附加改进：退出机会与订单名义金额硬约束
 

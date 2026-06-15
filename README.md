@@ -128,6 +128,7 @@ main.py
 | Document | Description |
 | --- | --- |
 | [Configuration](docs/configuration.md) | Full configuration reference and tuning notes |
+| [Operator Safety](docs/operator-safety.md) | Minimal permissions and pre-live validation workflow |
 | [Deployment](docs/deployment.md) | Local, systemd, and Docker deployment notes |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and diagnostics |
 | [Release Guide](docs/release.md) | Release gate and GitHub Release note checklist |
