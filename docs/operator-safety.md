@@ -1,5 +1,5 @@
 <!-- Input: operator safety requirements, credential boundaries, and pre-live validation workflow -->
-<!-- Output: minimal-permission setup and non-production evaluation guide -->
+<!-- Output: minimal-permission setup, optional testnet precheck, and production validation boundary guide -->
 <!-- Pos: operator safety guide -->
 <!-- Update this header and docs/README.md when this document changes. -->
 
@@ -13,7 +13,7 @@ Use this guide before running the executor against a real account. It covers:
 
 - API key permissions.
 - Configuration review before runtime.
-- Testnet and small-size validation.
+- Optional testnet precheck and small-size production validation.
 - The boundary between static review, testnet evaluation, and real-account execution.
 
 This project does not provide a built-in mainnet paper-trading or dry-run switch. Do not run it on a real account expecting it to only simulate orders.
@@ -61,9 +61,9 @@ Use this path when you want to inspect the project without allowing it to submit
 
 Stop here if you only want a code and config review. Starting `python -m src.main ...` with a real-account key and `testnet: false` is an execution path, not a dry run.
 
-## Testnet Validation Path
+## Optional Testnet Precheck
 
-Use Binance Futures testnet for the first runnable validation.
+Binance Futures testnet can be useful as a precheck for connectivity and basic configuration. It is optional for maintainer release validation because it does not prove mainnet liquidity, latency, rate limits, or stop-order behavior.
 
 1. Create a testnet API key with Futures trading permission.
 2. Set the runtime config to testnet:
@@ -88,7 +88,13 @@ Use Binance Futures testnet for the first runnable validation.
    - order placement, cancellation, fill, and cooldown events;
    - protective-stop behavior if enabled.
 
-Testnet behavior is useful validation, but it does not prove mainnet liquidity, latency, rate limits, or stop-order behavior under production conditions.
+Do not treat testnet behavior as equivalent to mainnet validation.
+
+## Small-Size Production Validation
+
+For release-relevant maintainer validation, use [Small-Size Production Validation](production-validation.md). This path uses a real account, real market data, and real orders with the smallest practical size and strict operator safeguards.
+
+Do not execute that walkthrough without explicit operator confirmation that real financial transactions may occur.
 
 ## Real-Account Readiness
 

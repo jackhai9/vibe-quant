@@ -45,7 +45,7 @@ Early release of a Hedge Mode reduce-only exit executor for Binance USDT-M Futur
 
 ## Not Yet Verified In This Release
 
-- Fresh testnet walkthrough by a third-party operator.
+- Fresh small-size production validation on the tagged commit, if required for the release decision.
 - Production deployment on a newly provisioned host.
 - Exchange, network, and Telegram behavior outside the documented environments.
 
@@ -59,7 +59,7 @@ Early release of a Hedge Mode reduce-only exit executor for Binance USDT-M Futur
 
 Roadmap issues should describe concrete release-readiness work. Good issue topics:
 
-- Testnet validation checklist.
+- Small-size production validation walkthrough.
 - Operator dry-run guide.
 - Example configuration hardening.
 - Risk-boundary documentation.
@@ -71,6 +71,6 @@ Do not create placeholder issues only to increase repository activity.
 Current release-readiness tracking issues:
 
 - [#18 Prepare v0.1.0 release checklist](https://github.com/jackhai9/binance-exit-executor/issues/18)
-- [#19 Add testnet validation walkthrough](https://github.com/jackhai9/binance-exit-executor/issues/19)
+- [#19 Add small-size production validation walkthrough](https://github.com/jackhai9/binance-exit-executor/issues/19)
 - [#20 Document operator dry-run and minimal-permission setup](https://github.com/jackhai9/binance-exit-executor/issues/20)
 - [#21 Expand reconnect and risk regression evidence before v0.1.0](https://github.com/jackhai9/binance-exit-executor/issues/21)
