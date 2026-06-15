@@ -64,15 +64,15 @@
 
 最低验证按改动范围选择，不要假装“没跑也算通过”：
 
-- Python 类型检查：`pyright src/`
-- 全量测试：`pytest`
+- Python 类型检查：`uv run pyright src/`
+- 全量测试：`uv run pytest -q`
 - 定向测试：
-  - 执行引擎：`pytest tests/test_execution.py -q`
-  - 交易所适配：`pytest tests/test_exchange.py -q`
-  - 风控/保护止损：`pytest tests/test_risk_manager.py tests/test_protective_stop.py -q`
-  - WebSocket：`pytest tests/test_ws_market.py tests/test_ws_user_data.py -q`
-  - 配置：`pytest tests/test_config.py -q`
-  - 主流程/退出：`pytest tests/test_main_shutdown.py -q`
+  - 执行引擎：`uv run pytest tests/test_execution.py -q`
+  - 交易所适配：`uv run pytest tests/test_exchange.py -q`
+  - 风控/保护止损：`uv run pytest tests/test_risk_manager.py tests/test_protective_stop.py -q`
+  - WebSocket：`uv run pytest tests/test_ws_market.py tests/test_ws_user_data.py -q`
+  - 配置：`uv run pytest tests/test_config.py -q`
+  - 主流程/退出：`uv run pytest tests/test_main_shutdown.py -q`
 
 如果没有运行某项验证，最终说明必须明确写出未验证项和原因。
 
@@ -115,7 +115,7 @@ review 时优先找功能回归，不要先谈风格：
 ## Release Rules
 
 - 改动完成后，确认相关文档已同步。
-- 如果改动触及核心交易路径，至少运行一项针对性测试和 `pyright src/`，除非明确说明为什么没跑。
+- 如果改动触及核心交易路径，至少运行一项针对性测试和 `uv run pyright src/`，除非明确说明为什么没跑。
 - 本仓库没有 userscript 那种 `@version` 头部约束；release 重点在验证、文档同步、提交说明清晰。
 
 ## Done When

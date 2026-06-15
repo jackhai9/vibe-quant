@@ -1,5 +1,5 @@
 <!-- Input: 开发进度、里程碑、缺陷修复与相关性分析结论 -->
-<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口与 PRESSURE_STATS 判读规则）-->
+<!-- Output: 可追溯的变更与状态（含 Telegram Bot 命令控制/暂停恢复、交易所初始化诊断、执行竞态/自恢复安全修复、orderbook_price 当前盘口重校验、订单限价名义金额约束、一级风控日志降噪、-4118 挂单占仓收口、PRESSURE_STATS 判读规则与 v0.1.0 发布准备）-->
 <!-- Pos: memory-bank/progress 维护日志、变更记录与竞态修复 -->
 <!-- 一旦我被更新，务必更新我的开头注释，以及所属文件夹的MD。 -->
 # 开发进度日志
@@ -25,6 +25,20 @@
 | 定时暂停（/pause 支持时长参数） | ✅ |
 | 修复保护止损交叉保证金方向异常 | ✅ |
 | 修复保护止损同步调度竞态 | ✅ |
+
+## Milestone/附加改进：v0.1.0 public release preparation
+
+**状态**：✅ 已完成<br>
+**日期**：2026-06-15
+
+**动机**：项目准备作为公开展示仓库推进 `v0.1.0`，需要把发布门禁、验证范围和未覆盖集成场景写成可审计文档，并统一 Codex/Claude/Agent 读取 repo-local skills 的入口。<br>
+**产出**：
+
+- `.agents/skills`：新增指向 `../skills` 的 symlink，和 `.codex/skills`、`.claude/skills` 使用同一份 skill 真源
+- `docs/release.md`：新增 `v0.1.0` release gate、GitHub Release notes 模板和 roadmap issue 选题边界
+- `README.md` / `README.zh-CN.md`：新增 release status 入口，明确 `v0.1.0` 是 early operator-controlled release，正式 tag 前必须通过 release gate
+- `docs/README.md`：同步新增 release 文档索引
+- `AGENTS.md` / `CONTRIBUTING.md` / `skills/*/SKILL.md`：验证命令统一为当前 uv 环境实际可用的 `uv run pyright src/` 与 `uv run pytest -q`
 
 ## Milestone/附加改进：退出机会与订单名义金额硬约束
 

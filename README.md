@@ -130,8 +130,13 @@ main.py
 | [Configuration](docs/configuration.md) | Full configuration reference and tuning notes |
 | [Deployment](docs/deployment.md) | Local, systemd, and Docker deployment notes |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and diagnostics |
+| [Release Guide](docs/release.md) | Release gate and GitHub Release note checklist |
 | [Architecture](memory-bank/architecture.md) | Detailed architecture and module responsibilities |
 | [Progress](memory-bank/progress.md) | Development milestones and change notes |
+
+## Release Status
+
+`v0.1.0` is planned as an early operator-controlled release. Before a public tag is created, the release gate in [Release Guide](docs/release.md) must pass, including type checking, full tests, and release notes that clearly state validation scope and unverified integration areas.
 
 ## Development
 
