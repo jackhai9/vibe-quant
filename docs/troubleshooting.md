@@ -84,8 +84,8 @@
 **解决方案**：
 1. **选项1**：配置 Telegram 凭证
    ```bash
-   export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
-   export TELEGRAM_CHAT_ID="123456789"
+   export TELEGRAM_BOT_TOKEN="your_telegram_bot_token_here"
+   export TELEGRAM_CHAT_ID="your_telegram_chat_id_here"
    ```
 
 2. **选项2**：禁用 Telegram 通知

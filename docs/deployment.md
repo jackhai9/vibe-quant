@@ -81,8 +81,8 @@ BINANCE_API_KEY=your_api_key_here
 BINANCE_API_SECRET=your_api_secret_here
 
 # Telegram（可选）
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-TELEGRAM_CHAT_ID=123456789
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 ```
 
 ### 5. 配置参数文件
@@ -204,12 +204,12 @@ sudo nano /etc/binance-exit-executor/binance-exit-executor.env
 
 填入真实凭证：
 ```bash
-BINANCE_API_KEY=your_real_api_key
-BINANCE_API_SECRET=your_real_api_secret
+BINANCE_API_KEY=your_api_key_here
+BINANCE_API_SECRET=your_api_secret_here
 
 # Telegram（可选）
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-TELEGRAM_CHAT_ID=123456789
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 ```
 
 **设置文件权限**（重要！防止密钥泄露）：
